@@ -1,0 +1,381 @@
+# Wizard Project Understanding
+
+## Vision
+
+Wizard is an Agentic AI system designed to autonomously understand, explore, execute, and verify unfamiliar software repositories.
+
+The primary motivation behind Wizard is that modern AI coding assistants can generate large codebases very quickly, but these repositories are often difficult to understand, incomplete, poorly integrated, missing dependencies, or lack clear execution instructions.
+
+Traditional verification systems rely on predefined rules, static analysis, or hardcoded language specific logic. Wizard takes a different approach.
+
+Instead of building a repository analyzer that understands code directly, Wizard creates an intelligent environment where autonomous agents can explore repositories, reason about them, execute experiments, learn from failures, and gradually build an understanding of how the repository works.
+
+The long term goal is to allow an agent to interact with an unknown repository in the same way a skilled software engineer would.
+
+---
+
+# Core Philosophy
+
+Wizard is not intended to be:
+
+* A static code analyzer.
+* A dependency scanner.
+* A collection of hardcoded language rules.
+* A system containing hundreds of language specific execution paths.
+* A traditional verification tool.
+
+Wizard is intended to be:
+
+* An Agent Runtime.
+* A Repository Exploration Environment.
+* A Safe Execution Platform.
+* A Verification System.
+* An Agent Reliability Research Platform.
+
+The repository is not understood by predefined logic.
+
+The repository is understood through observation, experimentation, reasoning, verification, and iteration performed by agents.
+
+---
+
+# High Level System Flow
+
+```text
+Repository
+    ↓
+Wizard Runtime Environment
+    ↓
+Agent Exploration
+    ↓
+Hypothesis Formation
+    ↓
+Safe Execution
+    ↓
+Observation Collection
+    ↓
+Verification
+    ↓
+Belief Update
+    ↓
+Iterative Learning Loop
+    ↓
+Final Verification Report
+```
+
+---
+
+# How Wizard Understands a Repository
+
+When a repository is provided:
+
+1. Agents explore repository contents.
+2. Agents observe files, folders, configurations, outputs, and relationships.
+3. Agents form hypotheses regarding repository structure.
+4. Agents attempt safe actions to validate assumptions.
+5. Wizard records observations and execution results.
+6. Verification mechanisms determine whether assumptions are supported.
+7. Agents update their understanding.
+8. The cycle repeats until sufficient confidence is achieved.
+
+The repository is understood through iterative reasoning rather than hardcoded detection logic.
+
+---
+
+# Agent Driven Architecture
+
+The agent is considered the primary intelligence layer.
+
+The agent is responsible for:
+
+* Exploration.
+* Reasoning.
+* Planning.
+* Hypothesis generation.
+* Tool usage.
+* Repository understanding.
+* Verification decision making.
+
+Wizard itself provides the environment in which the agent operates.
+
+The runtime exists to support the agent.
+
+---
+
+# Proposed Multi Agent Workflow
+
+## Repository Explorer Agent
+
+Responsibilities:
+
+* Explore repository contents.
+* Gather observations.
+* Form initial beliefs.
+* Create execution hypotheses.
+* Decide what should be investigated next.
+
+Example:
+
+"I believe this repository may be a web application."
+
+---
+
+## Verification Agent
+
+Responsibilities:
+
+* Review explorer conclusions.
+* Check consistency.
+* Search for contradictions.
+* Verify evidence.
+* Challenge assumptions.
+* Improve reliability.
+
+Example:
+
+"The evidence does not strongly support this belief."
+
+---
+
+# Agent Loop
+
+The core workflow is iterative.
+
+```text
+Observe
+    ↓
+Reason
+    ↓
+Hypothesis
+    ↓
+Execute
+    ↓
+Observe Result
+    ↓
+Verify
+    ↓
+Update Beliefs
+    ↓
+Repeat
+```
+
+Execution failures are not treated as system failures.
+
+Execution failures are observations.
+
+Every failure teaches the system something about the repository.
+
+---
+
+# Safe Execution Environment
+
+A major goal of Wizard is allowing agents to safely interact with repositories.
+
+The runtime should provide:
+
+* Controlled execution.
+* Permission boundaries.
+* Execution monitoring.
+* Resource restrictions.
+* Action tracking.
+* Observation collection.
+
+The runtime should ensure agents can investigate repositories without causing unintended damage.
+
+---
+
+# Hallucination Detection Vision
+
+Hallucination detection is considered a major differentiating component of Wizard.
+
+The objective is not simply preventing mistakes.
+
+The objective is measuring trustworthiness of agent conclusions.
+
+Potential approaches include:
+
+* Evidence grounded reasoning.
+* Critic agents.
+* Contradiction detection.
+* Confidence scoring.
+* Belief verification.
+* Observation replay.
+* Adversarial verification.
+
+The final architecture may combine several techniques.
+
+A belief should earn trust through verification rather than being accepted automatically.
+
+---
+
+# Belief Based Reasoning
+
+Wizard may treat conclusions as beliefs.
+
+Examples:
+
+* This repository is a web application.
+* This repository uses a specific framework.
+* This repository contains missing dependencies.
+* This repository has incomplete integration.
+
+Beliefs should:
+
+* Be stored.
+* Be updated.
+* Be challenged.
+* Gain or lose confidence.
+* Be revised when contradictory evidence appears.
+
+This transforms verification from a simple execution task into a reasoning process.
+
+---
+
+# Final Output
+
+The final result should not simply be logs.
+
+Wizard should generate a repository verification report containing:
+
+* Repository understanding.
+* Important discoveries.
+* Execution attempts.
+* Observations.
+* Failures.
+* Confidence levels.
+* Verification findings.
+* Areas requiring developer attention.
+
+The report should explain how the agent arrived at its conclusions.
+
+---
+
+# Team Responsibilities
+
+## Member 1
+
+CLI Interface
+
+Responsibilities:
+
+* Command design.
+* Command parsing.
+* User interaction.
+* Configuration handling.
+* Progress display.
+* Report commands.
+* Runtime communication.
+
+The CLI should act as the primary user entry point.
+
+---
+
+## Member 2 (My Responsibility)
+
+Wizard Runtime Engine
+
+This is the foundational layer supporting all agent activity.
+
+Responsibilities include:
+
+* Agent runtime environment.
+* Safe execution environment.
+* Tool execution framework.
+* Observation collection.
+* State management.
+* Memory management.
+* Verification loop control.
+* Agent communication interfaces.
+* Security boundaries.
+* Audit logging.
+* Hallucination detection infrastructure.
+* Reliability mechanisms.
+* Runtime APIs.
+
+The runtime should be agent agnostic.
+
+Any compliant agent should theoretically be able to operate using the runtime.
+
+The runtime should provide the capabilities required for autonomous repository exploration while maintaining safety, observability, and reliability.
+
+---
+
+## Member 3
+
+VS Code Extension
+
+Responsibilities:
+
+* Editor integration.
+* Report visualization.
+* Agent interaction UI.
+* Verification panels.
+* Developer experience features.
+* Runtime communication.
+
+The extension acts as the developer facing interface inside VS Code.
+
+---
+
+## Member 4
+
+Agent Architecture
+
+Responsibilities:
+
+* Agent design.
+* Planning logic.
+* Reasoning workflows.
+* Exploration strategies.
+* Tool usage decisions.
+* Verification strategies.
+* Multi agent coordination.
+* Prompt engineering.
+* Belief formation.
+
+This layer provides intelligence and decision making.
+
+---
+
+# Dependencies Between Team Members
+
+For my runtime layer to succeed:
+
+## Required from Member 1
+
+* Stable command definitions.
+* Clear runtime invocation requirements.
+* Consistent input and output contracts.
+
+---
+
+## Required from Member 3
+
+* Stable runtime communication contracts.
+* Agreed response structures.
+* Report schemas.
+
+---
+
+## Required from Member 4
+
+* Tool calling specifications.
+* Agent runtime requirements.
+* Memory requirements.
+* Observation requirements.
+* Verification workflow requirements.
+
+The runtime cannot be designed in isolation.
+
+The runtime must expose the capabilities required by the agent architecture.
+
+---
+
+# Current Understanding
+
+Wizard is fundamentally an autonomous repository verification platform powered by agent reasoning.
+
+The central idea is not repository analysis itself.
+
+The central idea is creating an environment where intelligent agents can safely explore unfamiliar repositories, learn through experimentation, verify their own conclusions, detect unreliable reasoning, and ultimately generate trustworthy repository understanding.
+
+This understanding is the foundation upon which future implementation and research decisions will be made.

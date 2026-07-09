@@ -1,0 +1,109 @@
+VS Code Extension Module
+Overview
+
+The VS Code Extension is the user interaction layer of the Wizard framework. It allows developers to access Wizard's verification features directly from Visual Studio Code without manually executing commands. The extension converts user requests into executable commands, sends them to the backend AI agent system, and displays the generated results. It also updates the project documentation automatically, making the workflow simple, consistent, and reproducible.
+
+Extension Workflow
+User
+   │
+   ▼
+VS Code Extension
+   │
+   ▼
+Command Generation
+   │
+   ▼
+Backend API
+   │
+   ▼
+AI Agent System
+   │
+   ▼
+Sandbox Execution
+   │
+   ▼
+Results Generated
+   │
+   ▼
+README / EVD Update
+Step 1: User Request
+
+The user selects an operation from the VS Code Command Palette, such as:
+
+Generate Screenshot
+Export JSON
+Extract CSS
+Accessibility Report
+
+The extension identifies the selected task and prepares it for execution.
+
+Step 2: Command Generation
+
+The extension automatically generates the required Wizard command.
+
+Example
+
+uv run project screenshot -o homepage
+uv run project accessibility
+uv run project css
+uv run project json
+
+This removes the need for users to remember complex command syntax.
+
+Step 3: Backend Communication
+
+The generated command is sent to the backend through an API.
+
+The extension sends:
+
+Repository Path
+Project URL
+Requested Operation
+
+The backend performs the execution and returns the generated outputs.
+
+Step 4: Output Generation
+
+The backend AI agent executes the requested task and generates outputs such as:
+
+Screenshot
+JSON File
+CSS File
+Accessibility Report
+
+The extension receives these outputs and stores them in the project.
+
+Step 5: Documentation
+
+After execution, the extension automatically updates the README and Execution Verification Document (EVD) with:
+
+Executed command
+Output generated
+Execution status
+Logs (if available)
+
+This ensures that every action is documented and reproducible.
+
+Extension Folder Structure
+wizard-extension/
+│
+├── src/
+│   ├── extension.ts
+│   ├── commands.ts
+│   ├── backend.ts
+│   ├── api.ts
+│   ├── utils.ts
+│
+├── media/
+├── package.json
+└── README.md
+Core Capabilities
+Provides a simple interface inside VS Code.
+Automatically generates Wizard commands.
+Communicates with the backend AI agent system.
+Displays execution results.
+Updates README and EVD automatically.
+Supports Screenshot, JSON, CSS, and Accessibility tasks.
+Role of the Extension in Wizard
+
+The VS Code Extension acts as the interface between the user and the Wizard backend. It does not perform AI reasoning or verification itself. Instead, it translates user requests into executable commands, communicates with the backend, receives the results, and documents the complete execution process, making Wizard easier to use and improving developer productivity.

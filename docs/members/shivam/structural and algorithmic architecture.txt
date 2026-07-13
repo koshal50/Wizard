@@ -1,0 +1,983 @@
+# Wizard Runtime Engine
+
+## Complete End to End Structural and Algorithmic Architecture
+
+Version: Runtime Architecture v1
+
+Owner: Member 2
+
+Purpose: Autonomous Repository Verification and Understanding Engine
+
+---
+
+# What The Runtime Actually Is
+
+The Wizard Runtime Engine is not an AI agent.
+
+The Wizard Runtime Engine is not a repository scanner.
+
+The Wizard Runtime Engine is not an execution sandbox.
+
+The Wizard Runtime Engine is an Evidence Driven Belief Engine.
+
+Its purpose is to transform an unknown repository into a mathematically verified understanding of that repository.
+
+The runtime does not think.
+
+The runtime does not make assumptions.
+
+The runtime maintains reality.
+
+Agents are allowed to hypothesize.
+
+The runtime is responsible for verification.
+
+The final output of the runtime is a Verification Report Markdown File containing evidence backed conclusions regarding the repository.
+
+---
+
+# Position Inside Wizard
+
+```text
+CLI
+ │
+ ▼
+
+Wizard Runtime Engine
+ │
+ ▼
+
+Agents
+ │
+ ▼
+
+Repository
+```
+
+The CLI starts investigations.
+
+The Runtime controls investigations.
+
+Agents perform discovery.
+
+The Repository is the target being investigated.
+
+The Runtime sits between intelligence and reality.
+
+---
+
+# Core Principle
+
+The architecture is built around one principle:
+
+```text
+Agent Guesses
+
+Runtime Calculates
+```
+
+Agents never directly create truth.
+
+Agents only propose observations and hypotheses.
+
+The runtime determines what deserves belief.
+
+---
+
+# High Level Runtime Flow
+
+```text
+Repository
+
+    │
+
+    ▼
+
+Observation Collection
+
+    │
+
+    ▼
+
+Evidence Extraction
+
+    │
+
+    ▼
+
+Claim Generation
+
+    │
+
+    ▼
+
+Belief Graph Construction
+
+    │
+
+    ▼
+
+Trust Computation
+
+    │
+
+    ▼
+
+Goal Evaluation
+
+    │
+
+    ▼
+
+Priority Computation
+
+    │
+
+    ▼
+
+Agent Guidance
+
+    │
+
+    ▼
+
+New Observations
+
+    │
+
+    ▼
+
+Graph Update
+
+    │
+
+    ▼
+
+Convergence Detection
+
+    │
+
+    ▼
+
+Verification Report
+```
+
+---
+
+# Runtime Subsystems
+
+The runtime consists of twelve major subsystems.
+
+```text
+Repository Layer
+
+Sandbox Layer
+
+Tool Runtime
+
+Observation Engine
+
+Extractor Framework
+
+Evidence Engine
+
+Claim Graph
+
+Trust Engine
+
+Goal Engine
+
+Priority Engine
+
+Investigation Controller
+
+Report Generator
+```
+
+---
+
+# 1. Repository Layer
+
+Purpose:
+
+Represent the repository as a structured navigable system.
+
+Responsibilities:
+
+* Repository cloning.
+* Repository snapshots.
+* File indexing.
+* Directory indexing.
+* Metadata tracking.
+* Change tracking.
+
+Internal Objects:
+
+```text
+Repository
+
+RepositorySnapshot
+
+FileNode
+
+DirectoryNode
+```
+
+The Repository Layer never performs reasoning.
+
+It only exposes repository state.
+
+---
+
+# 2. Sandbox Layer
+
+Purpose:
+
+Provide secure execution of untrusted repositories.
+
+Responsibilities:
+
+* Isolated execution.
+* Resource limits.
+* Time limits.
+* Filesystem isolation.
+* Network controls.
+* Environment isolation.
+
+Every execution request must pass through the sandbox.
+
+No command can bypass this layer.
+
+---
+
+# 3. Tool Runtime
+
+Purpose:
+
+Provide controlled capabilities to agents.
+
+Agents never access the repository directly.
+
+Agents only access tools.
+
+Examples:
+
+```text
+ReadFile
+
+SearchFiles
+
+ListDirectory
+
+ExecuteCommand
+
+InspectConfiguration
+
+TraceExecution
+```
+
+Every tool invocation creates observations.
+
+Every tool invocation is audited.
+
+---
+
+# 4. Observation Engine
+
+Purpose:
+
+Capture reality.
+
+Observations are immutable.
+
+Observations never contain interpretations.
+
+Observations never contain conclusions.
+
+Observation Definition:
+
+```text
+Observation
+
+id
+
+source
+
+type
+
+payload
+
+base_reliability
+```
+
+Observation Types:
+
+### Empirical
+
+Directly observed.
+
+Examples:
+
+* Process output.
+* Exit codes.
+* Execution traces.
+* Runtime responses.
+
+### Declarative
+
+Repository assertions.
+
+Examples:
+
+* README.
+* Comments.
+* Configuration declarations.
+
+Observation Store becomes the permanent investigation record.
+
+---
+
+# 5. Extractor Framework
+
+Purpose:
+
+Convert observations into structured claims.
+
+This is the boundary between raw data and understanding.
+
+---
+
+## Deterministic Extractors
+
+Examples:
+
+* package.json parser.
+* requirements.txt parser.
+* AST analyzers.
+* Tree Sitter queries.
+* Dockerfile parsers.
+
+These produce highly reliable claims.
+
+---
+
+## Cognitive Extractors
+
+Examples:
+
+* Architecture inference.
+* Deployment strategy inference.
+* Service relationship inference.
+
+These use LLM reasoning.
+
+Outputs must satisfy schemas.
+
+Invalid outputs are discarded.
+
+---
+
+# Extractor Reliability System
+
+Every extractor accumulates historical performance.
+
+Extractor reliability influences evidence weight.
+
+Reliable extractors gain influence.
+
+Poor extractors lose influence.
+
+---
+
+# 6. Evidence Engine
+
+Purpose:
+
+Prevent belief inflation.
+
+Evidence connects observations to claims.
+
+Evidence Object:
+
+```text
+Evidence
+
+claim_id
+
+observation_set
+
+source_cluster
+
+weight
+```
+
+---
+
+# Source Clusters
+
+Examples:
+
+```text
+RuntimeExecution
+
+StaticDocumentation
+
+PackageManifest
+
+EnvironmentConfiguration
+
+NetworkDiscovery
+
+FilesystemDiscovery
+```
+
+Observations from the same cluster do not stack infinitely.
+
+This prevents duplicated evidence from artificially increasing trust.
+
+---
+
+# Evidence Fusion
+
+Evidence from independent clusters combines.
+
+Evidence from correlated clusters is bounded.
+
+This prevents trust inflation.
+
+---
+
+# 7. Claim Graph
+
+Purpose:
+
+Represent repository understanding.
+
+Claims are structured beliefs.
+
+Claim Object:
+
+```text
+Claim
+
+class
+
+key
+
+value
+
+trust_state
+```
+
+Examples:
+
+```text
+Runtime = NodeJS
+
+Dependency = Express
+
+Entrypoint = server.js
+
+Deployment = Docker
+```
+
+---
+
+# Multi Relational Knowledge Graph
+
+Claims are connected using typed relationships.
+
+Relationship Types:
+
+```text
+SUPPORTS
+
+REQUIRES
+
+DEPENDS_ON
+
+CONTRADICTS
+
+MUTEX
+```
+
+This graph becomes the central knowledge structure of Wizard.
+
+---
+
+# 8. Trust Engine
+
+Purpose:
+
+Determine what deserves belief.
+
+Trust is not confidence.
+
+Trust is evidence backed belief.
+
+---
+
+# Trust State
+
+Each claim stores:
+
+```text
+Belief
+
+Disbelief
+
+Uncertainty
+```
+
+Constraint:
+
+```text
+Belief + Disbelief + Uncertainty = 1
+```
+
+---
+
+# Trust Computation
+
+Inputs:
+
+* Supporting evidence.
+* Contradicting evidence.
+* Evidence diversity.
+* Observation reliability.
+* Extractor reliability.
+
+Outputs:
+
+* Updated trust states.
+* Contradiction signals.
+* Propagation updates.
+
+---
+
+# Trust Propagation
+
+Trust moves through graph edges.
+
+Examples:
+
+```text
+Runtime
+    ↓
+Entrypoint
+    ↓
+Deployment
+```
+
+Execution confirmation of runtime increases confidence in downstream claims.
+
+Propagation uses decay.
+
+Distance weakens influence.
+
+---
+
+# Contradiction Management
+
+Claims are never deleted.
+
+Contradictions become graph entities.
+
+Example:
+
+```text
+Database = PostgreSQL
+
+Database = MySQL
+```
+
+Both survive.
+
+The graph records conflict.
+
+Trust determines active belief.
+
+---
+
+# Contradiction Cascade
+
+If a foundational claim loses trust:
+
+```text
+Runtime invalidated
+```
+
+Then all dependent claims become stale.
+
+Trust recalculates.
+
+Uncertainty increases.
+
+Dependent beliefs must be reverified.
+
+---
+
+# 9. Goal Engine
+
+Purpose:
+
+Define investigation objectives.
+
+Goals represent what the runtime wants to verify.
+
+Examples:
+
+```text
+Verify Runtime
+
+Verify Entrypoint
+
+Verify Dependencies
+
+Verify Deployment
+
+Verify Architecture
+```
+
+---
+
+# Dynamic Goals
+
+Goals may be generated during investigation.
+
+Example:
+
+Discovery:
+
+```text
+docker-compose.yml
+```
+
+New Goal:
+
+```text
+Verify Container Orchestration
+```
+
+Goals are graph nodes.
+
+Goals participate in priority computation.
+
+---
+
+# 10. Priority Engine
+
+Purpose:
+
+Determine what should be investigated next.
+
+This is the strategic layer of the runtime.
+
+---
+
+# Inputs
+
+Current claims.
+
+Current trust.
+
+Goal state.
+
+Uncertainty.
+
+Execution cost.
+
+Graph centrality.
+
+---
+
+# Priority Formula
+
+Priority increases when:
+
+* Goal relevance is high.
+* Uncertainty is high.
+* Dependency importance is high.
+
+Priority decreases when:
+
+* Cost is high.
+* Similar actions repeatedly failed.
+* Investigation value is low.
+
+---
+
+# Exploration vs Exploitation
+
+Two investigation modes exist.
+
+---
+
+## Exploitation
+
+Investigate likely high value targets.
+
+Examples:
+
+* Main entrypoints.
+* Configuration files.
+* Deployment files.
+
+---
+
+## Exploration
+
+Investigate ignored regions.
+
+Examples:
+
+* Legacy folders.
+* Rare file types.
+* Low coverage regions.
+
+Exploration prevents confirmation bias.
+
+---
+
+# 11. Investigation Controller
+
+Purpose:
+
+Manage investigation lifecycle.
+
+This is the orchestration brain.
+
+---
+
+Responsibilities
+
+* Budget management.
+* Iteration management.
+* Convergence detection.
+* State tracking.
+* Agent coordination.
+
+---
+
+# Knowledge Gain
+
+Knowledge gain measures learning.
+
+Components:
+
+* New claims.
+* Trust improvements.
+* Resolved contradictions.
+* Goal progress.
+
+---
+
+# Convergence Detection
+
+Investigation converges when:
+
+### Condition 1
+
+Trust changes become negligible.
+
+### Condition 2
+
+Goal uncertainty falls below thresholds.
+
+---
+
+# Stuck State Detection
+
+If:
+
+```text
+Trust Change → Near Zero
+
+Goal Uncertainty → High
+```
+
+Then the runtime is stuck.
+
+Possible actions:
+
+* Force exploration.
+* Change investigation strategy.
+* Escalate to user.
+
+---
+
+# Multi Agent Coordination
+
+Supported agents:
+
+### Exploration Agent
+
+Discovers observations.
+
+### Verification Agent
+
+Challenges claims.
+
+### Execution Agent
+
+Runs experiments.
+
+### Contradiction Agent
+
+Searches for conflicting evidence.
+
+All agents interact through runtime interfaces.
+
+No agent directly modifies trust.
+
+---
+
+# 12. Report Generator
+
+Purpose:
+
+Generate the final user artifact.
+
+This is the final output of Wizard.
+
+---
+
+# Verification Report
+
+Output:
+
+```text
+verification_report.md
+```
+
+Contents:
+
+### Repository Summary
+
+### Runtime Identification
+
+### Dependency Analysis
+
+### Entrypoint Analysis
+
+### Deployment Analysis
+
+### Architecture Analysis
+
+### Execution Results
+
+### Contradictions
+
+### Unresolved Areas
+
+### Trust Metrics
+
+### Evidence References
+
+### Investigation Trace
+
+---
+
+# Report Philosophy
+
+Every statement in the report must be traceable.
+
+The runtime must be able to answer:
+
+```text
+Why do you believe this?
+```
+
+for every conclusion.
+
+Each conclusion links back to:
+
+```text
+Claim
+
+Evidence
+
+Observations
+
+Execution Results
+```
+
+No unsupported statements are allowed.
+
+---
+
+# End To End Investigation Example
+
+```text
+Repository Imported
+
+↓
+
+Goals Generated
+
+↓
+
+Agent Reads Files
+
+↓
+
+Observations Created
+
+↓
+
+Extractors Generate Claims
+
+↓
+
+Evidence Engine Groups Evidence
+
+↓
+
+Claim Graph Updated
+
+↓
+
+Trust Engine Calculates Beliefs
+
+↓
+
+Priority Engine Selects Next Target
+
+↓
+
+Agent Investigates
+
+↓
+
+Sandbox Executes Experiments
+
+↓
+
+Empirical Observations Created
+
+↓
+
+Trust Updated
+
+↓
+
+Contradictions Resolved
+
+↓
+
+Goals Verified
+
+↓
+
+Convergence Reached
+
+↓
+
+Verification Report Generated
+```
+
+---
+
+# Final Runtime Definition
+
+The Wizard Runtime Engine is a deterministic evidence processing system that transforms repository observations into structured claims, computes belief using evidence and verification, continuously guides autonomous investigation through graph driven priorities, and ultimately produces an auditable verification report describing the repository with measurable confidence and traceable evidence.

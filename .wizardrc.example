@@ -1,0 +1,20 @@
+# Wizard Configuration
+# Place this file in your project root or ~/.wizardrc
+
+# Show the ASCII banner on command runs
+show_banner: true
+
+# Default output format: "rich" (styled terminal) or "json"
+default_format: rich
+
+# Use summary mode by default
+summary_mode: false
+
+# Use verbose output by default
+verbose: false
+
+# Additional directories to ignore during scanning
+# (these are added to the built-in ignore list)
+ignore_dirs: []
+  # - custom_build_dir
+  # - vendor

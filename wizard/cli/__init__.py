@@ -1,0 +1,1 @@
+"""Wizard CLI package."""

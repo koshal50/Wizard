@@ -8,13 +8,15 @@ This document describes the high level architecture of Wizard and explains how t
 
 Wizard is an autonomous software repository verification system. It investigates unknown software repositories, collects evidence about how they work, verifies that evidence through actual execution, and produces a structured verification report.
 
-The key characteristic that separates Wizard from other tools is its separation of intelligence from verification. An AI agent explores the repository and forms hypotheses. The Runtime Engine independently verifies every hypothesis before accepting it as true.
+Wizard separates intelligence from verification. An AI agent explores and reasons. A planning component generates investigation steps. The Runtime Engine independently verifies every conclusion before accepting it as true.
+
+The system can investigate repositories using any technology — including technologies that did not exist when Wizard was built — because technology understanding comes from an LLM planner, not from hardcoded modules.
 
 ---
 
 ## The Four Subsystems
 
-Wizard is composed of four subsystems. Each subsystem has a single, well-defined responsibility. No subsystem performs another subsystem's job.
+Wizard is composed of four subsystems. Each subsystem has a single, well-defined responsibility.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -34,14 +36,13 @@ Wizard is composed of four subsystems. Each subsystem has a single, well-defined
 │                      Runtime Engine                                 │
 │                                                                     │
 │  Manages the complete investigation lifecycle.                      │
-│  Owns all verification logic. Owns all state.                       │
+│  Owns all verification logic. Owns both graphs.                     │
 │  Computes trust. Evaluates goals. Generates reports.                │
 │                                                                     │
-│           ┌─────────────────┬──────────────────┐                   │
-│           │                 │                  │                   │
-│           ▼                 ▼                  ▼                   │
-│    Knowledge System   Agent System       Sandbox                   │
-│                                                                     │
+│    ┌───────────────────┬────────────────┬──────────────────┐        │
+│    │ Investigation     │  Knowledge     │    Sandbox       │        │
+│    │ Planner           │  Graph         │                  │        │
+│    └───────────────────┴────────────────┴──────────────────┘        │
 └─────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -50,132 +51,109 @@ Wizard is composed of four subsystems. Each subsystem has a single, well-defined
 
 ### Command Line Interface
 
-The CLI is the entry point. It receives commands from the user, parses them, validates them, and converts them into Investigation Requests that the Runtime Engine can understand.
+The CLI is the entry point. It receives commands from the user, parses them, and converts them into Investigation Requests that the Runtime Engine understands. It then monitors progress and displays results.
 
-The CLI does not perform any analysis. It does not communicate with the agent. It does not touch the repository. It only translates user commands into structured requests and displays results.
+The CLI does not perform any analysis. It only translates user commands into structured requests.
 
 ### Runtime Engine
 
 The Runtime Engine is the core of Wizard. It owns everything.
 
-It creates and manages investigations. It executes tools in the sandbox. It stores observations. It runs extractors to create claims. It builds the claim graph. It calculates trust. It evaluates goals. It decides when the investigation is complete. It generates the verification report.
+It creates and manages investigations. It executes the fast repository scan. It calls the Investigation Planner to generate the investigation plan. It builds and maintains both graphs throughout the investigation. It executes tools in the sandbox. It stores observations. It runs extractors. It computes trust. It evaluates goals. It generates the report.
 
-Everything passes through the Runtime Engine. The CLI talks to it. The agents talk to it. The Knowledge System provides data to it. Nothing bypasses it.
+Everything passes through the Runtime Engine.
 
-### Knowledge System
+### Investigation Planner
 
-The Knowledge System teaches the Runtime Engine how to understand different technologies.
+The Investigation Planner replaces the static Knowledge Module system.
 
-The Runtime Engine itself knows nothing about Python, Docker, Kubernetes, Node.js, or any other technology. That knowledge is packaged into **Knowledge Modules**. The Knowledge Registry manages these modules and activates the right ones for each investigation.
+Instead of hardcoded plugins that only understand technologies their authors programmed, the Planner uses an LLM to dynamically generate investigation plans for any repository, any technology, any era.
 
-When the Runtime Engine discovers a `Dockerfile` in a repository, it asks the Knowledge Registry which module handles Docker. The Docker Knowledge Module is activated. The Runtime Engine now has access to Docker-specific extractors, goal templates, verification rules, and claim types.
+The Planner operates in two modes:
+
+**Initial planning:** After the fast repository scan produces the Repository Manifest, the Planner calls the LLM to generate a Technology Plan — what technologies appear to be present, what goals should be created, which files should be read first.
+
+**Ongoing node creation:** Throughout the investigation loop, the Planner is called to create Investigation Nodes — specific units of work with typed actions, hypotheses about expected outcomes, and claims to create based on the result.
+
+The Planner never sends the entire repository to the LLM. It works with the compact Repository Manifest and progressively reads only the files that are needed.
 
 ### Agent System
 
-The Agent System provides the intelligence for exploring the repository.
+The Agent System provides deeper reasoning for complex, ambiguous situations.
 
-There are two agents, both built in n8n. The Explorer Agent decides what to investigate next. The Verification Agent reviews conclusions before they are finalized.
+The two agents — Explorer and Verifier — are built in n8n. They handle scenarios where the Planner's structured node-based approach is insufficient: understanding the overall design intent of a codebase, interpreting ambiguous execution outputs, suggesting investigation directions when contradictions cannot be resolved through simple pattern matching.
 
-The agents communicate with the Runtime Engine through a stable API. The Runtime Engine gives them an Investigation Context. They return a Tool Request. The Runtime Engine executes the tool, creates observations, processes evidence, and then provides an updated context to the agent.
+The agents communicate with the Runtime Engine through a stable API. They return structured requests. They never modify the graphs directly.
 
-The agents never directly modify claims, trust, or goals. All modifications go through the Runtime Engine.
+---
+
+## The Two Graphs
+
+The most distinctive architectural feature of Wizard is that it maintains two separate graphs throughout every investigation.
+
+### Knowledge Graph
+
+The Knowledge Graph stores what the Runtime has learned about the repository.
+
+Every node is a Claim — a fact about the repository. Every edge is a relationship between claims (DEPENDS_ON, USES, CONTRADICTS, etc.).
+
+This graph answers the question: **what do we know?**
+
+It starts empty and grows as evidence accumulates. Claims enter only after passing through the Evidence Engine and Trust Engine. The Planner and agents cannot insert claims directly.
+
+### Investigation Graph
+
+The Investigation Graph stores how the investigation is proceeding.
+
+Every node is an Investigation Node — a unit of work (read this file, run this command, verify this claim). Edges represent dependencies between nodes (this node must complete before that one can run).
+
+This graph answers the question: **how are we getting there?**
+
+It starts with the root goal and grows dynamically as the Planner creates new nodes. Each node carries a hypothesis about what it expects to find. The Runtime evaluates expected outcomes deterministically without consulting the LLM. Only unexpected outcomes trigger a Planner consultation.
+
+The two graphs reference each other. Investigation Nodes produce Claims that enter the Knowledge Graph. Knowledge Graph state informs what the Planner puts into the next Investigation Node.
 
 ---
 
 ## How Information Flows
 
-Every piece of information follows the same path regardless of the repository, the technology, or the user's command.
+Every piece of information follows the same path.
 
 ```
-Repository File or Execution Output
-           ↓
-       Observation
-    (immutable fact)
-           ↓
-        Extractor
-    (structured parsing)
-           ↓
-         Claim
-  (repository knowledge)
-           ↓
-        Evidence
-  (observation linked to claim)
-           ↓
-         Trust
-  (how strongly to believe the claim)
-           ↓
-      Goal Update
-  (is the goal satisfied?)
-           ↓
-   Next Investigation
-  (what to look at next?)
+Repository Fast Scan
+      ↓
+Repository Manifest (file tree + metadata, no contents)
+      ↓
+Investigation Planner: Initial Technology Plan
+      ↓
+Runtime creates Goals + root Investigation Graph nodes
+      ↓
+Investigation Node executes (read file / run command)
+      ↓
+Observation created (immutable)
+      ↓
+Hypothesis evaluated deterministically
+      ↓
+Claim created and enters Knowledge Graph
+      ↓
+Evidence links Observation to Claim
+      ↓
+Trust Engine recalculates
+      ↓
+Planner creates next Investigation Node
+      ↓
+Loop continues until Goal Checkpoint satisfied
+      ↓
+Report Generator assembles verification_report.md
 ```
-
-This pipeline never changes. Whether the repository is a Python web app, a Java microservice, or a Kubernetes deployment, the information always flows through the same steps.
 
 ---
 
-## The Investigation Loop
+## Why There Is Only One Runtime Architecture
 
-The investigation is a repeating loop. The Runtime Engine controls when the loop starts and when it ends.
+Every command — `investigate`, `verify`, `explain`, `report` — uses the same Runtime Engine and the same two-graph architecture. The only difference is the intent and the goals that get created.
 
-```
-Runtime Engine prepares Investigation Context
-           ↓
-Agent receives context and returns Tool Request
-           ↓
-Runtime Engine validates Tool Request
-           ↓
-Sandbox executes the tool
-           ↓
-Observations are created
-           ↓
-Extractors create Claims
-           ↓
-Evidence Engine links Observations to Claims
-           ↓
-Claim Graph is updated
-           ↓
-Trust Engine recalculates trust
-           ↓
-Goal Engine evaluates active goals
-           ↓
-Priority Engine selects next focus
-           ↓
-Back to the top
-```
-
-The loop ends when the investigation converges, the budget is exhausted, or the user cancels.
-
----
-
-## Why There Is Only One Architecture
-
-This is an important design decision that affects every contributor.
-
-Wizard does not have separate code paths for `wizard verify` and `wizard investigate`. Both commands use the same investigation loop. The only difference is the **Intent** they carry and the **Goals** that get generated.
-
-This design means that once the Runtime Engine is built, adding new commands requires very little new code. You define a new intent type and the goals it should generate. Everything else — the agent loop, the evidence pipeline, the trust computation — works automatically.
-
-This also means that Knowledge Modules can be added to support new technologies without changing any existing code. The Runtime Engine simply activates the new module and the investigation adapts.
-
----
-
-## Communication Between Subsystems
-
-All communication between subsystems goes through defined interfaces. Subsystems do not directly touch each other's internal state.
-
-The primary communication mechanism is the **Event Bus**. When something important happens inside the Runtime Engine, it publishes an event. Other subsystems subscribe to the events they care about and react accordingly.
-
-For example, when an Observation is created:
-- The Extractor Framework subscribes to "Observation Created" and begins extraction
-- The Observation Engine stores it
-
-When a Claim is created:
-- The Evidence Engine subscribes to "Claim Created" and links it to observations
-- The Trust Engine subscribes to "Evidence Added" and recalculates trust
-
-This event-driven approach prevents subsystems from becoming tightly coupled. A new subsystem can be added simply by subscribing to existing events. No existing code needs to change.
+Adding a new command requires only defining a new intent type. Adding support for a new technology requires no code at all — the Planner's LLM already understands it.
 
 ---
 
@@ -184,8 +162,8 @@ This event-driven approach prevents subsystems from becoming tightly coupled. A 
 | Contributor | Subsystem | Primary Output |
 |---|---|---|
 | Koshal | Command Line Interface | Working CLI with 4 commands |
-| Shivam | Runtime Engine | Complete investigation engine with all 13 subsystems |
+| Shivam | Runtime Engine | Complete investigation engine with both graphs, all subsystems |
 | Diksha | Agent System | Two n8n workflows (Explorer and Verification agents) |
-| Yash | Knowledge System | Knowledge Registry and initial set of Knowledge Modules |
+| Yash | Investigation Planner | Fast Scanner, Repository Manifest, Technology Plan, Investigation Node formats and prompts |
 
-Each contributor works independently on their subsystem. The contracts between subsystems — the Investigation Request format, the Investigation Context format, the Tool Request format, the Knowledge Module interface — must be agreed upon by all contributors before implementation begins.
+The contracts between subsystems — the Investigation Request format, the Investigation Node format, the Repository Manifest format, the Agent API — must be agreed upon by all contributors before implementation begins.

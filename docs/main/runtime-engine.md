@@ -1,411 +1,317 @@
 # Runtime Engine
 
-This document describes the Wizard Runtime Engine — what it is, what each of its internal subsystems does, and how they all work together.
+This document describes the Wizard Runtime Engine — what it is, what each of its internal subsystems does, and how they work together with the two-graph architecture.
 
 ---
 
 ## What the Runtime Engine Is
 
-The Runtime Engine is the core of Wizard. Every important operation in the system passes through it. It is responsible for the complete investigation lifecycle, all verification logic, all state management, and the final report.
+The Runtime Engine is the core of Wizard. Every important operation passes through it. It manages the complete investigation lifecycle, maintains both graphs, executes all verification logic, and produces the final report.
 
-The Runtime Engine is intentionally deterministic. This means that given the same repository and the same observations, it will always produce the same conclusions. This makes investigations reproducible, explainable, and testable independently from the AI agent.
+The Runtime Engine is intentionally deterministic. Given the same repository and the same sequence of observations, it will always produce the same conclusions. This makes investigations reproducible, explainable, and independently testable.
 
-Think of it like an operating system kernel. The kernel does not do all the work itself. It coordinates the subsystems that do the work. The Runtime Engine is Wizard's kernel.
-
----
-
-## What the Runtime Engine Is Not
-
-Understanding what the Runtime Engine is not is just as important as understanding what it is.
-
-The Runtime Engine is not intelligent. It does not reason. It does not form hypotheses. It does not decide what is interesting about a repository. That is the job of the AI agents.
-
-The Runtime Engine does not know about specific technologies. It does not know what a `Dockerfile` means or what `requirements.txt` contains. That knowledge belongs in Knowledge Modules.
-
-The Runtime Engine does not accept commands from users directly. That is the job of the CLI.
-
-The Runtime Engine's job is verification, coordination, and state management. Nothing more.
+The Runtime Engine is not intelligent. It does not reason about what a repository means. That is the job of the Investigation Planner and the AI agents. The Runtime Engine's job is coordination, execution, verification, and state management.
 
 ---
 
-## The 13 Subsystems
+## The Two Graphs That Live Inside the Runtime Engine
 
-The Runtime Engine is composed of 13 subsystems. Each subsystem owns exactly one responsibility. They communicate through the Event Bus.
+The Runtime Engine owns and maintains two graphs for every investigation.
+
+### Knowledge Graph
+
+The Knowledge Graph stores what the Runtime Engine has learned about the repository.
+
+Every node is a **Claim** — a validated, evidence-backed fact about the repository. Every edge is a **Relationship** between claims (DEPENDS_ON, USES, CONTRADICTS, PROVIDES, etc.).
+
+The Knowledge Graph is the Runtime's long-term memory of the repository. It answers: **what do we know?**
+
+Claims enter the Knowledge Graph only through the Evidence Engine after passing validation. The Planner and agents cannot insert claims directly. This is a hard architectural invariant.
+
+### Investigation Graph
+
+The Investigation Graph stores the investigation's execution path.
+
+Every node is an **Investigation Node** — a unit of work (read a file, run a command, verify a claim, call the Planner). Every edge represents a dependency between nodes.
+
+The Investigation Graph answers: **how are we getting there?**
+
+Investigation Nodes are created dynamically by the Investigation Planner. The graph starts with the root goal and grows as the investigation proceeds. Every node that has run is stored permanently as part of the investigation history.
+
+The two graphs reference each other. Investigation Nodes produce Claims that enter the Knowledge Graph. Knowledge Graph state informs the Planner when creating Investigation Nodes.
+
+---
+
+## The 14 Subsystems
+
+The Runtime Engine is composed of 14 subsystems. Each owns exactly one responsibility.
 
 ```
                     Runtime Kernel
                           │
-   ┌──────────────────────┼──────────────────────┐
-   │                      │                      │
-   ▼                      ▼                      ▼
-Investigation Manager   Event Bus          Knowledge Registry
-   │
-   ├── Repository Manager
-   │
-   ├── Sandbox Manager
-   │       └── Tool Runtime
-   │
-   ├── Observation Engine
-   │
-   ├── Extractor Framework
-   │
-   ├── Evidence Engine
-   │
-   ├── Claim Graph
-   │
-   ├── Trust Engine
-   │
-   ├── Goal Engine
-   │
-   ├── Priority Engine
-   │
-   └── Report Generator
+     ┌────────────────────┼────────────────────┐
+     │                    │                    │
+     ▼                    ▼                    ▼
+Investigation Manager  Event Bus      Investigation Planner
+     │
+     ├── Repository Manager
+     │       └── Fast Scanner
+     │
+     ├── Sandbox Manager
+     │       └── Tool Runtime
+     │
+     ├── Observation Engine
+     │
+     ├── Extractor Framework
+     │
+     ├── Evidence Engine
+     │
+     ├── Knowledge Graph
+     │
+     ├── Investigation Graph
+     │
+     ├── Trust Engine
+     │
+     ├── Goal Engine
+     │
+     ├── Priority Engine
+     │
+     └── Report Generator
 ```
 
 ---
 
 ## Runtime Kernel
 
-The Runtime Kernel is the central coordinator. It is the first thing that starts when Wizard runs and the last thing to shut down.
+The Runtime Kernel is the central coordinator. It brings all other subsystems online, routes Investigation Requests, manages lifecycle transitions, and dispatches events.
 
-The Kernel manages:
-- Bringing all other subsystems online during startup
-- Creating and routing Investigation Requests
-- Coordinating investigation lifecycle transitions
-- Dispatching events between subsystems
-- Managing subsystem registration
-- Shutting down gracefully
-
-The Kernel does not do analysis. It does not compute trust. It does not read files. It only manages coordination.
-
-One useful mental model: the Runtime Kernel is to Wizard what an operating system kernel is to a computer. The kernel schedules work, manages resources, and makes sure subsystems can communicate. The actual work happens in the subsystems.
+The Kernel does not perform analysis. It manages coordination.
 
 ---
 
 ## Investigation Manager
 
-The Investigation Manager owns every active Investigation.
+The Investigation Manager creates and owns every active Investigation. It initializes both graphs, manages the investigation budget, tracks the current lifecycle state, and coordinates completion.
 
-When the Runtime Kernel receives an Investigation Request from the CLI, it hands the request to the Investigation Manager. The Investigation Manager creates the Investigation object, assigns it a unique ID, and initializes all its data stores.
-
-Responsibilities:
-- Creating new Investigations
-- Loading repository metadata into the Investigation
-- Tracking the current state of each Investigation
-- Managing the investigation budget
-- Coordinating the transition to each lifecycle stage
-- Archiving completed Investigations
-
-The Investigation Manager never reads files, never runs tools, and never analyzes anything. It manages the lifecycle.
+The Investigation Manager is the single source of truth for what investigations exist and what state they are in.
 
 ---
 
 ## Repository Manager
 
-The Repository Manager provides access to the repository being investigated.
+The Repository Manager loads the repository and provides controlled, stable access to its contents. It manages repository paths, creates temporary working directories, and provides repository metadata.
 
-When a new Investigation begins, the Repository Manager loads the repository. It creates a temporary working copy and provides the rest of the system with a controlled, safe way to access repository contents.
+### Fast Scanner
 
-Responsibilities:
-- Loading the repository from its source (local path, git URL, archive)
-- Providing stable paths to repository files
-- Maintaining metadata about the repository (total size, directory structure, file count)
-- Creating temporary copies for safe execution
-- Cleaning up temporary files when the investigation ends
+The Fast Scanner is a subsystem of the Repository Manager. It performs the first operation of every investigation: a lightweight scan that produces the Repository Manifest.
 
-The Repository Manager does not understand what files mean. It knows where files are and how to access them. Understanding what a file contains is the job of the Extractor Framework and Knowledge Modules.
+The Fast Scanner reads **only metadata**:
+- Complete directory tree (file names and paths only)
+- File extensions
+- File sizes
+- Presence of well-known signal files
+
+No file contents are read by the Fast Scanner. It is deliberately cheap — typically completing in under one second even for large repositories.
+
+The Repository Manifest produced by the Fast Scanner is what the Investigation Planner receives for its initial planning call. It is typically 200 to 500 tokens — compact enough for an LLM call without overwhelming the context window.
 
 ---
 
 ## Sandbox Manager
 
-The Sandbox Manager ensures that every repository interaction happens inside an isolated environment.
+The Sandbox Manager creates isolated execution environments. Every repository interaction happens inside a Sandbox. Repositories are treated as untrusted.
 
-Every repository is treated as untrusted. A repository could contain malicious installation scripts, post-install hooks, or commands that would damage the host system. The Sandbox Manager prevents this by ensuring that repository code never executes directly on the host.
-
-Responsibilities:
-- Creating isolated execution environments before every tool execution
-- Preparing the workspace inside the sandbox (copying files, setting environment variables)
-- Enforcing resource limits (CPU, memory, disk, network)
-- Capturing all outputs from sandbox execution
-- Destroying the sandbox completely after execution ends
-
-The exact sandbox technology is undefined — it could be Docker containers, lightweight VMs, or OS-level isolation. This decision belongs to the Runtime Engine contributor (Shivam).
+The Sandbox enforces resource limits (CPU, memory, disk, network) and captures all outputs. After execution, the Sandbox is destroyed completely.
 
 ---
 
 ## Tool Runtime
 
-The Tool Runtime executes operations requested by the agent.
+The Tool Runtime executes operations inside the Sandbox. Every Investigation Node that requires an action against the repository goes through the Tool Runtime.
 
-Tools are the only way the agent can interact with the repository. The agent cannot directly read files, run commands, or access the repository in any way. It can only submit Tool Requests. The Tool Runtime executes those requests inside the Sandbox.
+Every tool follows the same interface: accept parameters, execute one operation, return a standardized response. Examples: Read File, Execute Command, Search Repository, Check Network Port.
 
-Every tool follows the same interface:
-- It accepts a set of parameters
-- It executes one specific operation
-- It returns a standardized response
-
-Examples of built-in tools:
-
-| Tool | What It Does |
-|---|---|
-| Read File | Reads the contents of a repository file |
-| Read Directory | Lists the contents of a directory |
-| Search Repository | Searches for files matching a pattern |
-| Execute Command | Runs a shell command inside the sandbox |
-| Read Configuration | Parses a configuration file |
-| Inspect Environment | Lists available environment variables |
-| Check Network Port | Tests whether a specific port is listening |
-
-The Tool Runtime validates every Tool Request before execution. It checks that the tool is registered, the parameters are valid, the sandbox supports the requested operation, and the investigation budget allows it.
-
-Failures during tool execution become observations. A `ModuleNotFoundError` when trying to install dependencies is not a system failure — it is a useful piece of evidence about the repository.
-
----
-
-## Event Bus
-
-The Event Bus is how subsystems communicate without depending on each other directly.
-
-Instead of one subsystem calling another directly, subsystems publish events when something important happens. Other subsystems subscribe to the events they care about.
-
-For example, when an Observation is created:
-1. The Observation Engine publishes an "Observation Created" event
-2. The Extractor Framework receives this event and begins extraction
-3. A debugging component (if active) receives this event and logs it
-4. A metrics component (if active) receives this event and updates counters
-
-None of these components needed to know about each other. The Observation Engine just published the event. The others subscribed.
-
-This design allows new components to be added without modifying existing code. A future analytics or visualization component can simply subscribe to existing events.
-
-All events contain:
-- An Event ID
-- A timestamp
-- The Investigation ID
-- The event type
-- The source subsystem
-- A payload
-
-Events are immutable and are retained as part of the investigation history.
+Tool failures are not system errors. They become Observations. A command that exits with a non-zero code is informative evidence about the repository, not a bug in Wizard.
 
 ---
 
 ## Observation Engine
 
-The Observation Engine stores every observation generated during an investigation.
+The Observation Engine stores every observation generated during an investigation. Observations are immutable. Once created, they cannot be changed.
 
-An observation is the most basic unit of information in Wizard. It is an immutable record of a single fact collected from the repository or from executing something against it.
-
-Examples of observations:
-- The contents of `package.json`
-- The output of running `npm install`
-- The exit code of running `python app.py`
-- The response from making a request to `localhost:3000`
-- A "file not found" error when looking for `.env`
-
-Observations are immutable. Once created, they cannot be changed. If new information needs to be recorded, a new observation is created.
-
-Every observation gets:
+Every Observation contains:
 - A unique Observation ID
 - A timestamp
-- The source (which tool produced it)
+- The source (which Investigation Node produced it)
 - The observation type
-- The raw payload (the actual data)
-- The repository path it relates to (if applicable)
+- The raw payload
+- The repository path it relates to
 - The Investigation ID
+- The Investigation Node ID that created it
 
-The Observation Engine makes observations searchable and retrievable. Every conclusion in the final report can be traced back to specific observations.
+This last field — the Investigation Node ID — is what connects the Observation Store to the Investigation Graph. Every conclusion can be traced back to an observation, and every observation back to the specific graph node that triggered it.
+
+---
+
+## Investigation Graph
+
+The Investigation Graph is a first-class subsystem of the Runtime Engine. It stores, manages, and traverses the investigation's execution path.
+
+Responsibilities:
+- Storing every Investigation Node that has been created
+- Tracking node states (waiting, running, complete, failed, blocked)
+- Tracking node dependencies (this node requires that node's output)
+- Recording which Observations and Claims each node produced
+- Making the graph queryable by the Priority Engine and Planner
+- Persisting the graph for post-investigation audit
+
+An Investigation Node contains:
+- Node ID
+- Node type (Discovery, Read, Execute, Parse, Verify, Synthesize, Planner, Checkpoint)
+- Action specification
+- Hypothesis (what the Planner expected to find)
+- Success claim template (claim to create if hypothesis is confirmed)
+- Failure claim template (claim to create if hypothesis is refuted)
+- Escalation condition (what unexpected output triggers a Planner consultation)
+- Parent node ID
+- Dependency node IDs
+- State
+- Execution timestamp
+- Observations produced
+- Claims produced
+
+The hypothesis field is what allows the Runtime Engine to evaluate most node outcomes deterministically, without consulting the LLM. Expected outcomes map to predefined claim templates. Only unexpected outcomes escalate to the Planner.
 
 ---
 
 ## Extractor Framework
 
-The Extractor Framework converts raw observations into structured claims.
+The Extractor Framework converts raw Observations into structured Claims.
 
-An observation says "here is what happened." An extractor reads that observation and says "here is what it means."
+**Deterministic Extractors** parse structured data (JSON, YAML, Dockerfiles, exit codes, port responses). They do not use AI. They always produce the same output for the same input.
 
-For example:
-- Observation: contents of `package.json` (raw JSON text)
-- Extractor: identifies `"express": "^4.18.0"` in the dependencies section
-- Claim produced: "Framework = Express, version ~4.18"
+**Cognitive Extractors** use an LLM to extract meaning from ambiguous or unstructured data. Used only when deterministic extraction is insufficient.
 
-The Extractor Framework supports two types of extractors:
-
-**Deterministic Extractors** parse structured data using rules, regular expressions, or parsers. They do not use AI. They are fast, reliable, and always produce the same output for the same input. Use these whenever possible.
-
-**Cognitive Extractors** use an LLM to extract meaning from unstructured data. Use these only when the data cannot be parsed deterministically — for example, understanding the overall design pattern of a complex codebase by reading source files.
-
-Even when a cognitive extractor is used, the resulting claim must pass validation before entering the Claim Graph. The Runtime Engine never blindly trusts AI-generated output.
+The Extractor Framework also validates every proposed Claim before it enters the Evidence Engine. Invalid Claims are rejected before they can enter the Knowledge Graph.
 
 ---
 
 ## Evidence Engine
 
-The Evidence Engine links observations to claims.
+The Evidence Engine links Observations to Claims.
 
-Think of it this way. An observation says "here is a raw fact." A claim says "here is what we believe about the repository." Evidence is what connects them — it says "we believe this claim because of these observations."
+Evidence answers the question: "Why does the Runtime Engine believe this Claim?"
 
-Without evidence, a claim is just an ungrounded hypothesis. The Runtime Engine does not accept hypotheses. It only accepts evidence-backed claims.
+Every Claim must have at least one piece of Evidence. Evidence is created by connecting one or more Observations to one Claim, along with the source's reliability score.
 
-Responsibilities:
-- Creating Evidence objects that link observations to claims
-- Tracking which observations support each claim
-- Tracking which observations contradict each claim
-- Preventing the same evidence from being counted multiple times (which would artificially inflate trust)
-- Grouping correlated evidence (several observations that all point to the same thing do not get counted as fully independent)
-- Notifying the Trust Engine when evidence changes
+Evidence can be supporting (strengthens belief in the Claim) or contradictory (weakens it). The Evidence Engine prevents the same observation from being counted as multiple independent pieces of evidence — a critical protection against artificially inflated trust.
 
 ---
 
-## Claim Graph
+## Knowledge Graph
 
-The Claim Graph is the Runtime Engine's internal knowledge model of the repository.
+The Knowledge Graph subsystem stores and manages the growing model of repository knowledge.
 
-Every node in the graph represents one claim. Every edge represents a relationship between two claims.
+Every node is a Claim. Every edge is a typed relationship between Claims. The graph starts empty and grows as evidence accumulates.
 
-Example relationships:
-- "Framework = Express" DEPENDS_ON "Runtime = Node.js 18"
-- "Container Orchestration = Docker Compose" USES "Container = Docker"
-- "Claim: Runtime = Node.js 18" CONTRADICTS "Claim: Runtime = Python 3.11"
-
-The graph starts empty at the beginning of every investigation. It grows as claims are added during the investigation loop.
-
-The Claim Graph is important because repository knowledge is fundamentally relational. A framework depends on a runtime. A runtime depends on a package manager. A deployment strategy depends on containerization. Storing claims in a simple list would lose all of this relational structure. The graph preserves it.
-
-When a claim's trust level changes significantly, the graph allows the Trust Engine to propagate that change to related claims. If the claim "Runtime = Node.js 18" becomes highly trusted, the claims that depend on it (the framework, the package manager, the deployment) also get a trust boost.
+Responsibilities:
+- Storing validated Claims as graph nodes
+- Creating and managing relationships between Claims
+- Making the graph searchable and traversable
+- Providing the current Knowledge Graph state to the Planner (in summarized form) for ongoing planning calls
 
 ---
 
 ## Trust Engine
 
-The Trust Engine computes and maintains the trust level for every claim.
+The Trust Engine computes and maintains the trust level for every Claim.
 
-Trust is the answer to this question: "How strongly should we believe this claim based on everything we have observed?"
+Trust is calculated by the Runtime Engine — not by the Planner or the agents. It considers:
 
-Trust is not assigned by the agent. Trust is not a number the LLM provides. Trust is calculated by the Runtime Engine using real evidence.
+- How many independent observations support the Claim
+- Source reliability (execution result > config file > documentation)
+- Whether contradictory evidence exists
+- Graph relationships to other trusted Claims
 
-The Trust Engine considers:
+Trust propagates through the Knowledge Graph. If a Claim's trust changes significantly, dependent Claims are also updated.
 
-**Supporting evidence**: How many observations support this claim? How diverse are those observations (do they come from different files, different execution results, or are they all just mentions in documentation)?
-
-**Contradictory evidence**: Are there observations that contradict this claim? How strong is the contradicting evidence?
-
-**Source reliability**: An execution result (empirical evidence) is more reliable than a documentation mention (declarative evidence). The Trust Engine weights these differently.
-
-**Graph relationships**: If strongly trusted claims support this claim through graph relationships, that provides a small trust boost.
-
-Trust changes throughout the investigation as new evidence arrives. A claim that starts with low trust because it was only mentioned in a README can gain high trust if execution later confirms it directly.
-
-Contradictions are expected and normal. Repositories often contain inconsistent information — the README says one thing, the Dockerfile says another, and the actual execution behavior is a third thing. The Trust Engine records all of this. Contradictions are clearly documented in the final report.
+Contradictions are not errors. They are important information. When two Claims contradict each other, both are stored. The Trust Engine records the contradiction and the final report clearly documents it.
 
 ---
 
 ## Goal Engine
 
-The Goal Engine manages what the investigation is trying to accomplish.
+The Goal Engine manages the investigation's objectives.
 
-Every investigation has goals. Goals are internal runtime objects — they are not the same as user commands. A user running `wizard verify runtime` creates an intent. The Runtime Engine converts that intent into one or more goals.
+Goals come from the Technology Plan produced by the Investigation Planner. Goals can also be created dynamically mid-investigation if the Planner determines that something new needs to be verified.
 
-Goals have states:
-- **Waiting** — Not yet started
-- **Investigating** — Evidence is being gathered
-- **Partially Verified** — Some evidence exists but more is needed
-- **Verified** — Sufficient evidence has been collected
-- **Blocked** — Cannot proceed because a prerequisite goal is unresolved
-- **Failed** — Cannot be satisfied with available resources
-
-Goals can also be created dynamically during the investigation. If the Runtime Engine discovers a `Dockerfile` mid-investigation, it creates a new Docker verification goal even though the user never mentioned Docker.
-
-Goals can depend on other goals. For example, "Verify API Deployment" might depend on "Verify Container Runtime" and "Verify Node.js Runtime." The Goal Engine understands these dependencies and sequences the investigation accordingly.
+Goals are represented in the Investigation Graph as Checkpoint Nodes. A Checkpoint Node is marked satisfied when:
+- All required Claims for that goal are present in the Knowledge Graph
+- Those Claims have sufficient trust
+- No unresolved critical contradictions remain
 
 ---
 
 ## Priority Engine
 
-The Priority Engine decides where the agent should focus next.
+The Priority Engine decides which Investigation Node should be executed next.
 
-The agent does not wander randomly through the repository. The Priority Engine tells the Runtime Engine which goal is most important to investigate in the current iteration, and the Runtime Engine includes this recommendation in the Investigation Context it sends to the agent.
-
-The Priority Engine considers:
-- Which goals are active and unsatisfied
-- How much uncertainty remains for each goal
-- Which goals have dependencies that must be resolved first
+It considers:
+- Which nodes have all dependencies satisfied (eligible to run)
+- Which active Checkpoint Node has the most urgent evidence gap
 - How much budget remains
-- Whether previous attempts to address a goal have failed
-- How much new information is likely to be gained from investigating each goal
+- Whether previous executions have already tried this path without success
 
-The Priority Engine balances two competing needs. Exploitation means focusing on the most valuable, uncertain goals. Exploration means looking at parts of the repository that have not been examined yet. Too much exploitation causes the investigation to get stuck. Too much exploration wastes budget.
+The Priority Engine does not call the LLM. It is a deterministic scheduler. The investigation's order of execution is determined by evidence gaps and goal priority, not by AI reasoning.
 
 ---
 
 ## Report Generator
 
-The Report Generator assembles the final Verification Report.
+The Report Generator assembles the final Verification Report when the investigation converges.
 
-When the investigation converges, the Report Generator reads from every Runtime Engine subsystem to assemble a comprehensive document. It reads:
-- Verified claims from the Claim Graph
-- Evidence linking those claims to observations
-- Trust levels for each claim
-- Completed and failed goals
-- Contradictions that were detected
-- Execution history and results
-- Recommendations derived from the investigation
+It reads from:
+- The Knowledge Graph (all verified Claims with trust levels)
+- The Investigation Graph (the complete execution audit trail)
+- The Observation Engine (raw evidence for specific claims)
+- The Goal Engine (which goals completed, which failed, which are partially verified)
 
-The Report Generator never invents information. Every statement in the report must be backed by verified evidence from the Runtime Engine. The report documents what was found, why the Runtime Engine believes it, and what remains uncertain.
+The Report Generator never invents information. Every statement in the report is backed by Claims from the Knowledge Graph. Every Claim references the Investigation Graph node that produced it. Every node references the Observations that triggered it.
 
-The report is saved as `verification_report.md`. The full structure of the report is described in `verification-report.md`.
+The full audit trail is intact. The report is not a summary — it is a structured window into verified knowledge.
 
 ---
 
-## The Runtime Is Technology Independent
+## The Runtime Engine Is Technology Neutral
 
-One of the most important architectural principles is that the Runtime Engine must never contain hardcoded knowledge about specific technologies.
+The Runtime Engine knows nothing about Node.js, Docker, Python, or any other specific technology.
 
-Wrong approach:
-```
-if "package.json" is found:
-    run npm install
-    check for Express
-```
+- It does not know that `package.json` signals Node.js
+- It does not know what `npm install` does
+- It does not know what "Framework = Express" means
 
-Right approach:
-```
-Runtime discovers "package.json" during Knowledge Discovery
-↓
-Runtime queries Knowledge Registry
-↓
-Knowledge Registry returns: Node.js Knowledge Module handles this
-↓
-Runtime activates Node.js Knowledge Module
-↓
-Node.js module provides extractors, goal templates, and verification rules
-↓
-Runtime uses these to investigate without knowing what Node.js is
-```
+All of that understanding comes from the Investigation Planner. The Runtime Engine receives structured Investigation Nodes with hypotheses and claim templates. It executes them, evaluates outcomes, and stores results. The meaning of those results is encoded in the node's hypothesis and claim templates — produced by the Planner, not hardcoded in the Runtime.
 
-The Runtime Engine knows how to investigate. Knowledge Modules know what to investigate. This separation keeps the Runtime Engine stable and maintainable as Wizard grows to support more technologies.
+This means the Runtime Engine never needs to change when new technologies emerge. Only the Planner (which is backed by an LLM) needs to understand new technologies.
 
 ---
 
-## Implementation Order
+## Implementation Order for Shivam
 
-If you are building the Runtime Engine (Shivam), the recommended order is:
+1. Runtime Kernel
+2. Investigation Manager
+3. Repository Manager + Fast Scanner
+4. Tool Runtime + Sandbox Manager
+5. Observation Engine
+6. Event Bus
+7. Investigation Graph (the new subsystem, critical)
+8. Extractor Framework
+9. Evidence Engine
+10. Knowledge Graph
+11. Trust Engine
+12. Goal Engine
+13. Priority Engine
+14. Investigation Planner integration (coordinate with Yash)
+15. Report Generator
 
-1. Runtime Kernel — without this, nothing else can coordinate
-2. Investigation Manager — without this, investigations cannot be created
-3. Repository Manager — without this, the repository cannot be accessed
-4. Tool Runtime — without this, observations cannot be collected
-5. Sandbox Manager — the Tool Runtime needs this to execute safely
-6. Observation Engine — without this, tool outputs cannot be stored
-7. Event Bus — other subsystems need this to communicate
-8. Extractor Framework — without this, observations cannot become claims
-9. Evidence Engine — without this, observations cannot be linked to claims
-10. Claim Graph — without this, claims cannot be stored
-11. Trust Engine — without this, trust cannot be computed
-12. Goal Engine — without this, goals cannot be managed
-13. Priority Engine — without this, the agent has no direction
-14. Knowledge Registry — can be stubbed early, completed later
-15. Report Generator — can be completed last
-
-Build a minimal working version of each subsystem before moving to the next. Do not try to build everything perfectly before connecting the pieces.
+Build Investigation Graph early — it is the backbone of the new architecture. Everything else depends on it.

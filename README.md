@@ -38,13 +38,13 @@ Traditional tools do not help here. Static analyzers read code but do not execut
 
 ---
 
-## Core Design Principle
+## Core Design Principles
 
 Wizard separates intelligence from verification.
 
-The AI agent is responsible for exploring the repository and forming hypotheses. The Runtime Engine is responsible for deciding what is actually true. The agent can explore freely. The runtime verifies every conclusion before accepting it.
+The Investigation Planner (backed by an LLM) generates dynamic investigation plans for any repository and any technology — including technologies that did not exist when Wizard was built. The Runtime Engine executes those plans deterministically and verifies every conclusion before accepting it.
 
-This means the system cannot hallucinate its way into a false verification report. Every statement in the output must be supported by real evidence collected during the investigation.
+Wizard maintains **two graphs** during every investigation. The **Knowledge Graph** stores what has been learned (verified claims about the repository). The **Investigation Graph** stores how the investigation is proceeding (the dynamic execution path, growing node by node). Together they make every conclusion both trustworthy and fully auditable.
 
 ---
 
@@ -59,8 +59,6 @@ wizard report
 wizard explain <target>
 ```
 
-Details on every command and how they work internally are covered in the documentation.
-
 ---
 
 ## The Four Subsystems
@@ -70,26 +68,26 @@ Wizard is built from four independent subsystems. Each subsystem is owned by one
 | Subsystem | Responsibility |
 |---|---|
 | CLI | Accepts user commands and translates them into investigation requests |
-| Runtime Engine | Manages the complete investigation lifecycle and owns all verification logic |
-| Knowledge System | Teaches the runtime how to understand different technologies |
-| Agent System | Explores the repository and supplies the runtime with observations |
+| Runtime Engine | Manages the investigation lifecycle, owns both graphs, owns all verification logic |
+| Investigation Planner | Generates dynamic investigation plans using an LLM, with progressive context loading |
+| Agent System | Provides deeper reasoning for complex and ambiguous situations (built in n8n) |
 
 ---
 
 ## Documentation
 
-The complete architecture documentation lives in `docs/main/`. Read the documents in the order listed below to build a full understanding of the system.
+The complete architecture documentation lives in `docs/main/`. Read the documents in the order listed below.
 
 | Document | What It Covers |
 |---|---|
-| [wizard.md](docs/main/wizard.md) | Complete contributor guide covering every system in depth |
+| [wizard.md](docs/main/wizard.md) | Complete contributor guide — two-graph architecture, Planner, agents, CLI, contributor responsibilities |
 | [overview.md](docs/main/overview.md) | High level architecture and how all four subsystems connect |
-| [investigation-lifecycle.md](docs/main/investigation-lifecycle.md) | How a single investigation progresses from start to finish |
-| [runtime-engine.md](docs/main/runtime-engine.md) | The Runtime Engine and all its internal subsystems |
-| [knowledge-system.md](docs/main/knowledge-system.md) | Knowledge Modules, the Knowledge Registry, and how technologies are supported |
-| [agent-system.md](docs/main/agent-system.md) | The AI agent, its workflow in n8n, and how it communicates with the runtime |
-| [cli.md](docs/main/cli.md) | The command line interface, all four commands, and how they map to investigations |
-| [core-concepts.md](docs/main/core-concepts.md) | Definitions of every important term used throughout the project |
+| [investigation-lifecycle.md](docs/main/investigation-lifecycle.md) | Complete lifecycle with two-graph growth shown step by step |
+| [runtime-engine.md](docs/main/runtime-engine.md) | All 14 Runtime Engine subsystems including the new Investigation Graph |
+| [investigation-planner.md](docs/main/investigation-planner.md) | The LLM-powered Investigation Planner, Investigation Nodes, hypothesis field, progressive context |
+| [agent-system.md](docs/main/agent-system.md) | The two n8n agents and how they interact with the Runtime Engine |
+| [cli.md](docs/main/cli.md) | The four CLI commands and how they map to investigations |
+| [core-concepts.md](docs/main/core-concepts.md) | Definitions of every important term |
 | [verification-report.md](docs/main/verification-report.md) | The structure and content of the final verification report |
 
 ---
@@ -99,7 +97,7 @@ The complete architecture documentation lives in `docs/main/`. Read the document
 This project is under active development by a team of four contributors. The architecture is defined. Implementation is in progress.
 
 - Tech stack for the CLI and Runtime Engine: **undefined**
-- Tech stack for the Knowledge System: **undefined**
+- Tech stack for the Investigation Planner: **undefined** (LLM provider also undefined)
 - Tech stack for the Agent System: **n8n** (decided)
 
 ---
@@ -111,4 +109,4 @@ See `docs/members/` for individual contributor documentation.
 - Koshal — Command Line Interface and Investigation Entry
 - Shivam — Wizard Runtime Engine
 - Diksha — Agent System
-- Yash — Knowledge System
+- Yash — Investigation Planner

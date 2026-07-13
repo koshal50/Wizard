@@ -1,18 +1,16 @@
 # Core Concepts
 
-This document defines every important concept used throughout the Wizard project. All contributors should use these terms consistently. Using different names for the same concept creates confusion.
+This document defines every important concept in Wizard. All contributors must use these terms consistently.
 
 ---
 
 ## Investigation
 
-An Investigation is one complete repository verification session.
+One complete repository verification session.
 
-Every user command creates a new Investigation. The Investigation is the root object that owns everything that happens during repository analysis — observations, claims, evidence, goals, trust values, and the final report.
+Every user command creates a new Investigation. It is the root object that owns everything — both graphs, all observations, all goals, the report.
 
-Investigations are independent from each other. Two investigations of the same repository never share state. Each investigation is a fresh, isolated snapshot of what was discovered during that specific run.
-
-An Investigation has a unique ID, a lifecycle state, a budget, and references to all the data it has collected.
+Investigations are isolated. Two investigations of the same repository never share runtime state.
 
 **Do not call it:** run, execution, analysis, scan, session
 
@@ -20,93 +18,123 @@ An Investigation has a unique ID, a lifecycle state, a budget, and references to
 
 ## Investigation Request
 
-An Investigation Request is the structured object the CLI sends to the Runtime Engine to start a new investigation.
+The structured object the CLI sends to the Runtime Engine to start a new investigation.
 
-It contains the repository location, the user's intent, the investigation targets, and any options the user specified.
-
-The Runtime Engine validates this object before creating an Investigation.
+Contains: repository location, intent, targets, options.
 
 ---
 
-## Investigation Context
+## Repository Manifest
 
-An Investigation Context is the snapshot of information the Runtime Engine sends to the Explorer Agent at the beginning of each reasoning iteration.
+The output of the Fast Scanner. A compact, structured summary of the repository's surface — file names, directory tree, extensions, sizes, and presence of well-known signal files.
 
-It contains:
-- The active goals
-- The current Claim Graph state
-- Missing evidence
-- Previously failed actions
-- Available tools
-- Remaining budget
-- Repository metadata
+No file contents. Typically 200 to 500 tokens.
 
-The agent uses this to decide what to investigate next. The agent never receives the internal implementation of the Runtime Engine — only this context object.
+This is what the Investigation Planner receives for its initial planning call.
+
+---
+
+## Technology Plan
+
+The structured JSON document the Investigation Planner produces after its initial LLM call.
+
+Lists the technologies that appear to be present, with what goals to create for each and what files to read first.
+
+The Runtime Engine uses the Technology Plan to generate the initial Goal set and the root nodes of the Investigation Graph.
+
+---
+
+## Investigation Graph
+
+The directed graph that records how the investigation is proceeding.
+
+Every node is an Investigation Node — a unit of work. Every edge represents a dependency between nodes (this node must complete before that one can run).
+
+The Investigation Graph starts with the root goal and grows dynamically as the Planner creates new nodes. It answers the question: **how are we getting there?**
+
+The complete Investigation Graph is stored permanently after the investigation ends. Every Claim in the Knowledge Graph can be traced back to the Investigation Graph node that produced it.
+
+---
+
+## Knowledge Graph
+
+The directed graph that records what the Runtime Engine has learned about the repository.
+
+Every node is a Claim. Every edge is a typed relationship between Claims (DEPENDS_ON, USES, CONTRADICTS, PROVIDES, etc.).
+
+The Knowledge Graph answers the question: **what do we know?**
+
+The Knowledge Graph starts empty and grows as evidence is validated. Claims enter only through the Evidence Engine. The Planner and agents cannot insert Claims directly.
+
+---
+
+## Investigation Node
+
+A single unit of work in the Investigation Graph.
+
+Every Investigation Node carries:
+- **A type** (Discovery, Read, Execute, Parse, Verify, Synthesize, Planner, Checkpoint)
+- **An action** (what the Runtime Engine should do)
+- **A hypothesis** (what the Planner expects to find)
+- **A success claim template** (what Claim to create if hypothesis confirmed)
+- **A failure claim template** (what Claim to create if hypothesis refuted)
+- **Dependencies** (which other nodes must complete first)
+
+Investigation Nodes are created by the Investigation Planner. They are executed by the Runtime Engine.
+
+---
+
+## Hypothesis
+
+The Planner's declaration of what an Investigation Node is expected to find.
+
+The Runtime Engine evaluates the node's actual output against the hypothesis deterministically. If the result matches an expected outcome (success or failure), the appropriate Claim is created without consulting the LLM. Only unexpected results trigger a Planner consultation.
+
+The Hypothesis field is what makes the investigation loop efficient. Most node evaluations complete without any LLM call.
+
+---
+
+## Investigation Planner
+
+The component that generates investigation plans using an LLM.
+
+In the initial phase: receives the Repository Manifest, calls the LLM, returns the Technology Plan and initial Investigation Graph nodes.
+
+During the investigation loop: receives a compact summary of current investigation state, calls the LLM, returns the next Investigation Node(s) to create.
+
+The Planner never sends the entire repository to the LLM. It sends only the Repository Manifest and the specific file contents that have been read so far.
+
+The Planner is not a verifier. It is a planner. It cannot insert Claims into the Knowledge Graph or mark goals complete.
 
 ---
 
 ## Intent
 
-An Intent describes what the user wants to achieve.
+What the user wants to achieve. Created by the CLI from the user's command.
 
-Intents do not describe how the investigation should be performed. They define the desired outcome.
-
-Examples:
-- Intent: Verify Runtime (the user wants to know if the runtime works)
-- Intent: Investigate Architecture (the user wants to understand the codebase structure)
-- Intent: Explain Dependencies (the user wants an explanation of what the project needs)
-
-The CLI creates Intents from user commands. The Runtime Engine converts Intents into Goals.
+Intents become Goals. The Runtime Engine converts Intent into initial Goals via the Technology Plan.
 
 ---
 
 ## Goal
 
-A Goal is an internal Runtime Engine object representing a specific verification objective.
+An internal Runtime Engine objective representing something that needs to be verified.
 
-Goals are not the same as user commands. When a user says "verify runtime," that becomes an Intent. The Runtime Engine converts that Intent into one or more Goals like "Verify Node.js Runtime," "Verify Docker Container," and "Verify Application Startup."
+Goals are represented as Checkpoint Nodes in the Investigation Graph. A Checkpoint Node is satisfied when all required Claims are present with sufficient trust.
 
-Goals have states:
+Goals can be created dynamically mid-investigation if the Planner determines something new needs to be verified.
 
-| State | Meaning |
-|---|---|
-| Waiting | Not started yet |
-| Investigating | Evidence is being gathered |
-| Partially Verified | Some evidence exists but more is needed |
-| Verified | Sufficient evidence has been collected |
-| Blocked | Cannot proceed because a prerequisite goal is unresolved |
-| Failed | Cannot be satisfied with available resources |
-| Completed | Investigation finished (either verified or definitively failed) |
-
-Goals can be created dynamically during an investigation. If the Runtime Engine discovers a technology it did not know about at the start, it creates new goals for that technology automatically.
-
-**Do not call it:** task, step, objective, checkpoint
+**Do not call it:** task, step, objective, checkpoint (as a standalone term)
 
 ---
 
 ## Observation
 
-An Observation is an immutable fact collected during the investigation.
+An immutable fact collected during the investigation.
 
-Observations are the most basic unit of information in Wizard. They contain raw data — they do not interpret or explain anything. They simply record what happened.
+Created when an Investigation Node executes. Contains the raw output from a tool call — file contents, command output, exit code, etc.
 
-Examples:
-- The content of the file `package.json`
-- The standard output of running `npm install`
-- The exit code of running `python app.py`
-- A "file not found" error when looking for `.env`
-- The response headers from a request to `localhost:3000`
-
-Observations are immutable. Once created, they cannot be changed. If new information is collected, a new Observation is created. This guarantees complete traceability — you can always see exactly what raw data the system was working with.
-
-Every Observation has:
-- A unique Observation ID
-- A timestamp
-- The source (which tool produced it)
-- The observation type (file content, command output, error, etc.)
-- The raw payload
-- The repository path it relates to (if applicable)
-- The Investigation ID
+Observations are immutable. Once created, they cannot be changed. Every Observation carries the ID of the Investigation Node that produced it, making every Claim fully traceable.
 
 **Do not call it:** finding, result, insight, evidence, log
 
@@ -114,26 +142,19 @@ Every Observation has:
 
 ## Claim
 
-A Claim is a structured piece of repository knowledge derived from observations.
+A structured piece of repository knowledge derived from Observations.
 
-Claims are what the Runtime Engine believes about the repository. Unlike Observations (which are raw facts), Claims are interpretations.
+Claims are validated facts about the repository: "Runtime = Node.js 18", "Framework = Express 4.18", "Container = Docker".
 
-Examples:
-- "Runtime = Node.js 18"
-- "Framework = Express 4.18"
-- "Database = PostgreSQL"
-- "Deployment = Docker Compose"
-- "Entry Point = server.js"
+Claims enter the Knowledge Graph only after passing the Evidence Engine. Every Claim carries:
+- A type
+- A value
+- Its supporting Evidence
+- Its contradictory Evidence (if any)
+- A trust level
+- The Investigation Node ID that created it
 
-Claims evolve throughout the investigation. Additional evidence may increase trust in a claim. Contradictory evidence may decrease trust. New observations may completely invalidate a previous claim.
-
-Every Claim:
-- Has a unique ID
-- Has a type (Runtime, Framework, Dependency, Deployment, etc.)
-- Has a value
-- References its supporting evidence
-- References any contradictory evidence
-- Has a trust level
+Claims evolve throughout the investigation as new evidence arrives.
 
 **Do not call it:** belief, fact, knowledge, result
 
@@ -141,204 +162,125 @@ Every Claim:
 
 ## Evidence
 
-Evidence is what connects Observations to Claims.
+What connects Observations to Claims.
 
-Evidence answers the question: "Why does the Runtime Engine believe this claim?"
+Evidence answers: "Why does the Runtime Engine believe this Claim?"
 
-Every Claim must have at least one piece of Evidence. Claims without evidence are hypotheses — the Runtime Engine does not accept them into the Claim Graph as verified knowledge.
+Every Claim must have at least one piece of Evidence. Evidence is supporting (confirms the Claim) or contradictory (challenges it).
 
-Evidence is created by the Evidence Engine. It links one or more Observations to one Claim, along with information about the source's reliability.
-
-Evidence can be supporting (it supports the claim) or contradictory (it challenges the claim).
-
-**Do not call it:** observation, fact, proof, data
+The Evidence Engine prevents the same Observation from being counted multiple times.
 
 ---
 
 ## Trust
 
-Trust represents how strongly the Runtime Engine believes a Claim based on all available Evidence.
+The Runtime Engine's computed confidence in a Claim.
 
-Trust is not a number assigned by the AI agent. It is calculated by the Trust Engine using real, collected evidence. The agent cannot set trust values.
+Not assigned by the Planner. Not assigned by the agent. Calculated by the Trust Engine using real evidence.
 
-Trust considers:
-- The number of supporting observations
-- The independence of those observations (observations from different sources count more than multiple observations from the same source)
-- The reliability of each source (execution results > configuration files > documentation)
-- The presence of contradictory evidence
-- Relationships to other trusted claims
+Considers: number of independent supporting Observations, source reliability (execution > config > docs), contradictions, and graph relationships to other trusted Claims.
 
-Trust is not static. It changes throughout the investigation as new evidence arrives.
-
----
-
-## Claim Graph
-
-The Claim Graph is the Runtime Engine's internal knowledge model of the repository.
-
-Every node in the graph is a Claim. Every edge is a relationship between Claims.
-
-The Claim Graph starts empty at the beginning of every investigation and grows as claims are added. Every repository produces its own unique Claim Graph.
-
-Relationships between claims:
-
-| Relationship | Meaning |
-|---|---|
-| DEPENDS_ON | One technology depends on another |
-| REQUIRES | Something requires something else to function |
-| USES | One component uses another |
-| IMPLEMENTS | Something implements an interface or pattern |
-| CONTAINS | A container contains components |
-| PROVIDES | Something provides a service or capability |
-| CONTRADICTS | Two claims are mutually inconsistent |
-| MUTUALLY_EXCLUSIVE | Only one of several claims can be true |
-
-The Claim Graph is important because repository knowledge is relational. A framework depends on a runtime. A deployment depends on containers. Storing claims as isolated facts would lose this relational structure.
-
----
-
-## Knowledge Module
-
-A Knowledge Module is a self-contained package of knowledge about one technology or technology family.
-
-Examples: Python module, Docker module, Node.js module, GitHub Actions module
-
-Each module provides:
-- Identification rules (how to tell if this technology is present)
-- Claim types (what kinds of claims the module creates)
-- Goal templates (what goals to generate when this technology is found)
-- Extractors (how to convert observations into claims)
-- Relationship templates (how claims from this module relate to other claims)
-- Verification rules (what evidence is needed to satisfy goals from this module)
-- Report contributions (optional sections to add to the verification report)
-
-The Runtime Engine never contains technology-specific knowledge. All technology knowledge lives in Knowledge Modules.
-
----
-
-## Knowledge Registry
-
-The Knowledge Registry is the catalog that manages all available Knowledge Modules.
-
-When Wizard starts, every module registers with the Registry. During Knowledge Discovery, the Runtime Engine queries the Registry to find which modules are relevant for the current repository. The Registry activates matching modules.
-
-The Registry never performs repository analysis. It only manages the catalog of modules.
+Trust propagates through the Knowledge Graph — updating one Claim's trust can affect dependent Claims.
 
 ---
 
 ## Extractor
 
-An Extractor converts a raw Observation into one or more structured Claims.
+A component that converts an Observation into one or more Claims.
 
-There are two kinds of extractors:
+**Deterministic Extractors** parse structured data. No LLM. Always produce the same output for the same input.
 
-**Deterministic Extractors** parse structured data using rules, parsers, or regular expressions. They do not use AI. They always produce the same output for the same input. Use these whenever possible.
-
-**Cognitive Extractors** use an LLM to extract meaning from unstructured data. The resulting claims must still pass Runtime validation.
-
-Extractors are provided by Knowledge Modules. Each module includes the extractors needed to understand its technology.
+**Cognitive Extractors** use an LLM for ambiguous data. The resulting Claims still pass Runtime validation.
 
 ---
 
 ## Sandbox
 
-A Sandbox is an isolated execution environment.
+An isolated execution environment. Every repository interaction runs inside a Sandbox. Repositories are always untrusted.
 
-Every time repository code is executed, it runs inside a Sandbox. The Sandbox prevents the repository from affecting the host system. After execution, the Sandbox is destroyed.
-
-Repositories are always treated as untrusted. Even legitimate repositories may contain post-install scripts or startup commands with unexpected side effects. The Sandbox ensures that anything the repository does stays contained.
-
-The Sandbox enforces resource limits (CPU, memory, disk, network) and captures all outputs.
+After execution, the Sandbox is destroyed. The Sandbox enforces resource limits and captures all outputs.
 
 ---
 
 ## Tool
 
-A Tool is a controlled operation that the agent can request.
+A controlled operation the Runtime Engine can execute inside the Sandbox.
 
-Examples: Read File, Execute Command, Search Repository, Check Network Port
+Examples: Read File, Execute Command, Search Repository, Check Network Port.
 
-Every Tool:
-- Has a name
-- Has a defined input schema
-- Has a defined output schema
-- Declares what permissions it needs
-- Declares what sandbox capabilities it requires
-
-Tools never modify the Claim Graph. They only collect information. The Runtime Engine converts tool outputs into Observations.
-
----
-
-## Tool Request
-
-A Tool Request is the structured object the agent returns to the Runtime Engine.
-
-It specifies which tool to run, with what parameters, and optionally includes the agent's reasoning for why this tool was chosen.
-
-The Runtime Engine validates every Tool Request before executing it.
-
----
-
-## Tool Response
-
-A Tool Response is the standardized result of executing a tool.
-
-It contains:
-- Success or failure status
-- Exit code
-- Standard output
-- Standard error
-- Generated files
-- Execution duration
-- Resource usage
-
-The Observation Engine converts Tool Responses into Observations.
+Tools never modify the graphs. They collect information, which becomes Observations.
 
 ---
 
 ## Verification Report
 
-The Verification Report is the final document produced by Wizard after an investigation completes.
+The final document produced after an investigation converges.
 
-It summarizes everything the Runtime Engine discovered, explains why it reached each conclusion, identifies what evidence supports each finding, and documents what remains uncertain.
+Every statement references Claims from the Knowledge Graph. Every Claim references the Investigation Graph node that produced it. Every node references the Observations that triggered it.
 
-The report is saved as `verification_report.md`. Every statement in the report is backed by evidence — nothing appears without justification.
-
-The complete structure of the Verification Report is described in `verification-report.md`.
+Nothing in the report is invented. The full audit trail connects every conclusion back to raw evidence.
 
 ---
 
-## Runtime Kernel
+## Fast Scanner
 
-The Runtime Kernel is the central coordinator of the Runtime Engine.
+The component of the Repository Manager that produces the Repository Manifest.
 
-It manages all Runtime subsystems, coordinates investigation lifecycle transitions, dispatches events, and manages subsystem registration. It does not perform analysis itself — it coordinates the subsystems that do.
+Reads only metadata (file names, extensions, sizes). Does not read file contents. Designed to be extremely fast even on large repositories.
 
 ---
 
-## Event Bus
+## Repository Manifest
 
-The Event Bus is the communication mechanism between Runtime subsystems.
+The output of the Fast Scanner. Described above under Repository Manifest.
 
-Subsystems publish events when something important happens. Other subsystems subscribe to the events they care about. This decouples subsystems from each other and makes it easy to add new components.
+---
+
+## Progressive Context
+
+The strategy of never sending the entire repository to the LLM.
+
+The Planner's initial call receives only the Repository Manifest. Subsequent calls receive only the file contents that have been read so far, plus a compact summary of recent Investigation Graph activity.
+
+File contents are read on demand, one file at a time, when an Investigation Node requires them.
 
 ---
 
 ## Convergence
 
-Convergence is the state when an investigation has collected sufficient evidence and is ready to generate the final report.
+The investigation state when the Runtime Engine determines that sufficient evidence has been collected.
 
-Convergence happens when:
-- All primary goals have been verified with sufficient evidence
+The investigation converges when:
+- All active Checkpoint Nodes are satisfied
 - No significant unresolved contradictions remain
-- Additional investigation is unlikely to produce meaningful new information
+- The Priority Engine determines additional investigation would provide little new value
 
-The Runtime Engine determines when convergence is reached. The agent cannot force or prevent convergence.
+---
+
+## Escalation
+
+What happens when an Investigation Node produces an unexpected result.
+
+When the node's actual output does not match the expected hypothesis pattern, the Runtime Engine escalates to the Investigation Planner. The Planner is given the unexpected result and decides how to interpret it and what Investigation Node to create next.
+
+Escalation is the mechanism that handles edge cases and unusual repository configurations without requiring the Planner to predict them in advance.
+
+---
+
+## Runtime Kernel
+
+The central coordinator of the Runtime Engine. Manages all subsystems, lifecycle transitions, and event dispatching. Does not perform analysis itself.
+
+---
+
+## Event Bus
+
+The communication mechanism between Runtime subsystems. Subsystems publish events. Others subscribe. Prevents tight coupling.
 
 ---
 
 ## Budget
 
-An investigation Budget is the maximum number of tool executions allowed in a single investigation.
+The maximum number of Investigation Node executions allowed in a single investigation.
 
-Budgets exist to prevent investigations from running indefinitely on large or complex repositories. When the budget is exhausted, the investigation ends gracefully and produces the best report possible from whatever evidence has been collected.
+Prevents investigations from running indefinitely. When exhausted, the Runtime stops gracefully and produces the best report from collected evidence.

@@ -1,14 +1,17 @@
 # Investigation Lifecycle
 
-This document explains what happens during a single investigation from the moment the user runs a command to the moment the verification report is produced.
+This document explains what happens during a single investigation from the moment the user runs a command to the moment the verification report is produced. This is the complete lifecycle of the two-graph architecture.
 
 ---
 
 ## Overview
 
-An investigation is what Wizard calls one complete repository verification session. Everything Wizard does happens inside an investigation. Every investigation follows the same lifecycle regardless of which command the user ran, which repository is being analyzed, or which technologies the repository uses.
+An investigation is one complete repository verification session. Every investigation follows the same deterministic lifecycle. The Runtime Engine controls every state transition.
 
-The lifecycle is a deterministic state machine. The Runtime Engine controls every state transition. The agent cannot skip states or force the investigation to end prematurely.
+The investigation maintains two graphs simultaneously:
+
+- **Knowledge Graph** — grows as claims are verified
+- **Investigation Graph** — grows as the Planner creates new investigation steps
 
 ---
 
@@ -17,280 +20,258 @@ The lifecycle is a deterministic state machine. The Runtime Engine controls ever
 ```
 State 1: Created
       ↓
-State 2: Knowledge Discovery
+State 2: Repository Scan (Repository Manifest produced)
       ↓
-State 3: Goal Generation
+State 3: Initial Planning (Technology Plan + root Investigation Graph)
       ↓
-State 4: Agent Investigation     ←─────────────────────┐
-      ↓                                                 │
-State 5: Observation Collection                         │
-      ↓                                                 │
-State 6: Evidence Processing                            │
-      ↓                                                 │
-State 7: Claim Graph Update                             │
-      ↓                                                 │
-State 8: Trust Evaluation                               │
-      ↓                                                 │
-State 9: Goal Evaluation                                │
-      ↓                                                 │
-      ├─── Goals still active? ───────────────────────→─┘
-      │
-      └─── All goals converged?
-            ↓
-State 10: Report Generation
+State 4: Investigation Loop  ←─────────────────────────────┐
+           │                                                │
+           ├─ 4a: Next Investigation Node selected          │
+           ├─ 4b: Node executed (sandbox)                   │
+           ├─ 4c: Observation created                       │
+           ├─ 4d: Hypothesis evaluated                      │
+           ├─ 4e: Claim created → Knowledge Graph updated   │
+           ├─ 4f: Trust recalculated                        │
+           ├─ 4g: Goal Checkpoint evaluated                 │
+           ├─ 4h: Planner creates next node(s)              │
+           └─────────────────────────────────────────────→─┘
+                    (repeat until convergence)
       ↓
-State 11: Completed
+State 5: Report Generation
+      ↓
+State 6: Completed
 ```
 
 ---
 
 ## State 1: Created
 
-The CLI submits an Investigation Request to the Runtime Engine. The Investigation Request contains:
+The CLI submits an Investigation Request to the Runtime Engine. The Investigation Manager creates a new Investigation object with:
 
-- The repository location
-- The user's intent (investigate, verify, explain, or report)
-- The investigation targets (for example, "runtime" or "security")
-- Configuration options
-- The requested report format
-
-The Runtime Engine validates this request. If it is valid, the Investigation Manager creates a new Investigation object.
-
-The Investigation object starts with:
 - A unique Investigation ID
-- The user's intent
-- The repository information
+- The user's intent (investigate, verify, explain, or report)
+- An empty Knowledge Graph
+- An empty Investigation Graph
 - An empty Observation Store
-- An empty Claim Graph
-- An empty Evidence Store
-- An empty Goal List
-- An investigation budget (limits how many tool executions can happen)
-
-At this point, the repository has not been analyzed yet. The investigation exists but has not started.
+- An investigation budget (maximum node executions)
 
 ---
 
-## State 2: Knowledge Discovery
+## State 2: Repository Scan
 
-The Runtime Engine begins a lightweight scan of the repository. The goal of this phase is not to verify anything — it is to answer one simple question: what technologies appear to be present?
+The Repository Manager loads the repository. The Fast Scanner performs a lightweight scan — no file contents are read at this stage.
 
-The Runtime Engine looks for signals like:
+The Fast Scanner collects:
+- The complete directory tree
+- File names and extensions
+- File sizes
+- Presence of well-known signal files (`package.json`, `Dockerfile`, `requirements.txt`, `.github/`, etc.)
 
-| Signal | What It Suggests |
-|---|---|
-| `package.json` | Node.js project |
-| `requirements.txt` or `setup.py` | Python project |
-| `pom.xml` | Java / Maven project |
-| `Dockerfile` | Docker containerization |
-| `docker-compose.yml` | Docker Compose orchestration |
-| `.github/workflows/` | GitHub Actions CI/CD |
-| `terraform/` or `.tf` files | Terraform infrastructure |
-| `kubernetes/` or `.yaml` manifests | Kubernetes deployment |
-| `Cargo.toml` | Rust project |
+The output is the **Repository Manifest** — a compact, structured summary of the repository's surface. Typically 200 to 500 tokens. This manifest is the only thing the Planner receives for its initial call.
 
-This phase is intentionally fast and cheap. The Runtime Engine only reads directory listings and file names at this stage. It does not read file contents in depth.
-
-After this scan, the Runtime Engine asks the Knowledge Registry: "Which Knowledge Modules are relevant for this repository?" The Registry returns the matching modules. The Runtime Engine activates them.
+No analysis has occurred yet. No claims exist. The repository contents have not been read.
 
 ---
 
-## State 3: Goal Generation
+## State 3: Initial Planning
 
-With the relevant Knowledge Modules activated, the Runtime Engine creates the initial Goal set.
+The Runtime Engine calls the Investigation Planner with:
+- The Repository Manifest
+- The user's intent
+- The investigation targets
 
-Goals come from two sources:
+The Planner calls the LLM and receives back a **Technology Plan** — a structured JSON document listing the technologies it believes are present, the goals that should be created for each, and the key files that should be read first.
 
-**Source 1: User Intent**
+Example Technology Plan:
+```json
+{
+  "technologies": [
+    {
+      "name": "Node.js",
+      "confidence": "high",
+      "signals": ["package.json", "src/*.ts"],
+      "initial_goals": ["Verify Runtime", "Verify Dependencies"],
+      "priority_files": ["package.json", "tsconfig.json"]
+    },
+    {
+      "name": "Docker",
+      "confidence": "high",
+      "signals": ["Dockerfile", "docker-compose.yml"],
+      "initial_goals": ["Verify Docker Build", "Verify Container Runtime"],
+      "priority_files": ["Dockerfile", "docker-compose.yml"]
+    }
+  ]
+}
+```
 
-If the user ran `wizard verify runtime`, there will be a goal called "Verify Runtime." If the user ran `wizard investigate security`, there will be a goal called "Investigate Security."
+The Runtime Engine uses this Technology Plan to:
+1. Create the initial Goal set
+2. Create the root nodes of the Investigation Graph (one Checkpoint Node per goal, plus initial Read Nodes for each priority file)
 
-**Source 2: Knowledge Module Templates**
-
-Each activated Knowledge Module contributes goal templates. For example:
-
-- The Docker module contributes "Verify Docker Build" and "Verify Container Runtime"
-- The Node.js module contributes "Verify Node.js Dependencies" and "Verify Startup Script"
-- The GitHub Actions module contributes "Verify CI Configuration"
-
-Notice that the user only asked to "verify runtime" but the investigation now has goals for Docker, Node.js, and CI. The Runtime Engine generated these automatically because they are relevant to understanding whether the runtime actually works.
-
-This is called dynamic goal generation. The investigation expands naturally as new information is discovered. The user does not have to specify every detail — the Runtime Engine figures out what needs to be investigated.
-
----
-
-## State 4: Agent Investigation
-
-The Runtime Engine prepares an Investigation Context and sends it to the Explorer Agent.
-
-The Investigation Context contains:
-
-- The list of active goals
-- The current state of the Claim Graph (what is already known)
-- The list of missing evidence (what gaps exist)
-- The investigation history (what has already been tried)
-- The list of previously failed actions
-- The available tools
-- The remaining budget
-- Repository metadata
-
-The Explorer Agent reads this context and decides what to investigate next. It returns exactly one Tool Request. A Tool Request says something like: "Read the file at `package.json`" or "Execute the command `npm install`" or "Search for files named `.env`."
-
-The agent decides what to investigate by reasoning about what would most help satisfy the active goals given what is currently known and unknown.
+The Investigation Graph now exists. It has a small number of nodes. The Knowledge Graph is still empty.
 
 ---
 
-## State 5: Observation Collection
+## State 4: Investigation Loop
 
-The Runtime Engine receives the Tool Request from the agent. It validates the request before executing anything. Validation checks:
+The investigation loop repeats until convergence. Each iteration executes one Investigation Node.
 
-- Is this tool registered and available?
-- Are the parameters valid?
-- Does the sandbox support this operation?
-- Is there enough budget remaining?
-- Has this exact operation already been tried recently without success?
+### Step 4a: Select Next Node
 
-If validation passes, the Sandbox Manager creates an isolated execution environment. The requested tool runs inside this sandbox. The repository is treated as untrusted and cannot affect the host system.
+The Priority Engine selects the next Investigation Node to execute. It considers:
+- Which nodes have all their dependencies satisfied
+- Which goal is most in need of evidence
+- The investigation budget remaining
 
-After execution, the Sandbox Manager captures everything that happened:
-- Standard output
-- Standard error
-- Exit code
-- Generated files
-- Execution duration
-- Resource usage
+### Step 4b: Execute the Node
 
-The Observation Engine converts these raw outputs into one or more Observations. Each Observation is an immutable record — it cannot be modified after creation. Every Observation gets:
+The node is executed inside the Sandbox. What happens depends on the node type:
 
-- A unique Observation ID
-- A timestamp
-- The source (which tool produced it)
-- The type (file content, command output, error message, etc.)
-- The raw payload (the actual data)
-- The repository location it relates to
-- The Investigation ID
+- **Read Node** → file contents are read from the repository
+- **Execute Node** → a command is run inside the isolated sandbox
+- **Discovery Node** → a pattern search is performed
+- **Parse Node** → a previously read file is processed
+- **Verify Node** → a specific claim is tested against evidence
+- **Planner Node** → the Planner LLM is called to create next nodes
+- **Checkpoint Node** → goal satisfaction is evaluated
 
-Observations are the permanent evidence trail. Every conclusion in the final report can ultimately be traced back to specific observations.
+### Step 4c: Observation Created
 
----
+Every node execution produces an Observation. The Observation Engine converts the raw output (file contents, command output, exit code, etc.) into an immutable Observation record.
 
-## State 6: Evidence Processing
+The Observation is stored permanently. It cannot be modified. Every future claim that references this information can be traced back to this Observation.
 
-Raw observations need to be converted into structured knowledge. This happens through the Extractor Framework.
+### Step 4d: Hypothesis Evaluated
 
-The Extractor Framework looks at each new observation and decides which extractor should process it.
+This step is what makes Wizard's investigation loop efficient.
 
-### Deterministic Extractors
+Every Investigation Node was created with a hypothesis — what the Planner expected to find. The Runtime Engine evaluates the actual result against the hypothesis:
 
-Deterministic extractors work on observations with well-defined structure. They do not use AI. They always produce the same output for the same input.
+**Expected outcome — deterministic evaluation:**
 
-Examples:
-- A JSON extractor reads `package.json` and creates a claim for each dependency listed
-- A Dockerfile extractor reads a Dockerfile and creates claims about the base image, exposed ports, and startup commands
-- A YAML extractor reads a `docker-compose.yml` and creates claims about each defined service
+If `npm install` exits with code 0 and the hypothesis was "dependencies install without errors," the Runtime creates the success claim immediately. No LLM call. No ambiguity.
 
-### Cognitive Extractors
+If `npm install` exits with a non-zero code and the hypothesis was the same, the Runtime creates the failure claim immediately. No LLM call.
 
-Cognitive extractors use an LLM when the information cannot be extracted through deterministic rules alone. Examples include understanding what the overall architecture of the repository is, or understanding what a complex script is doing.
+**Unexpected outcome — Planner consulted:**
 
-Even when a cognitive extractor is used, the resulting claims must pass validation before entering the Claim Graph. The Runtime Engine does not blindly trust what the LLM says.
+If `npm install` exits with code 0 but produces unexpected output that doesn't match the hypothesis pattern (for example, a custom package manager was used, or workspaces are configured in an unusual way), the Runtime escalates to the Planner for interpretation.
 
----
+In practice, most node evaluations are expected outcomes. The Planner is called far less frequently during the loop than at the start of the investigation.
 
-## State 7: Claim Graph Update
+### Step 4e: Claim Created and Knowledge Graph Updated
 
-Validated claims are added to the Claim Graph.
+The Extractor Framework converts the Observation into one or more Claims.
 
-The Claim Graph is the Runtime Engine's internal model of the repository. Every claim is a node. Relationships between claims are edges.
+**Deterministic extraction** handles structured data — JSON files, YAML files, Dockerfiles, exit codes. No LLM needed.
 
-For example:
-- Claim: "Runtime = Node.js 18" with a DEPENDS_ON edge to "Package Manager = npm"
-- Claim: "Framework = Express 4.18" with a DEPENDS_ON edge to "Runtime = Node.js 18"
-- Claim: "Deployment = Docker" with a USES edge to "Container Image = node:18-alpine"
+**Cognitive extraction** (using the Planner's LLM) handles ambiguous data — source code meaning, natural language documentation, complex output interpretation. Used only when deterministic extraction is insufficient.
 
-The graph grows with every iteration of the investigation loop. It starts empty and becomes more detailed as more observations are collected.
+Validated Claims are added to the Knowledge Graph as nodes. Relationships between claims are added as edges. The Knowledge Graph grows.
 
-Contradictions are also recorded in the graph. If one observation suggests the runtime is Python and another suggests it is Node.js, both claims exist in the graph with a CONTRADICTS relationship between them. The Trust Engine will later resolve this.
+The Investigation Graph node that produced this claim is linked to the claim. This creates the complete audit trail: every claim in the Knowledge Graph points back to the Investigation Graph node that created it, which points back to the Observation that triggered it.
 
----
-
-## State 8: Trust Evaluation
+### Step 4f: Trust Recalculated
 
 The Trust Engine recalculates the trust level for every claim affected by the new evidence.
 
-Trust is not a number the agent assigns. It is a value the Runtime Engine computes based on all available evidence. The Trust Engine considers:
+Trust increases when independent sources confirm the same claim. Trust decreases when contradictions appear. Execution results carry higher trust weight than documentation. The Trust Engine also propagates trust changes through the Knowledge Graph — if a highly trusted claim is updated, related claims are also affected.
 
-- **How many independent observations support the claim?** (More independent sources = higher trust)
-- **How reliable is the source?** (Execution results are more reliable than documentation)
-- **Are there contradictions?** (Contradictory evidence reduces trust)
-- **Have related claims been verified?** (A claim that is consistent with other verified claims gets a small boost)
+### Step 4g: Goal Checkpoint Evaluated
 
-Trust evolves throughout the investigation. A claim that starts with low trust because it was only mentioned in documentation gains much higher trust if execution later confirms it.
-
----
-
-## State 9: Goal Evaluation
-
-The Goal Engine reviews every active goal and asks: has this goal been satisfied by the current evidence?
+The Goal Engine checks each active Checkpoint Node: has sufficient evidence been collected to satisfy this goal?
 
 A goal is satisfied when:
-- All required claims for that goal have sufficient trust
-- No significant contradictions remain unresolved
-- The evidence diversity is adequate (multiple independent sources support the conclusion)
+- All required claims are present in the Knowledge Graph
+- Those claims have sufficient trust
+- No unresolved contradictions remain for critical claims
 
-If a goal is satisfied, it is marked as complete. If a goal needs more evidence, it remains active. If the discovery of a new claim has revealed something new that needs investigation, a new goal is created.
+If a goal is satisfied, its Checkpoint Node is marked complete. If not, the investigation continues.
 
-After goal evaluation, the Priority Engine determines what should be investigated next. It ranks all active, unsatisfied goals based on their importance, the amount of uncertainty they contain, and the likelihood that additional investigation will yield useful information.
+### Step 4h: Planner Creates Next Nodes
 
-The loop then repeats from State 4.
+The Planner is called with a compact summary of the current investigation state — the recent Investigation Graph nodes, the current Knowledge Graph state for active goals, and what evidence is still missing.
+
+The Planner creates one or more new Investigation Nodes and returns them to the Runtime Engine. These nodes are added to the Investigation Graph.
+
+The Planner at this stage is making small, targeted decisions: "Given that npm install succeeded and the entry point is server.js, the next step should be to execute server.js and verify it starts on a port." It creates one Execute Node with a specific hypothesis.
+
+The loop returns to Step 4a.
 
 ---
 
-## State 10: Report Generation
+## Investigation Graph Growth Example
 
-The investigation enters report generation when convergence is reached.
+Here is what the Investigation Graph looks like for `wizard verify runtime` on a Node.js + Docker project, showing how nodes are added dynamically:
 
-Convergence happens when:
-- All primary goals have been satisfied with sufficient evidence
-- No significant unresolved contradictions remain
+```
+Start:
+  Checkpoint: Verify Runtime [waiting]
+  Checkpoint: Verify Docker Runtime [waiting]
+
+After initial Planner call:
+  Checkpoint: Verify Runtime [waiting]
+  ├── Read: package.json [ready]
+  └── Discovery: entry point files [ready]
+  Checkpoint: Verify Docker Runtime [waiting]
+  ├── Read: Dockerfile [ready]
+  └── Read: docker-compose.yml [ready]
+
+After package.json read:
+  Read: package.json [complete]
+  ├── Parse: extract scripts.start [complete] → Claim: Entry = server.js
+  ├── Execute: npm install [ready]
+  └── Execute: node server.js [blocked: needs npm install]
+
+After npm install:
+  Execute: npm install [complete] → Claim: Dependencies = installable
+  └── Execute: node server.js [ready]
+
+After node server.js:
+  Execute: node server.js [complete] → Claim: Runtime verified, port 3000
+  └── Checkpoint: Verify Runtime [satisfied ✓]
+
+(Docker nodes following a similar pattern in parallel)
+```
+
+Notice that none of these nodes existed when the investigation started. The graph grew entirely from the evidence that was collected. The investigation adapted to what it found.
+
+---
+
+## Convergence
+
+The investigation converges when:
+- All active Checkpoint Nodes are satisfied
+- No significant unresolved contradictions exist
 - The Priority Engine determines that additional investigation would provide little new value
 
-At this point, the Report Generator reads the entire verified state from the Runtime Engine and assembles the Verification Report. The report is saved as `verification_report.md`.
-
-The format of the Verification Report is described in detail in `verification-report.md`.
-
----
-
-## State 11: Completed
-
-The investigation is marked as complete. All investigation-specific state is retained for traceability but no longer active. The user can inspect any part of the investigation history.
+When convergence is reached, the investigation moves to Report Generation.
 
 ---
 
 ## Early Termination
 
-Investigations can end before convergence in two ways.
+**Budget exhausted:** When the maximum node execution count is reached, the Runtime stops gracefully. The Report Generator produces a partial report explaining what was successfully investigated, what remains uncertain, and why.
 
-### Budget Exhausted
+**User cancellation:** The Runtime catches the signal and produces the best possible report from current evidence.
 
-Every investigation has a budget — a limit on how many tool executions can happen. This prevents investigations from running indefinitely on large or complex repositories.
-
-When the budget runs out, the Runtime Engine stops the investigation loop gracefully. The Report Generator produces a partial report that explains what was successfully investigated, what was not investigated, and why.
-
-### User Cancellation
-
-The user can cancel an investigation at any time. The Runtime Engine catches the cancellation signal and produces the best report possible from whatever evidence has been collected so far.
+**Fatal failure:** Sandbox unavailable, or similar. The Runtime records the failure as an Observation and produces a partial report.
 
 ---
 
-## Investigation Independence
+## State 5: Report Generation
 
-Every investigation is completely independent. Two investigations of the same repository never share runtime state. This means:
+The Report Generator reads from both graphs:
+- The Knowledge Graph provides all verified claims with their trust levels
+- The Investigation Graph provides the complete execution history and audit trail
+- The Observation Store provides the raw evidence
 
-- Observations from one investigation never appear in another
-- Claims from one investigation are not reused in another
-- Trust values are calculated fresh for every investigation
-- Goals are generated fresh for every investigation
+The Report Generator assembles the Verification Report. Every statement references the claims that support it. Every claim references the Investigation Graph nodes that produced it. Every node references the Observations it collected.
 
-What is shared across investigations is only the reusable, technology-independent knowledge in the Knowledge Modules. The modules themselves do not store any investigation-specific state.
+The report is saved as `verification_report.md`.
 
-This design guarantees that every investigation produces an accurate snapshot of the repository at the time it was run, without contamination from previous investigations.
+---
+
+## State 6: Completed
+
+The investigation is archived. All state is retained for traceability. The complete Investigation Graph can be inspected to understand exactly how every conclusion was reached — which files were read in what order, which commands were run, which hypotheses were confirmed or refuted, and how trust evolved throughout.

@@ -9,18 +9,17 @@ from wizard_kernel.ports.planner import MockPlanner
 from wizard_kernel.control import loop as kernel_loop
 
 
-def _run_sync(repo_path: str = "/tmp") -> tuple:
+def _run_sync(repo_path: str = "/tmp", budget: int = 5) -> tuple:
     """Run loop synchronously (same thread) and return (inv, manager)."""
     manager = InvestigationManager()
     req = InvestigationRequest(
         repository_path=repo_path,
         intent="verify",
         targets=["runtime"],
-        options={"budget": 5, "sandbox_mode": "local_dev"},
+        options={"budget": budget, "sandbox_mode": "local_dev"},
     )
     inv = manager.create(req)
-    planner = MockPlanner()
-    kernel_loop.run(inv, manager, planner)
+    kernel_loop.run(inv, manager, MockPlanner())
     return inv, manager
 
 
@@ -33,16 +32,7 @@ def test_loop_reaches_completed():
 
 def test_loop_budget_terminates():
     """Invariant 7: budget always terminates."""
-    manager = InvestigationManager()
-    req = InvestigationRequest(
-        repository_path="/tmp",
-        intent="verify",
-        targets=["runtime"],
-        options={"budget": 1, "sandbox_mode": "local_dev"},
-    )
-    inv = manager.create(req)
-    planner = MockPlanner()
-    kernel_loop.run(inv, manager, planner)
+    inv, manager = _run_sync(budget=1)
     refreshed = manager.get(inv.id)
     assert refreshed.state in (LifecycleState.completed, LifecycleState.failed)
     assert refreshed.nodes_completed <= 1

@@ -1,35 +1,40 @@
-"""Main investigation loop — the only algorithm that matters. Phase 3."""
+"""Main investigation loop — the only algorithm that matters."""
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from wizard_kernel.contracts.node import InvestigationNode, NodeState
-from wizard_kernel.contracts.observation import Observation
+from wizard_kernel.contracts.node import InvestigationNode
+from wizard_kernel.contracts.status import LifecycleState
 from wizard_kernel.control import hypothesis as hyp_eval
-from wizard_kernel.control.goals import GoalEngine
+from wizard_kernel.control.goals import Goal, GoalEngine
 from wizard_kernel.control.investigation_graph import InvestigationGraph
 from wizard_kernel.control.priority import next_ready
+from wizard_kernel.reality.observations import ObservationStore
 from wizard_kernel.session.investigation import Investigation
 from wizard_kernel.session.manager import InvestigationManager
-from wizard_kernel.contracts.status import LifecycleState
 from wizard_kernel.storage import fs_store
+from wizard_kernel.world import scanner
+from wizard_kernel.world.sandbox import get_sandbox
+from wizard_kernel.world.tools import ToolExecutor
 
 if TYPE_CHECKING:
     from wizard_kernel.ports.planner import PlannerPort
 
-
-def _obs_id() -> str:
-    return f"obs_{uuid.uuid4().hex[:8]}"
+_TOOL_TO_OBS_TYPE: dict[str, str] = {
+    "read_file": "file_content",
+    "list_tree": "filesystem",
+    "execute_command": "command_result",
+    "search_files": "search_hits",
+    "check_port": "port_check",
+    "path_exists": "path_check",
+}
 
 
 def run(
     inv: Investigation,
     manager: InvestigationManager,
     planner: "PlannerPort",
-    *,
-    tools_executor=None,  # Phase 2: injected tool runner; None = no-op in Phase 3
 ) -> None:
     """
     Core loop. Invariants (never violate):
@@ -43,171 +48,149 @@ def run(
     """
     graph = InvestigationGraph(inv.id)
     goals = GoalEngine()
-    observations: list[Observation] = []
+    obs_store = ObservationStore(inv.id)
     completed_ids: set[str] = set()
 
-    # ── Phase: scanning ──────────────────────────────────────────────────────
+    # ── Sandbox setup ─────────────────────────────────────────────────────────
+    sandbox_mode = inv.options.get("sandbox_mode", "local_dev")
+    sandbox = get_sandbox(sandbox_mode)
+    tools = ToolExecutor(sandbox, inv.repository_path)
+
+    try:
+        sandbox.start(inv.repository_path)
+        _run_loop(inv, manager, planner, graph, goals, obs_store, tools, completed_ids)
+    except Exception as exc:  # noqa: BLE001
+        manager.update(inv.id, state=LifecycleState.failed,
+                       last_event=f"fatal: {exc}", error=str(exc))
+        return
+    finally:
+        sandbox.stop()
+
+
+def _run_loop(
+    inv: Investigation,
+    manager: InvestigationManager,
+    planner: "PlannerPort",
+    graph: InvestigationGraph,
+    goals: GoalEngine,
+    obs_store: ObservationStore,
+    tools: ToolExecutor,
+    completed_ids: set[str],
+) -> None:
+    # ── Scanning ──────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.scanning, last_event="fast scan started")
-    manifest = _fast_scan(inv.repository_path, inv.id)
+    manifest = scanner.scan(inv.repository_path, inv.id)
     fs_store.write(inv.id, "manifest.json", manifest.model_dump())
 
-    # ── Phase: planning ───────────────────────────────────────────────────────
+    # ── Planning ──────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.planning, last_event="initial planner call")
     plan = planner.initial(manifest, inv.intent, inv.targets)
     fs_store.write(inv.id, "plan.json", plan.model_dump())
 
     for tech in plan.technologies:
         for goal_name in tech.initial_goals:
-            from wizard_kernel.control.goals import Goal
-            g = Goal(
+            goals.add(Goal(
                 id=f"goal_{uuid.uuid4().hex[:6]}",
                 name=goal_name,
                 required_claim_types=[],
-            )
-            goals.add(g)
+            ))
 
     for node in plan.seed_nodes:
         graph.add(node)
 
     manager.update(inv.id, state=LifecycleState.investigation_loop,
-                   last_event="investigation loop started",
-                   active_goals=goals.to_api_list())
+                   last_event="loop started", active_goals=goals.to_api_list())
 
     # ── Core loop ─────────────────────────────────────────────────────────────
-    obs_seq = 0
     while inv.budget_remaining > 0:
         node = next_ready(graph.all_nodes(), completed_ids)
 
         if node is None:
-            # Ask planner for more nodes
-            if not goals.all_satisfied():
-                new_nodes = planner.next_nodes({
-                    "investigation_id": inv.id,
-                    "reason": "need_more_work",
-                    "missing_evidence": [],
-                    "recent_nodes": [],
-                })
-                if not new_nodes:
-                    break
-                for n in new_nodes:
-                    graph.add(n)
-                continue
-            break
+            if goals.all_satisfied():
+                break
+            new_nodes = planner.next_nodes({
+                "investigation_id": inv.id,
+                "reason": "need_more_work",
+                "missing_evidence": [],
+                "recent_nodes": [],
+            })
+            if not new_nodes:
+                break
+            for n in new_nodes:
+                graph.add(n)
+            continue
 
         graph.set_state(node.id, "running")
         manager.update(inv.id, last_event=f"executing {node.id} ({node.type})")
 
-        # Execute node action
-        result_payload = _execute(node, inv.repository_path, tools_executor)
+        # Execute — failures become observations, never crashes (invariant 4)
+        payload = _safe_execute(tools, node)
 
-        # Create immutable Observation (invariant 1)
-        obs = Observation(
-            id=_obs_id(),
-            investigation_id=inv.id,
+        # Immutable observation (invariant 1)
+        obs = obs_store.append(
             node_id=node.id,
             source_tool=node.action.get("tool", "unknown"),
-            obs_type=_obs_type_for(node),
-            payload=result_payload,
-            created_at=datetime.now(timezone.utc),
+            obs_type=_TOOL_TO_OBS_TYPE.get(node.action.get("tool", ""), "command_result"),
+            payload=payload,
         )
-        observations.append(obs)
-        obs_seq += 1
-        fs_store.write_observation(inv.id, obs_seq, obs.model_dump())
 
-        # Evaluate hypothesis deterministically (invariant 3 — no LLM for expected outcomes)
-        match_result = hyp_eval.evaluate(node, obs)
-
-        if match_result == "expected_success" and node.on_success:
-            _admit_claim(inv.id, node, obs, "success", fs_store)
-            manager.update(inv.id, claims_count=inv.claims_count + 1)
-        elif match_result == "expected_failure" and node.on_failure:
-            _admit_claim(inv.id, node, obs, "failure", fs_store)
-            manager.update(inv.id, claims_count=inv.claims_count + 1)
-        else:
-            # Unexpected — escalate to Planner (never invent)
-            new_nodes = planner.interpret(node, obs)
-            for n in new_nodes:
-                graph.add(n)
+        # Deterministic hypothesis evaluation — no LLM for expected outcomes
+        match hyp_eval.evaluate(node, obs):
+            case "expected_success" if node.on_success:
+                _admit_claim(inv.id, node, obs, "success")
+                manager.update(inv.id, claims_count=inv.claims_count + 1)
+            case "expected_failure" if node.on_failure:
+                _admit_claim(inv.id, node, obs, "failure")
+                manager.update(inv.id, claims_count=inv.claims_count + 1)
+            case _:
+                # Unexpected — escalate to Planner (invariant 3: never invent)
+                for n in planner.interpret(node, obs):
+                    graph.add(n)
 
         graph.set_state(node.id, "complete", obs_ids=[obs.id])
         completed_ids.add(node.id)
-        manager.update(inv.id,
-                       budget_remaining=inv.budget_remaining - 1,
-                       nodes_completed=inv.nodes_completed + 1,
-                       active_goals=goals.to_api_list())
+        manager.update(
+            inv.id,
+            budget_remaining=inv.budget_remaining - 1,
+            nodes_completed=inv.nodes_completed + 1,
+            active_goals=goals.to_api_list(),
+        )
 
-        # Check checkpoint nodes
-        for n in graph.checkpoint_nodes():
-            if n.id not in completed_ids:
-                graph.set_state(n.id, "complete")
-                completed_ids.add(n.id)
-                if n.goal_id:
-                    goals.mark_satisfied(n.goal_id)
+        # Evaluate checkpoint nodes
+        for ckpt in graph.checkpoint_nodes():
+            if ckpt.id not in completed_ids:
+                graph.set_state(ckpt.id, "complete")
+                completed_ids.add(ckpt.id)
+                if ckpt.goal_id:
+                    goals.mark_satisfied(ckpt.goal_id)
 
         if goals.all_satisfied():
             break
 
-    # ── Phase: reporting ──────────────────────────────────────────────────────
+    # ── Report ────────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.reporting, last_event="generating report")
     graph.persist()
 
     from wizard_kernel.control.report import generate
-    report_md = generate(inv, graph, observations)
+    report_md = generate(inv, graph, obs_store.all())
     fs_store.write(inv.id, "verification_report.md", {"markdown": report_md})
 
     manager.update(inv.id, state=LifecycleState.completed,
-                   last_event="investigation complete",
-                   active_goals=goals.to_api_list())
+                   last_event="complete", active_goals=goals.to_api_list())
 
 
-# ── Helpers (no technology knowledge allowed here) ────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _fast_scan(repo_path: str, inv_id: str):
-    """Delegate to world.scanner — Phase 2 will fully implement this."""
+def _safe_execute(tools: ToolExecutor, node: InvestigationNode) -> dict:
+    """Invariant 4: any exception becomes an error payload, never a crash."""
     try:
-        from wizard_kernel.world.scanner import scan
-        return scan(repo_path, inv_id)
-    except (ImportError, AttributeError):
-        # Phase 1/3 fallback — minimal manifest so loop can proceed
-        from wizard_kernel.contracts.manifest import RepositoryManifest
-        return RepositoryManifest(
-            investigation_id=inv_id,
-            root_path=repo_path,
-            total_files=0,
-            total_dirs=0,
-            key_files=[],
-            extensions={},
-            directory_tree=[],
-            size_bytes_approx=0,
-        )
-
-
-def _execute(node: InvestigationNode, repo_path: str, tools_executor) -> dict:
-    """Run the node action; failures become payload, never crashes (invariant 4)."""
-    if tools_executor is None:
-        return {"exit_code": 0, "stdout": "", "stderr": "", "note": "no-op executor"}
-    try:
-        return tools_executor(node.action, repo_path)
+        return tools.execute(node.action)
     except Exception as exc:  # noqa: BLE001
-        return {"exit_code": -1, "error": str(exc)}
+        return {"ok": False, "exit_code": -1, "error": str(exc)}
 
 
-def _obs_type_for(node: InvestigationNode) -> str:
-    tool = node.action.get("tool", "")
-    mapping = {
-        "read_file": "file_content",
-        "list_tree": "filesystem",
-        "execute_command": "command_result",
-        "search_files": "search_hits",
-        "check_port": "port_check",
-        "path_exists": "path_check",
-    }
-    return mapping.get(tool, "command_result")
-
-
-def _admit_claim(inv_id: str, node: InvestigationNode, obs: Observation,
-                 outcome: str, store) -> None:
-    """Phase 3 stub — write claim+evidence JSON to disk. Phase 4 wires real KG."""
+def _admit_claim(inv_id: str, node: InvestigationNode, obs, outcome: str) -> None:
+    """Write claim + evidence to disk. Phase 4 wires the real Knowledge Graph."""
     template = node.on_success if outcome == "success" else node.on_failure
     if not template:
         return
@@ -221,6 +204,6 @@ def _admit_claim(inv_id: str, node: InvestigationNode, obs: Observation,
         "observation_id": obs.id,
         "source": "hypothesis_match",
     }
-    existing = store.read(inv_id, "claims.json") or []
+    existing = fs_store.read(inv_id, "claims.json") or []
     existing.append(claim)
-    store.write(inv_id, "claims.json", existing)
+    fs_store.write(inv_id, "claims.json", existing)

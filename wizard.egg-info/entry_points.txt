@@ -1,2 +1,2 @@
 [console_scripts]
-wizard = wizard.cli.app:main
+wizard = wizard.cli.main:main

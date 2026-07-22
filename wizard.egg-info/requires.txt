@@ -1,10 +1,5 @@
 typer[all]>=0.12.0
 rich>=13.0.0
-rich-click>=1.7.0
-pyyaml>=6.0
-
-[:python_version < "3.11"]
-tomli>=2.0.0
 
 [dev]
 pytest>=8.0.0

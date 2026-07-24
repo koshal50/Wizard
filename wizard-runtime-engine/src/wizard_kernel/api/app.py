@@ -1,11 +1,26 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from wizard_kernel.api import routes_health, routes_investigations
+from wizard_kernel.api.deps import get_manager
+
+log = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield  # Phase 3+: startup / teardown hooks
+    # ── Startup: restore persisted investigations from disk ──────────────────
+    manager = get_manager()
+    restored = manager.restore()
+    log.info("kernel ready — %d investigations restored from disk", restored)
+    if restored == 0:
+        log.info("(no prior investigations found — clean start)")
+    log.warning(
+        "MULTI-WORKER NOTICE: run with --workers 1 (default). "
+        "State is in-process + disk. Multi-worker needs a shared store."
+    )
+    yield
+    # ── Shutdown ─────────────────────────────────────────────────────────────
 
 
 def create_app() -> FastAPI:

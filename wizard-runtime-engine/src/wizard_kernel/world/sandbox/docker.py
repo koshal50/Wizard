@@ -1,8 +1,10 @@
 """DockerSandboxRuntime — real isolation via Docker Desktop on Windows.
-Background processes: each exec_background() runs as a detached `docker exec -d`,
-with output captured via a follow-up `docker logs` poll."""
+
+Shell-injection fix: cwd is passed via --workdir docker flag, never concatenated
+into a shell string. shlex.quote() protects the command in exec_background.
+"""
+import shlex
 import subprocess
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -12,33 +14,48 @@ from wizard_kernel.contracts.process import BackgroundProcess
 _DEFAULT_IMAGE = "python:3.12-slim"
 
 
+import posixpath
+
+
+def _safe_workdir(cwd: str) -> str:
+    """Resolve cwd to an absolute /workspace/<cwd> path.
+    Rejects path traversal attempts before they reach Docker."""
+    if not cwd or cwd in (".", "/"):
+        return "/workspace"
+    # Normalize using posixpath because container paths are always Linux style
+    resolved = posixpath.normpath(posixpath.join("/workspace", cwd))
+    if resolved != "/workspace" and not resolved.startswith("/workspace/"):
+        raise ValueError(f"cwd escapes /workspace: {cwd!r}")
+    return resolved
+
+
 class _DockerBgHandle:
     def __init__(self, handle_id: str, container_id: str,
-                 exec_id: str, command: str, cwd: str) -> None:
+                 command: str, cwd: str) -> None:
         self.handle_id = handle_id
         self.container_id = container_id
-        self.exec_id = exec_id  # docker exec ID (for inspect)
         self.command = command
         self.cwd = cwd
 
     def snapshot(self, container_id: str) -> BackgroundProcess:
-        # Check if still running via docker exec inspect
         try:
+            # handle_id is our own hex — safe to embed directly
             inspect = subprocess.run(
-                ["docker", "exec", container_id,
-                 "sh", "-c", f"kill -0 $(cat /tmp/{self.handle_id}.pid 2>/dev/null) 2>/dev/null && echo running || echo stopped"],
+                ["docker", "exec", container_id, "sh", "-c",
+                 f"kill -0 $(cat /tmp/{self.handle_id}.pid 2>/dev/null)"
+                 f" 2>/dev/null && echo running || echo stopped"],
                 capture_output=True, text=True, timeout=5,
             )
             running = "running" in inspect.stdout
 
             logs = subprocess.run(
-                ["docker", "exec", container_id,
-                 "sh", "-c", f"cat /tmp/{self.handle_id}.out 2>/dev/null | tail -c 32768"],
+                ["docker", "exec", container_id, "sh", "-c",
+                 f"tail -c 32768 /tmp/{self.handle_id}.out 2>/dev/null || true"],
                 capture_output=True, text=True, timeout=5,
             )
             err_logs = subprocess.run(
-                ["docker", "exec", container_id,
-                 "sh", "-c", f"cat /tmp/{self.handle_id}.err 2>/dev/null | tail -c 8192"],
+                ["docker", "exec", container_id, "sh", "-c",
+                 f"tail -c 8192 /tmp/{self.handle_id}.err 2>/dev/null || true"],
                 capture_output=True, text=True, timeout=5,
             )
         except Exception:  # noqa: BLE001
@@ -93,12 +110,18 @@ class DockerSandboxRuntime:
         self._bg.clear()
 
     def exec(self, command: str, cwd: str = ".", timeout_sec: int = 60) -> CommandResult:
+        """Execute a command inside the container.
+        cwd is passed via --workdir flag — never concatenated into shell string."""
         assert self._container_id, "call start() first"
+        workdir = _safe_workdir(cwd)
         t0 = time.monotonic()
         try:
             result = subprocess.run(
-                ["docker", "exec", self._container_id,
-                 "sh", "-c", f"cd /workspace/{cwd} && {command}"],
+                # FIX: --workdir separates cwd from command — no shell concat
+                ["docker", "exec",
+                 "--workdir", workdir,
+                 self._container_id,
+                 "sh", "-c", command],
                 capture_output=True, text=True, timeout=timeout_sec,
             )
             ms = (time.monotonic() - t0) * 1000
@@ -118,30 +141,38 @@ class DockerSandboxRuntime:
                                  stderr=str(exc), duration_ms=0.0)
 
     def read_file(self, path: str, max_bytes: int = 65536) -> bytes:
+        """Read via explicit argument list — no shell involved."""
         assert self._container_id
+        # head -c with numeric arg, path as separate arg — no shell expansion
         result = subprocess.run(
             ["docker", "exec", self._container_id,
-             "sh", "-c", f"head -c {max_bytes} /workspace/{path}"],
+             "head", "-c", str(max_bytes), f"/workspace/{path}"],
             capture_output=True, timeout=30,
         )
         return result.stdout if result.returncode == 0 else b""
 
     def exec_background(self, command: str, cwd: str = ".") -> BackgroundProcess:
-        """Run a long-running process inside the container. Output to /tmp files."""
+        """Start a long-running process inside the container.
+        FIX: cwd via --workdir; command quoted via shlex.quote() for inner sh -c."""
         assert self._container_id
+        workdir = _safe_workdir(cwd)
         handle_id = f"proc_{uuid.uuid4().hex[:8]}"
-        # Run in background, redirect output to /tmp files, save pid
+        # shlex.quote() prevents command from breaking out of the inner sh -c
+        quoted_cmd = shlex.quote(command)
         bg_cmd = (
-            f"cd /workspace/{cwd} && "
-            f"nohup sh -c '{command}' "
-            f"> /tmp/{handle_id}.out 2> /tmp/{handle_id}.err & "
+            f"nohup sh -c {quoted_cmd} "
+            f"> /tmp/{handle_id}.out "
+            f"2> /tmp/{handle_id}.err & "
             f"echo $! > /tmp/{handle_id}.pid"
         )
         subprocess.run(
-            ["docker", "exec", self._container_id, "sh", "-c", bg_cmd],
+            ["docker", "exec",
+             "--workdir", workdir,
+             self._container_id,
+             "sh", "-c", bg_cmd],
             capture_output=True, timeout=10,
         )
-        handle = _DockerBgHandle(handle_id, self._container_id, "", command, cwd)
+        handle = _DockerBgHandle(handle_id, self._container_id, command, cwd)
         self._bg[handle_id] = handle
         return handle.snapshot(self._container_id)
 
@@ -155,8 +186,8 @@ class DockerSandboxRuntime:
     def kill_process(self, handle_id: str) -> None:
         if handle_id in self._bg and self._container_id:
             subprocess.run(
-                ["docker", "exec", self._container_id,
-                 "sh", "-c", f"kill $(cat /tmp/{handle_id}.pid 2>/dev/null) 2>/dev/null || true"],
+                ["docker", "exec", self._container_id, "sh", "-c",
+                 f"kill $(cat /tmp/{handle_id}.pid 2>/dev/null) 2>/dev/null || true"],
                 capture_output=True, timeout=10,
             )
             del self._bg[handle_id]

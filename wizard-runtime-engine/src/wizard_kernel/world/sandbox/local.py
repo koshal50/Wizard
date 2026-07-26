@@ -5,7 +5,9 @@ Background process support: each exec_background() spawns a real subprocess
 with stdout/stderr captured via pipes. Output is read on demand. Multiple
 background processes run concurrently (each in its own OS process)."""
 import os
+import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -63,6 +65,15 @@ class _BackgroundHandle:
         )
 
     def kill(self) -> None:
+        import sys
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(self.proc.pid)], capture_output=True)
+        else:
+            try:
+                import os, signal
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+            except Exception:
+                pass
         try:
             self.proc.terminate()
             self.proc.wait(timeout=5)
@@ -91,24 +102,40 @@ class LocalProcessRuntime:
         work_cwd = self._safe_cwd(cwd)
         env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV}
         t0 = time.monotonic()
+        kwargs: dict = {}
+        if sys.platform != "win32":
+            kwargs["start_new_session"] = True
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 command, shell=True, cwd=work_cwd,
-                capture_output=True, text=True,
-                timeout=timeout_sec, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, env=env, **kwargs
             )
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout_sec)
+            except subprocess.TimeoutExpired:
+                if sys.platform == "win32":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                                   capture_output=True)
+                else:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except OSError:
+                        pass
+                proc.kill()
+                proc.communicate()
+                return CommandResult(ok=False, exit_code=-1, stdout="",
+                                     stderr=f"timeout after {timeout_sec}s",
+                                     duration_ms=timeout_sec * 1000.0)
+
             ms = (time.monotonic() - t0) * 1000
             return CommandResult(
                 ok=proc.returncode == 0,
                 exit_code=proc.returncode,
-                stdout=proc.stdout[:65536],
-                stderr=proc.stderr[:16384],
+                stdout=stdout[:65536],
+                stderr=stderr[:16384],
                 duration_ms=ms,
             )
-        except subprocess.TimeoutExpired:
-            return CommandResult(ok=False, exit_code=-1, stdout="",
-                                 stderr=f"timeout after {timeout_sec}s",
-                                 duration_ms=timeout_sec * 1000.0)
         except Exception as exc:  # noqa: BLE001
             return CommandResult(ok=False, exit_code=-1, stdout="",
                                  stderr=str(exc), duration_ms=0.0)
@@ -133,10 +160,13 @@ class LocalProcessRuntime:
         assert self._workspace, "call start() first"
         work_cwd = self._safe_cwd(cwd)
         env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV}
+        kwargs: dict = {}
+        if sys.platform != "win32":
+            kwargs["start_new_session"] = True
         proc = subprocess.Popen(
             command, shell=True, cwd=work_cwd, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1,
+            text=True, bufsize=1, **kwargs
         )
         handle_id = f"proc_{uuid.uuid4().hex[:8]}"
         self._bg[handle_id] = _BackgroundHandle(handle_id, proc, command, str(work_cwd))

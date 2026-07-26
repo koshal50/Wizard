@@ -215,3 +215,46 @@ def _extract_tree(obs: Observation) -> list[ExtractResult]:
     tree = obs.payload.get("data", {}).get("tree", [])
     count = obs.payload.get("data", {}).get("count", 0)
     return [ExtractResult("FILESYSTEM", "total_visible_files", count)]
+
+
+# ── Cognitive extraction (Phase 6) ────────────────────────────────────────────
+
+def extract_cognitive(obs: Observation, planner_interpret_fn=None) -> list[ExtractResult]:
+    """Run cognitive extractors for ambiguous observations.
+
+    Cognitive extractors can call external services (e.g. the Planner LLM).
+    They are completely separate from deterministic extractors and ONLY run when:
+    1. The deterministic extract() produced zero results, AND
+    2. A planner_interpret_fn is provided by the loop.
+
+    The results are still routed through EvidenceEngine — cognitive extractors
+    cannot insert into the KG directly (invariant 2).
+
+    Args:
+        obs: the observation to interpret
+        planner_interpret_fn: callable(obs) -> list[ExtractResult] | None
+                              provided by the loop if the Planner supports interpretation.
+    """
+    results: list[ExtractResult] = []
+
+    # Run any registered cognitive extractors for this obs_type
+    for fn in _COGNITIVE_REGISTRY.get(obs.obs_type, []):
+        try:
+            results.extend(fn(obs) or [])
+        except Exception:  # noqa: BLE001
+            log.debug("cognitive extractor %s failed on obs %s", fn.__name__, obs.id,
+                      exc_info=True)
+
+    # If still no results and we have a Planner interpret function, call it
+    if not results and planner_interpret_fn is not None:
+        try:
+            # The Planner returns new InvestigationNodes, not ExtractResults.
+            # Cognitive extraction from Planner is handled in the loop itself
+            # via planner.interpret(node, obs) — this hook is for future plugins
+            # that convert planner output directly into ExtractResults.
+            pass
+        except Exception:  # noqa: BLE001
+            log.debug("planner interpret fallback failed for obs %s", obs.id, exc_info=True)
+
+    return results
+

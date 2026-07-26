@@ -26,6 +26,7 @@ _TERMINAL_STATES = {LifecycleState.completed, LifecycleState.failed, LifecycleSt
 class InvestigationManager:
     def __init__(self) -> None:
         self._store: dict[str, Investigation] = {}
+        self._lock = __import__("threading").Lock()
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
@@ -40,25 +41,29 @@ class InvestigationManager:
             budget_total=req.options.budget,
             budget_remaining=req.options.budget,
         )
-        self._store[inv_id] = inv
-        _persist(inv)   # write meta.json immediately on creation
+        with self._lock:
+            self._store[inv_id] = inv
+            _persist(inv)   # write meta.json immediately on creation
         return inv
 
     def get(self, inv_id: str) -> Investigation | None:
-        return self._store.get(inv_id)
+        with self._lock:
+            return self._store.get(inv_id)
 
     def update(self, inv_id: str, **kwargs) -> None:
-        inv = self._store[inv_id]
-        for k, v in kwargs.items():
-            setattr(inv, k, v)
-        inv.updated_at = datetime.now(timezone.utc)
-        # Persist only on terminal transitions — avoids excessive disk I/O
-        new_state = kwargs.get("state")
-        if new_state in _TERMINAL_STATES:
-            _persist(inv)
+        with self._lock:
+            inv = self._store[inv_id]
+            for k, v in kwargs.items():
+                setattr(inv, k, v)
+            inv.updated_at = datetime.now(timezone.utc)
+            # Persist only on terminal transitions — avoids excessive disk I/O
+            new_state = kwargs.get("state")
+            if new_state in _TERMINAL_STATES:
+                _persist(inv)
 
     def all(self) -> list[Investigation]:
-        return list(self._store.values())
+        with self._lock:
+            return list(self._store.values())
 
     # ── Startup restore ───────────────────────────────────────────────────────
 

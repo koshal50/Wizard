@@ -46,9 +46,12 @@ class KnowledgeGraph:
     def get(self, claim_id: str) -> Claim | None:
         return self._claims.get(claim_id)
 
-    def find(self, claim_type: str, key: str) -> list[Claim]:
-        return [c for c in self._claims.values()
-                if c.claim_type == claim_type and c.key == key]
+    def find(self, claim_type: str, key: str | None) -> list[Claim]:
+        """Find claims by type and optionally by key. If key is None, returns all claims of that type."""
+        return [
+            c for c in self._claims.values()
+            if c.claim_type == claim_type and (key is None or c.key == key)
+        ]
 
     def all_claims(self) -> list[Claim]:
         return list(self._claims.values())
@@ -61,6 +64,20 @@ class KnowledgeGraph:
 
     def has_execution_evidence(self, claim_id: str) -> bool:
         return trust_engine.has_execution_evidence(self._evidence.get(claim_id, []))
+
+    def average_trust_for_types(self, claim_types: list[str]) -> float:
+        """Return the average trust score across all claims matching the given types.
+
+        Used by the priority engine to compute uncertainty_gap:
+        lower average trust → higher priority for investigation.
+        Returns 0.5 (neutral) when no matching claims exist.
+        """
+        scores = [
+            self._trust[c.id]
+            for c in self._claims.values()
+            if c.claim_type in claim_types and c.id in self._trust
+        ]
+        return sum(scores) / len(scores) if scores else 0.5
 
     # ── Relationship management ───────────────────────────────────────────────
 

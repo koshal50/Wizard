@@ -43,7 +43,9 @@ def write(inv_id: str, filename: str, data: dict | list) -> Path:
     """Write JSON document (meta, graphs, claims, etc.)."""
     _assert_safe_filename(filename)
     p = ensure(inv_id) / filename
-    p.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp.replace(p)
     return p
 
 
@@ -51,7 +53,9 @@ def write_text(inv_id: str, filename: str, text: str) -> Path:
     """Write raw text (e.g. verification_report.md)."""
     _assert_safe_filename(filename)
     p = ensure(inv_id) / filename
-    p.write_text(text, encoding="utf-8")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(p)
     return p
 
 
@@ -73,7 +77,9 @@ def read_text(inv_id: str, filename: str) -> str | None:
 
 def write_observation(inv_id: str, seq: int, data: dict[str, Any]) -> Path:
     p = ensure(inv_id) / "observations" / f"o_{seq:04d}.json"
-    p.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp.replace(p)
     return p
 
 

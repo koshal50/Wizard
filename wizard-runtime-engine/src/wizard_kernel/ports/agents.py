@@ -14,11 +14,22 @@ class VerifierPort(Protocol):
 
 
 class MockExplorer:
+    """Mock Explorer that defers to the node's own planned action.
+
+    In tests without a real n8n webhook, the Explorer should not override
+    the Planner's carefully constructed seed nodes with a generic list_tree.
+    This mock faithfully returns the node's planned action so tests can
+    validate extractor pipelines, hypothesis evaluation, and claim admission.
+    """
     def request(self, context: dict) -> ExplorerResponse:
         from wizard_kernel.contracts.agent import ToolRequest
+        node_action = context.get("current_node", {}).get("action", {})
+        tool = node_action.get("tool", "list_tree")
+        params = node_action.get("params", {})
         return ExplorerResponse(
             investigation_id=context.get("investigation_id", ""),
-            tool_request=ToolRequest(tool="list_tree", parameters={"max_depth": 2}),
+            tool_request=ToolRequest(tool=tool, parameters=params,
+                                     reason="mock: executing planned node action"),
         )
 
 

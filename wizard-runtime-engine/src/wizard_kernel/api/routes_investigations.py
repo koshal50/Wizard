@@ -107,3 +107,30 @@ def cancel_investigation(
         raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
     manager.update(inv_id, state=LifecycleState.cancelled, last_event="cancelled by user")
     return {"investigation_id": inv.id, "status": LifecycleState.cancelled}
+
+
+@router.get("/{inv_id}/events")
+def get_events(
+    inv_id: str,
+    since_seq: int = 0,
+    manager: InvestigationManager = Depends(get_manager),
+):
+    """Poll for recent investigation events."""
+    from wizard_kernel.session import events as event_bus
+    from datetime import datetime, timezone
+    
+    inv = manager.get(inv_id)
+    if not inv:
+        raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
+        
+    recent = event_bus.get_recent_events(since_seq, inv_id)
+    return [
+        {
+            "seq": ev.seq,
+            "event_type": ev.event_type,
+            "investigation_id": ev.investigation_id,
+            "payload": ev.payload,
+            "timestamp": datetime.fromtimestamp(ev.timestamp, tz=timezone.utc).isoformat()
+        }
+        for ev in recent
+    ]

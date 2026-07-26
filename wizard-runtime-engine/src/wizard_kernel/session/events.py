@@ -108,7 +108,17 @@ class EventBus:
                 log.warning("universal event listener raised, ignoring", exc_info=True)
 
 
+_BUSSES: dict[str, EventBus] = {}
+
+def get_recent_events(since_seq: int, inv_id: str) -> list[InvestigationEvent]:
+    """Retrieve recent events from the in-memory bus for an investigation."""
+    bus = _BUSSES.get(inv_id)
+    if not bus:
+        return []
+    return bus.get_recent_events(since_seq)
+
 # Module-level factory — loop creates one per investigation
 def create(inv_id: str) -> EventBus:
-    return EventBus(inv_id)
-
+    bus = EventBus(inv_id)
+    _BUSSES[inv_id] = bus
+    return bus

@@ -6,14 +6,21 @@ They return ExtractResult or None. EvidenceEngine is called by the loop.
 
 Registration is dynamic: extractors register themselves for specific obs_types.
 New extractors need zero changes to core loop — just register.
+
+Invariant 4: extractor failures are caught and logged — they never crash the loop.
+Invariant 5: no technology names are hardcoded except as values inside extractor
+            functions that specifically handle that file format.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from wizard_kernel.contracts.observation import Observation
+
+log = logging.getLogger(__name__)
 
 # ── Data types ────────────────────────────────────────────────────────────────
 
@@ -46,9 +53,8 @@ def extract(obs: Observation) -> list[ExtractResult]:
     for fn in _REGISTRY.get(obs.obs_type, []):
         try:
             results.extend(fn(obs) or [])
-        except Exception as e:
-            with open("extractor_errors.log", "a") as f:
-                f.write(f"Extractor {fn.__name__} failed: {repr(e)}\n")
+        except Exception:  # noqa: BLE001 — extractor failure is never a crash (invariant 4)
+            log.debug("extractor %s failed on obs %s", fn.__name__, obs.id, exc_info=True)
     return results
 
 
@@ -56,8 +62,8 @@ def extract(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_package_json(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("data", {}).get("path", "")
-    parsed = obs.payload.get("data", {}).get("parsed")
+    path = obs.payload.get("data", {}).get("path", "") or obs.payload.get("path", "")
+    parsed = obs.payload.get("data", {}).get("parsed") or obs.payload.get("parsed")
     if not (path.endswith("package.json") and isinstance(parsed, dict)):
         return []
     results = []
@@ -80,10 +86,9 @@ def _extract_package_json(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_pyproject_toml(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("data", {}).get("path", "")
-    content = obs.payload.get("data", {}).get("content", "")
-    with open("extractor_debug.log", "a") as f:
-        f.write(f"checking pyproject path: {path!r}\n")
+    path = obs.payload.get("data", {}).get("path", "") or obs.payload.get("path", "")
+    content = obs.payload.get("data", {}).get("content", "") or obs.payload.get("content", "")
+    log.debug("pyproject extractor: path=%r", path)
     if not path.endswith("pyproject.toml"):
         return []
     results = []
@@ -104,8 +109,8 @@ def _extract_pyproject_toml(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_dockerfile(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("data", {}).get("path", "").lower()
-    content = obs.payload.get("data", {}).get("content", "")
+    path = (obs.payload.get("data", {}).get("path", "") or obs.payload.get("path", "")).lower()
+    content = obs.payload.get("data", {}).get("content", "") or obs.payload.get("content", "")
     if "dockerfile" not in path and path != "dockerfile":
         return []
     results = [ExtractResult("DEPLOYMENT", "has_dockerfile", True)]
@@ -124,8 +129,8 @@ def _extract_dockerfile(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_requirements_txt(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("data", {}).get("path", "")
-    content = obs.payload.get("data", {}).get("content", "")
+    path = obs.payload.get("data", {}).get("path", "") or obs.payload.get("path", "")
+    content = obs.payload.get("data", {}).get("content", "") or obs.payload.get("content", "")
     if not path.endswith("requirements.txt"):
         return []
     packages = [l.split("==")[0].split(">=")[0].strip()
@@ -169,10 +174,27 @@ def _extract_command_result(obs: Observation) -> list[ExtractResult]:
 
 @register("path_check")
 def _extract_path_check(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("data", {}).get("path", "")
-    exists = obs.payload.get("exists", False)
+    # path_exists tool puts path in payload["data"]["path"] and exists in payload["exists"]
+    path = obs.payload.get("data", {}).get("path", "") or obs.payload.get("path", "")
+    exists = obs.payload.get("data", {}).get("exists", False) or obs.payload.get("exists", False)
     return [ExtractResult("FILESYSTEM", f"exists:{path}", exists,
                           support_type="support" if exists else "contradict")]
+
+
+# ── Cognitive extractor stub (Phase 6) ───────────────────────────────────────
+# When deterministic extractors produce no results for an observation,
+# the loop can call planner.interpret(node, obs) to get suggested new nodes.
+# That is handled in loop.py, not here — keeping extractors deterministic-only.
+# This stub is the hook point for future cognitive extraction registration.
+_COGNITIVE_REGISTRY: dict[str, list[ExtractorFn]] = {}
+
+
+def register_cognitive(obs_type: str):
+    """Register an extractor that may call an external service (Phase 6 only)."""
+    def decorator(fn: ExtractorFn) -> ExtractorFn:
+        _COGNITIVE_REGISTRY.setdefault(obs_type, []).append(fn)
+        return fn
+    return decorator
 
 
 @register("port_check")

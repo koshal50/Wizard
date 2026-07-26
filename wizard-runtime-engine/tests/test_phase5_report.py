@@ -123,7 +123,7 @@ class TestReportGeneration:
         graph = InvestigationGraph(inv.id)
         obs = _obs(inv.id, "node_001")
         kg = KnowledgeGraph(inv.id)
-        goals = GoalEngine()
+        goals = GoalEngine(inv.id)
         g = Goal(id="goal_001", name="Verify Runtime", required_claim_types=["RUNTIME"])
         goals.add(g)
         goals.mark_satisfied("goal_001")
@@ -184,7 +184,7 @@ class TestReportGeneration:
         inv = _inv(tmp_path)
         graph = InvestigationGraph(inv.id)
         kg = KnowledgeGraph(inv.id)
-        goals = GoalEngine()
+        goals = GoalEngine(inv.id)
         goals.add(Goal(id="g1", name="Verify Security", required_claim_types=["SECURITY"]))
         # NOT satisfied
 

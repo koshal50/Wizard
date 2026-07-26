@@ -1,5 +1,6 @@
 import threading
 from fastapi import APIRouter, Depends, HTTPException
+from wizard_kernel.contracts.report import ReportResponse
 from wizard_kernel.contracts.request import InvestigationRequest
 from wizard_kernel.contracts.status import LifecycleState
 from wizard_kernel.session.manager import InvestigationManager
@@ -11,13 +12,37 @@ from wizard_kernel.control import loop as kernel_loop
 router = APIRouter(prefix="/v1/investigations", tags=["investigations"])
 
 
+@router.get("", summary="List all investigations")
+def list_investigations(
+    manager: InvestigationManager = Depends(get_manager),
+):
+    """Return a summary list of all investigations known to this process.
+
+    Note: investigations from previous server runs are restored from disk at startup.
+    Multi-worker deployments will only see their own in-process + disk state.
+    """
+    return [
+        {
+            "investigation_id": inv.id,
+            "status": inv.state,
+            "repository_path": inv.repository_path,
+            "intent": inv.intent,
+            "targets": inv.targets,
+            "nodes_completed": inv.nodes_completed,
+            "claims_count": inv.claims_count,
+            "created_at": inv.created_at.isoformat(),
+        }
+        for inv in manager.all()
+    ]
+
+
 @router.post("", status_code=201)
 def create_investigation(
     req: InvestigationRequest,
     manager: InvestigationManager = Depends(get_manager),
 ):
     inv = manager.create(req)
-    # manager.create() already persists meta.json via _persist() — no duplicate write here
+    # manager.create() persists meta.json — no duplicate write here
     planner = get_planner(req.options.planner_url)
     t = threading.Thread(
         target=kernel_loop.run,
@@ -49,22 +74,27 @@ def get_investigation(
     }
 
 
-@router.get("/{inv_id}/report")
+@router.get("/{inv_id}/report", response_model=ReportResponse)
 def get_report(
     inv_id: str,
     manager: InvestigationManager = Depends(get_manager),
 ):
+    """Return the verification report for a completed investigation.
+
+    The report is generated once when the investigation reaches the `completed`
+    state and is served directly from disk — immutable after generation.
+    """
     inv = manager.get(inv_id)
     if not inv:
         raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
     if inv.state not in (LifecycleState.completed, LifecycleState.reporting):
         raise HTTPException(409, detail="Report not ready — investigation not yet complete")
     data = fs_store.read_text(inv.id, "verification_report.md")
-    return {
-        "investigation_id": inv.id,
-        "report_markdown": data or "# Report pending",
-        "report_path": f".wizard/investigations/{inv.id}/verification_report.md",
-    }
+    return ReportResponse(
+        investigation_id=inv.id,
+        report_markdown=data or "# Report pending",
+        report_path=f".wizard/investigations/{inv.id}/verification_report.md",
+    )
 
 
 @router.delete("/{inv_id}", status_code=200)

@@ -9,7 +9,7 @@ from wizard_kernel.contracts.node import (
     ClaimTemplate, Hypothesis, HypothesisKind, InvestigationNode,
 )
 from wizard_kernel.contracts.observation import Observation
-from wizard_kernel.contracts.plan import TechnologyPlan, TechnologyEntry
+from wizard_kernel.contracts.plan import GoalDefinition, TechnologyPlan, TechnologyEntry
 
 
 @runtime_checkable
@@ -46,7 +46,16 @@ class MockPlanner:
             technologies.append(TechnologyEntry(
                 name="Node.js", confidence="high",
                 signals=["package.json"],
-                initial_goals=["Verify Runtime", "Verify Dependencies"],
+                initial_goals=[
+                    GoalDefinition(
+                        name="Verify Runtime",
+                        required_claim_types=["RUNTIME"],
+                    ),
+                    GoalDefinition(
+                        name="Verify Dependencies",
+                        required_claim_types=["PACKAGE"],
+                    ),
+                ],
                 priority_files=["package.json"],
             ))
             seed_nodes.append(_make_read_node("package.json", "goal_runtime"))
@@ -56,7 +65,16 @@ class MockPlanner:
             technologies.append(TechnologyEntry(
                 name="Python", confidence="high",
                 signals=[python_file],
-                initial_goals=["Verify Runtime", "Verify Dependencies"],
+                initial_goals=[
+                    GoalDefinition(
+                        name="Verify Runtime",
+                        required_claim_types=["RUNTIME"],
+                    ),
+                    GoalDefinition(
+                        name="Verify Dependencies",
+                        required_claim_types=["PACKAGE"],
+                    ),
+                ],
                 priority_files=[python_file],
             ))
             seed_nodes.append(_make_read_node(python_file, "goal_runtime"))
@@ -65,16 +83,27 @@ class MockPlanner:
             technologies.append(TechnologyEntry(
                 name="Docker", confidence="high",
                 signals=["Dockerfile"],
-                initial_goals=["Verify Docker Build"],
+                initial_goals=[
+                    GoalDefinition(
+                        name="Verify Docker Build",
+                        required_claim_types=["DEPLOYMENT"],
+                    ),
+                ],
                 priority_files=["Dockerfile"],
             ))
             seed_nodes.append(_make_read_node("Dockerfile", "goal_docker"))
 
         if not technologies:
-            # Unknown repo — add a generic discovery node
+            # Unknown repo — add a generic discovery node with no required claim types
             technologies.append(TechnologyEntry(
                 name="Unknown", confidence="low",
-                signals=[], initial_goals=["Investigate Repository"],
+                signals=[],
+                initial_goals=[
+                    GoalDefinition(
+                        name="Investigate Repository",
+                        required_claim_types=["FILESYSTEM"],
+                    ),
+                ],
                 priority_files=[],
             ))
             seed_nodes.append(_make_discover_node())

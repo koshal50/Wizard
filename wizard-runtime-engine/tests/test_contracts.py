@@ -86,12 +86,15 @@ def test_evidence_schema():
     assert e.source_tier == "execution"
 
 
+from wizard_kernel.contracts.plan import TechnologyPlan, TechnologyEntry, GoalDefinition
+
+
 def test_technology_plan_schema():
     plan = TechnologyPlan(technologies=[
         TechnologyEntry(
             name="Node.js", confidence="high",
             signals=["package.json"],
-            initial_goals=["Verify Runtime"],
+            initial_goals=[GoalDefinition(name="Verify Runtime", required_claim_types=["RUNTIME"])],
         )
     ])
     assert plan.technologies[0].name == "Node.js"

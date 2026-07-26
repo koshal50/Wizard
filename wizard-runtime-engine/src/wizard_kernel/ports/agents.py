@@ -60,3 +60,18 @@ class HttpVerifier:
         # Strip trust fields if agent tried to set them (invariant 3)
         data.pop("trust", None)
         return VerifierAssessment.model_validate(data)
+
+
+# ── Factory ───────────────────────────────────────────────────────────────────
+
+def get_agents(options: dict) -> tuple[ExplorerPort, VerifierPort]:
+    """Return (explorer, verifier) based on investigation options.
+
+    If no URL is configured, falls back to mock agents so the kernel
+    never hard-crashes on missing external services.
+    """
+    explorer_url = options.get("agent_explorer_url")
+    verifier_url = options.get("agent_verifier_url")
+    explorer: ExplorerPort = HttpExplorer(explorer_url) if explorer_url else MockExplorer()
+    verifier: VerifierPort = HttpVerifier(verifier_url) if verifier_url else MockVerifier()
+    return explorer, verifier

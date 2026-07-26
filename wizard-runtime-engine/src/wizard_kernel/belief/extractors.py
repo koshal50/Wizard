@@ -46,8 +46,9 @@ def extract(obs: Observation) -> list[ExtractResult]:
     for fn in _REGISTRY.get(obs.obs_type, []):
         try:
             results.extend(fn(obs) or [])
-        except Exception:  # noqa: BLE001  — extractor failure is never a crash
-            pass
+        except Exception as e:
+            with open("extractor_errors.log", "a") as f:
+                f.write(f"Extractor {fn.__name__} failed: {repr(e)}\n")
     return results
 
 
@@ -55,8 +56,8 @@ def extract(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_package_json(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("path", "")
-    parsed = obs.payload.get("parsed")
+    path = obs.payload.get("data", {}).get("path", "")
+    parsed = obs.payload.get("data", {}).get("parsed")
     if not (path.endswith("package.json") and isinstance(parsed, dict)):
         return []
     results = []
@@ -79,8 +80,10 @@ def _extract_package_json(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_pyproject_toml(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("path", "")
-    content = obs.payload.get("content", "")
+    path = obs.payload.get("data", {}).get("path", "")
+    content = obs.payload.get("data", {}).get("content", "")
+    with open("extractor_debug.log", "a") as f:
+        f.write(f"checking pyproject path: {path!r}\n")
     if not path.endswith("pyproject.toml"):
         return []
     results = []
@@ -90,6 +93,10 @@ def _extract_pyproject_toml(obs: Observation) -> list[ExtractResult]:
         results.append(ExtractResult("PACKAGE", "version", m.group(1)))
     if "requires-python" in content or 'python_requires' in content:
         results.append(ExtractResult("RUNTIME", "language", "Python"))
+    if "dependencies = [" in content:
+        deps_block = content.split("dependencies = [")[1].split("]")[0]
+        count = len([l for l in deps_block.splitlines() if '"' in l or "'" in l])
+        results.append(ExtractResult("PACKAGE", "dependency_count", count))
     if "[tool.pytest" in content:
         results.append(ExtractResult("TESTING", "has_pytest", True))
     return results
@@ -97,8 +104,8 @@ def _extract_pyproject_toml(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_dockerfile(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("path", "").lower()
-    content = obs.payload.get("content", "")
+    path = obs.payload.get("data", {}).get("path", "").lower()
+    content = obs.payload.get("data", {}).get("content", "")
     if "dockerfile" not in path and path != "dockerfile":
         return []
     results = [ExtractResult("DEPLOYMENT", "has_dockerfile", True)]
@@ -117,8 +124,8 @@ def _extract_dockerfile(obs: Observation) -> list[ExtractResult]:
 
 @register("file_content")
 def _extract_requirements_txt(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("path", "")
-    content = obs.payload.get("content", "")
+    path = obs.payload.get("data", {}).get("path", "")
+    content = obs.payload.get("data", {}).get("content", "")
     if not path.endswith("requirements.txt"):
         return []
     packages = [l.split("==")[0].split(">=")[0].strip()
@@ -162,7 +169,7 @@ def _extract_command_result(obs: Observation) -> list[ExtractResult]:
 
 @register("path_check")
 def _extract_path_check(obs: Observation) -> list[ExtractResult]:
-    path = obs.payload.get("path", "")
+    path = obs.payload.get("data", {}).get("path", "")
     exists = obs.payload.get("exists", False)
     return [ExtractResult("FILESYSTEM", f"exists:{path}", exists,
                           support_type="support" if exists else "contradict")]

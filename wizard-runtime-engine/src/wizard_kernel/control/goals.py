@@ -40,6 +40,31 @@ class GoalEngine:
             self._goals[goal_id].state = "satisfied"
             self._goals[goal_id].progress = 1.0
 
+    def evaluate_checkpoint(self, goal_id: str, kg) -> bool:
+        goal = self._goals.get(goal_id)
+        if not goal or goal.state == "satisfied":
+            return True if goal and goal.state == "satisfied" else False
+        
+        satisfied_types = set()
+        for c in kg.all_claims():
+            if c.claim_type in goal.required_claim_types:
+                if kg.trust_of(c.id) >= goal.belief_threshold:
+                    if not goal.requires_execution_evidence or kg.has_execution_evidence(c.id):
+                        satisfied_types.add(c.claim_type)
+        
+        req_types = set(goal.required_claim_types)
+        if req_types:
+            goal.progress = len(satisfied_types) / len(req_types)
+            if satisfied_types == req_types:
+                goal.state = "satisfied"
+                goal.progress = 1.0
+                return True
+        return False
+
+    def evaluate_all(self, kg) -> None:
+        for g in self.open_goals():
+            self.evaluate_checkpoint(g.id, kg)
+
     def to_api_list(self) -> list[dict]:
         return [
             {"id": g.id, "name": g.name, "state": g.state, "progress": g.progress}

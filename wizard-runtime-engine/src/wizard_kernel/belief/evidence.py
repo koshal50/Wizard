@@ -33,12 +33,32 @@ class EvidenceEngine:
     ) -> tuple[Claim, Evidence] | None:
         """Create Claim + Evidence atomically and insert into the Knowledge Graph.
         Returns None if obs_id was already counted (dedup guard)."""
-        if obs_id in self._seen_obs:
-            # Same observation cannot create two claims — would double-count trust
+        # Track by obs_id + claim signature so one observation can produce multiple distinct claims
+        sig = (obs_id, claim_type, key)
+        if sig in self._seen_obs:
             return None
-        self._seen_obs.add(obs_id)
+        self._seen_obs.add(sig)
 
         now = datetime.now(timezone.utc)
+        
+        # Check if claim already exists
+        existing = self._kg.find(claim_type, key)
+        if existing:
+            # For simplicity, pick the first match. If value differs, it might be a contradiction.
+            c = existing[0]
+            if c.value != value:
+                support_type = "contradict"
+            ev = Evidence(
+                id=f"ev_{uuid.uuid4().hex[:8]}",
+                claim_id=c.id,
+                observation_ids=[obs_id],
+                support_type=support_type,
+                source_tier=source_tier,
+                created_at=now,
+            )
+            self._kg.add_evidence(c.id, ev)
+            return c, ev
+
         claim = Claim(
             id=f"cl_{uuid.uuid4().hex[:8]}",
             investigation_id=inv_id,
@@ -55,7 +75,6 @@ class EvidenceEngine:
             source_tier=source_tier,
             created_at=now,
         )
-        # Invariant 2: only path into KG
         self._kg.insert(claim, evidence)
         return claim, evidence
 
@@ -66,9 +85,13 @@ class EvidenceEngine:
         source_tier: SourceTier,
     ) -> float | None:
         """Add more evidence to an existing claim. Returns new trust score."""
-        if obs_id in self._seen_obs:
+        claim = self._kg.get(claim_id)
+        if not claim:
             return None
-        self._seen_obs.add(obs_id)
+        sig = (obs_id, claim.claim_type, claim.key)
+        if sig in self._seen_obs:
+            return None
+        self._seen_obs.add(sig)
         now = datetime.now(timezone.utc)
         ev = Evidence(
             id=f"ev_{uuid.uuid4().hex[:8]}",

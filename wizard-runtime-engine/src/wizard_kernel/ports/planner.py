@@ -52,13 +52,14 @@ class MockPlanner:
             seed_nodes.append(_make_read_node("package.json", "goal_runtime"))
 
         if "requirements.txt" in signals or "pyproject.toml" in signals:
+            python_file = "requirements.txt" if "requirements.txt" in signals else "pyproject.toml"
             technologies.append(TechnologyEntry(
                 name="Python", confidence="high",
-                signals=["requirements.txt"],
+                signals=[python_file],
                 initial_goals=["Verify Runtime", "Verify Dependencies"],
-                priority_files=["requirements.txt"],
+                priority_files=[python_file],
             ))
-            seed_nodes.append(_make_read_node("requirements.txt", "goal_runtime"))
+            seed_nodes.append(_make_read_node(python_file, "goal_runtime"))
 
         if "Dockerfile" in signals:
             technologies.append(TechnologyEntry(

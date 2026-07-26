@@ -97,10 +97,16 @@ def _run_loop(
 
     for tech in plan.technologies:
         for goal_name in tech.initial_goals:
+            req_types = []
+            if "Runtime" in goal_name: req_types.append("RUNTIME")
+            if "Dependencies" in goal_name: req_types.append("PACKAGE")
+            if "Docker" in goal_name: req_types.append("DEPLOYMENT")
+            
             goals.add(Goal(
                 id=f"goal_{uuid.uuid4().hex[:6]}",
                 name=goal_name,
-                required_claim_types=[],
+                required_claim_types=req_types or ["RUNTIME"],
+                requires_execution_evidence=False,
             ))
 
     for node in plan.seed_nodes:
@@ -189,6 +195,9 @@ def _run_loop(
                 source_tier=source_tier,
                 node_id=node.id,
             )
+
+        # Evaluate goals based on new claims
+        goals.evaluate_all(kg)
 
         graph.set_state(node.id, "complete", obs_ids=[obs.id])
         completed_ids.add(node.id)

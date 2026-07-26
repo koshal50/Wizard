@@ -17,14 +17,7 @@ def create_investigation(
     manager: InvestigationManager = Depends(get_manager),
 ):
     inv = manager.create(req)
-    fs_store.write(inv.id, "meta.json", {
-        "investigation_id": inv.id,
-        "repository_path": inv.repository_path,
-        "intent": inv.intent,
-        "targets": inv.targets,
-        "options": inv.options,
-        "created_at": inv.created_at.isoformat(),
-    })
+    # manager.create() already persists meta.json via _persist() — no duplicate write here
     planner = get_planner(req.options.planner_url)
     t = threading.Thread(
         target=kernel_loop.run,
@@ -66,8 +59,7 @@ def get_report(
         raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
     if inv.state not in (LifecycleState.completed, LifecycleState.reporting):
         raise HTTPException(409, detail="Report not ready — investigation not yet complete")
-    data = fs_store.read(inv.id, "verification_report.md")
-    # Phase 5: return full ReportResponse from disk
+    data = fs_store.read_text(inv.id, "verification_report.md")
     return {
         "investigation_id": inv.id,
         "report_markdown": data or "# Report pending",

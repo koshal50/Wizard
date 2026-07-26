@@ -215,8 +215,8 @@ def _run_loop(
     kg.persist()
 
     from wizard_kernel.control.report import generate
-    report_md = generate(inv, graph, obs_store.all(), kg)
-    fs_store.write(inv.id, "verification_report.md", {"markdown": report_md})
+    report_md = generate(inv, graph, obs_store.all(), kg, goals)
+    fs_store.write_text(inv.id, "verification_report.md", report_md)
 
     manager.update(inv.id, state=LifecycleState.completed,
                    last_event="complete", active_goals=goals.to_api_list())

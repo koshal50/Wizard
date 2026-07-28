@@ -118,15 +118,15 @@ def send_request(request: InvestigationRequest) -> RuntimeResponse:
                     payload = ev["payload"]
                     
                     if ev_type == "node.completed":
-                        console.print(f"[green]✔[/green] Completed node [bold]{payload.get('node_id')}[/bold]")
+                        console.print(f"[green]+[/green] Completed node [bold]{payload.get('node_id')}[/bold]")
                     elif ev_type == "node.failed":
-                        console.print(f"[red]✖[/red] Failed node [bold]{payload.get('node_id')}[/bold] ({payload.get('reason', 'execution_failed')})")
+                        console.print(f"[red]x[/red] Failed node [bold]{payload.get('node_id')}[/bold] ({payload.get('reason', 'execution_failed')})")
                     elif ev_type == "claim.admitted":
-                        console.print(f"  [cyan]↳[/cyan] Found evidence: {payload.get('claim_type')} -> {payload.get('key')}")
+                        console.print(f"  [cyan]->[/cyan] Found evidence: {payload.get('claim_type')} -> {payload.get('key')}")
                     elif ev_type == "goal.satisfied":
-                        console.print(f"🏆 [bold yellow]Goal Satisfied:[/bold yellow] {payload.get('goal_name')}")
+                        console.print(f"[bold yellow]>> Goal Satisfied:[/bold yellow] {payload.get('goal_name')}")
                     elif ev_type == "agent.consulted":
-                        console.print(f"[blue]🤖[/blue] Consulted Agent ({payload.get('agent_type')})")
+                        console.print(f"[blue]*[/blue] Consulted Agent ({payload.get('agent_type')})")
                         
             # Check status
             status_req = urllib.request.Request(f"{base_url}/{inv_id}", method='GET')

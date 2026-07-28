@@ -17,6 +17,7 @@ from rich.console import Console
 from wizard import __version__
 from wizard.cli.commands.investigate import investigate
 from wizard.cli.commands.verify import verify
+from wizard.cli.commands.report import report
 
 
 # ---------------------------------------------------------------------------
@@ -94,18 +95,13 @@ app.command(
     ),
 )(verify)
 
-
-@app.command(
+app.command(
     name="report",
-    help="[bold]Generate[/bold] a verification report. [dim](coming soon)[/dim]",
-)
-def report_stub() -> None:
-    """Report command — not yet implemented."""
-    console.print(
-        "[yellow]The [bold]report[/bold] command is not yet implemented.[/yellow]\n"
-        "[dim]It will generate reports from the Runtime Engine's verified knowledge.[/dim]"
-    )
-    raise typer.Exit(code=0)
+    help=(
+        "[bold]Generate[/bold] a Verification Report from verified knowledge. "
+        "Saves to output/ directory by default."
+    ),
+)(report)
 
 
 @app.command(

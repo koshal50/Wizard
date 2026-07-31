@@ -36,7 +36,7 @@ app = typer.Typer(
         "Translates user commands into structured investigation requests "
         "for the Runtime Engine."
     ),
-    no_args_is_help=True,
+    no_args_is_help=False,
     rich_markup_mode="rich",
     pretty_exceptions_enable=True,
     pretty_exceptions_show_locals=False,
@@ -56,8 +56,9 @@ def _version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_callback(
+    ctx: typer.Context,
     version: Optional[bool] = typer.Option(
         None,
         "--version",
@@ -71,7 +72,14 @@ def main_callback(
 
     Translate user commands into structured investigation requests
     for the Runtime Engine.
+
+    Run with no command to open the interactive Wizard interface.
     """
+    # Bare `wizard` (no subcommand, no --version) opens the interactive TUI.
+    if ctx.invoked_subcommand is None:
+        from wizard.cli.tui import run_tui
+
+        run_tui()
 
 
 # ---------------------------------------------------------------------------

@@ -79,6 +79,7 @@ wizard/cli/__init__.py
 wizard/cli/main.py
 wizard/cli/commands/__init__.py
 wizard/cli/commands/investigate.py
+wizard/cli/commands/report.py
 wizard/cli/commands/verify.py
 wizard/cli/display/__init__.py
 wizard/cli/display/progress.py
@@ -91,3 +92,9 @@ wizard/cli/parser/command_parser.py
 wizard/cli/parser/intent_builder.py
 wizard/cli/runtime_client/__init__.py
 wizard/cli/runtime_client/client.py
+wizard/cli/tui/__init__.py
+wizard/cli/tui/app.py
+wizard/cli/tui/art.py
+wizard/cli/tui/session.py
+wizard/cli/tui/theme.py
+wizard/cli/tui/widgets.py

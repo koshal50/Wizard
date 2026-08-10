@@ -1,0 +1,17 @@
+{
+  "name": "sample-node-project",
+  "version": "1.0.0",
+  "description": "A tiny Node.js HTTP service used as a fixture for the Wizard investigation planner.",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "healthcheck": "node -e \"require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "license": "MIT"
+}

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+.ruff_cache/
+.pytest_cache/
+
+# Wizard runtime state
+.wizard/
+
+# Env
+.env
+*.env
+
+# Build plan (internal)
+BUILD_PLAN.md

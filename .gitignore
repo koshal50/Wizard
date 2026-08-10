@@ -19,3 +19,7 @@ investigations/
 Thumbs.db
 .idea/
 .vscode/
+
+
+.agents
+output/

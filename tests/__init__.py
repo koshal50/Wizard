@@ -1,0 +1,1 @@
+"""Wizard test suite."""

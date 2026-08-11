@@ -1,2 +1,5 @@
 .agents
 output/
+
+*.egg-info/
+__pycache__/

@@ -1,115 +1,310 @@
-import { ArrowUpRight, Check, Github, ShieldCheck } from 'lucide-react'
-import { AsciiArt } from '@/components/ui/redshift'
+'use client';
 
-const discoveries = [
-  ['Runtime', 'Node.js 20 · verified'],
-  ['Application', 'Express REST API · observed'],
-  ['Dependencies', '47 detected · 3 failed'],
-  ['Deployment', 'Docker · verified'],
-]
+import { useState, useEffect } from 'react';
+import { X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { MeshGradient } from '@paper-design/shaders-react';
+import { AsciiArt } from '@/components/ui/redshift';
 
 export default function Hero() {
-  return (
-    <div className="bg-background text-foreground">
-      <section className="relative isolate flex min-h-[680px] items-center overflow-hidden border-b border-border px-6 py-24 sm:px-10 lg:min-h-[760px] lg:px-16">
-        <div className="absolute inset-0 -z-20 bg-black">
-          <AsciiArt className="h-full w-full opacity-70" />
-        </div>
-        <div className="absolute inset-0 -z-10 bg-black/65" aria-hidden="true" />
-        <div className="absolute inset-x-0 bottom-0 -z-10 h-1/2 bg-gradient-to-t from-black via-black/70 to-transparent" aria-hidden="true" />
-        <div className="mx-auto flex w-full max-w-7xl flex-col items-start gap-10">
-          <div className="max-w-4xl">
-            <p className="mb-6 font-mono text-xs uppercase tracking-[0.22em] text-accent">Open-source verification runtime</p>
-            <h1 className="max-w-4xl text-pretty text-5xl font-medium leading-[0.94] tracking-[-0.055em] text-white sm:text-7xl lg:text-8xl">
-              AI writes the code. <span className="text-accent">Wizard checks the reality.</span>
-            </h1>
-            <p className="mt-8 max-w-2xl text-pretty text-lg leading-relaxed text-white/75 sm:text-xl">
-              Wizard autonomously investigates software repositories, executes what matters, collects evidence, and verifies what actually works.
-            </p>
-            <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-              <a href="#how-it-works" className="inline-flex items-center justify-center gap-2 rounded-full bg-accent px-6 py-3 font-medium text-accent-foreground transition-transform hover:scale-[1.02]">
-                Try Wizard <ArrowUpRight className="size-4" />
-              </a>
-              <a href="https://github.com" className="inline-flex items-center justify-center gap-2 rounded-full border border-white/25 px-6 py-3 font-medium text-white transition-colors hover:bg-white/10">
-                <Github className="size-4" /> View on GitHub
-              </a>
-            </div>
-          </div>
-          <p className="font-mono text-xs text-white/45">Not a guess. An investigation.</p>
-        </div>
-      </section>
+	const [isExpanded, setIsExpanded] = useState(false);
 
-      <section className="mx-auto grid max-w-7xl gap-12 px-6 py-24 sm:px-10 lg:grid-cols-[0.8fr_1.2fr] lg:px-16">
-        <div>
-          <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">The problem</p>
-          <h2 className="mt-5 max-w-lg text-4xl font-medium leading-tight tracking-[-0.04em] sm:text-5xl">Generated code is cheap. Knowing whether it works is expensive.</h2>
-        </div>
-        <div className="border-l border-border pl-6 font-mono text-sm leading-loose text-muted-foreground sm:pl-10">
-          <p className="text-foreground">README says it runs with <span className="text-accent">npm start</span></p>
-          <p>↓</p>
-          <p>package.json says something else</p>
-          <p>↓</p>
-          <p>dependency installation fails</p>
-          <p>↓</p>
-          <p>application crashes</p>
-          <p>↓</p>
-          <p className="text-destructive">nobody noticed</p>
-          <p className="mt-5 text-lg font-medium text-foreground">Wizard finds out.</p>
-        </div>
-      </section>
+	const handleExpand = () => {
+		setIsExpanded(true);
+	};
 
-      <section id="how-it-works" className="border-y border-border bg-card px-6 py-24 sm:px-10 lg:px-16">
-        <div className="mx-auto max-w-7xl">
-          <div className="max-w-2xl">
-            <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">How it works</p>
-            <h2 className="mt-5 text-4xl font-medium tracking-[-0.04em] sm:text-6xl">Wizard investigates software instead of guessing about it.</h2>
-          </div>
-          <div className="mt-16 grid gap-px overflow-hidden border border-border bg-border sm:grid-cols-3 lg:grid-cols-6">
-            {['Repository', 'Reads', 'Executes', 'Observes', 'Verifies', 'Explains'].map((step, index) => (
-              <div key={step} className="bg-card p-5">
-                <span className="font-mono text-xs text-accent">0{index + 1}</span>
-                <p className="mt-10 font-medium">{step}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+	const handleClose = () => {
+		setIsExpanded(false);
+	};
 
-      <section className="mx-auto grid max-w-7xl gap-12 px-6 py-24 sm:px-10 lg:grid-cols-2 lg:px-16">
-        <div>
-          <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">The difference is evidence</p>
-          <h2 className="mt-5 text-4xl font-medium tracking-[-0.04em] sm:text-5xl">Most AI tools generate answers. Wizard generates evidence.</h2>
-          <div className="mt-8 space-y-4 text-muted-foreground">
-            {['Reads code → Investigates code', 'Predicts behavior → Tests behavior', 'Generates explanations → Builds evidence', 'Gives an answer → Gives an answer plus why'].map((item) => (
-              <div key={item} className="flex items-center gap-3 border-b border-border pb-4"><Check className="size-4 text-accent" />{item}</div>
-            ))}
-          </div>
-        </div>
-        <div className="border border-border bg-card p-6 font-mono text-sm sm:p-8">
-          <p className="text-accent">CLAIM</p><p className="my-3 text-muted-foreground">↓</p><p className="text-foreground">The API starts successfully</p><p className="my-3 text-muted-foreground">↓</p><p className="text-accent">EVIDENCE</p><p className="mt-3 text-muted-foreground">process running · port 3000 responding · output collected</p>
-        </div>
-      </section>
+	useEffect(() => {
+		if (isExpanded) {
+			document.body.style.overflow = 'hidden';
+		} else {
+			document.body.style.overflow = 'unset';
+		}
+	}, [isExpanded]);
 
-      <section className="border-y border-border bg-card px-6 py-24 sm:px-10 lg:px-16">
-        <div className="mx-auto max-w-7xl">
-          <div className="flex max-w-3xl items-end justify-between gap-6">
-            <div><p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">A living understanding</p><h2 className="mt-5 text-4xl font-medium tracking-[-0.04em] sm:text-6xl">See what Wizard can actually verify.</h2></div>
-            <ShieldCheck className="hidden size-12 text-accent sm:block" />
-          </div>
-          <div className="mt-12 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
-            {discoveries.map(([label, value]) => <div key={label} className="bg-card p-6"><p className="font-mono text-xs uppercase tracking-widest text-muted-foreground">{label}</p><p className="mt-8 text-lg">{value}</p></div>)}
-          </div>
-          <p className="mt-8 max-w-xl text-muted-foreground">Every conclusion can be traced back to the evidence that produced it. When Wizard cannot verify something, it tells you.</p>
-        </div>
-      </section>
+	return (
+		<>
+			<div className="relative flex min-h-screen flex-col items-center justify-center px-4 sm:px-6 py-12 sm:py-20">
+				{/* Redshift animated ASCII background */}
+				<div className="absolute inset-0 overflow-hidden bg-black">
+					<AsciiArt className="h-full w-full" />
+					<div className="absolute inset-0 bg-black/25" aria-hidden="true" />
+				</div>
 
-      <section className="mx-auto max-w-7xl px-6 py-24 text-center sm:px-10 lg:px-16">
-        <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">Build. Verify. Fix. Repeat.</p>
-        <h2 className="mx-auto mt-5 max-w-3xl text-4xl font-medium tracking-[-0.04em] sm:text-6xl">Give your AI coding agent a verification layer.</h2>
-        <p className="mx-auto mt-6 max-w-2xl text-lg leading-relaxed text-muted-foreground">Stop asking AI what your code does. Ask Wizard to find out — then return the evidence so the agent can fix what is broken.</p>
-        <a href="#how-it-works" className="mt-9 inline-flex items-center gap-2 rounded-full bg-accent px-6 py-3 font-medium text-accent-foreground">Let Wizard investigate <ArrowUpRight className="size-4" /></a>
-      </section>
-    </div>
-  )
+				<div className="relative z-10 flex flex-col items-center gap-4 sm:gap-6 text-center">
+					<h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-normal leading-[90%] tracking-[-0.03em] text-black mix-blend-exclusion max-w-2xl">
+						Accelerate your marketing pipeline
+					</h1>
+
+					<p className="text-base sm:text-lg md:text-xl leading-[160%] text-black max-w-2xl px-4">
+						Empower your team to focus on creation, not configuration. Build,
+						launch, and grow exceptional digital products with confidence and
+						speed.
+					</p>
+
+					<AnimatePresence initial={false}>
+						{!isExpanded && (
+							<motion.div className="inline-block relative">
+								<motion.div
+									style={{
+										borderRadius: '100px',
+									}}
+									layout
+									layoutId="cta-card"
+									className="absolute inset-0 bg-[#004FE5] items-center justify-center transform-gpu will-change-transform"
+								></motion.div>
+								<motion.button
+									initial={{ opacity: 0, scale: 0.8 }}
+									animate={{ opacity: 1, scale: 1 }}
+									transition={{ delay: 0.2 }}
+									exit={{ opacity: 0, scale: 0.8 }}
+									layout={false}
+									onClick={handleExpand}
+									className="h-15 px-6 sm:px-8 py-3 text-lg sm:text-xl font-regular text-[#E3E3E3] tracking-[-0.01em] relative"
+								>
+									Request a demo
+								</motion.button>
+							</motion.div>
+						)}
+					</AnimatePresence>
+				</div>
+			</div>
+
+			<AnimatePresence initial={false}>
+				{isExpanded && (
+					<div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-2">
+						<motion.div
+							layoutId="cta-card"
+							style={{
+								borderRadius: '24px',
+							}}
+							layout
+							className="relative flex h-full w-full overflow-hidden bg-[#004FE5] transform-gpu will-change-transform"
+						>
+							<div className="h-full w-full overflow-y-auto scrollbar-hide">
+								<motion.div
+									initial={{ opacity: 0 }}
+									animate={{ opacity: 1 }}
+									className="relative py-8 z-10 min-h-full flex flex-col lg:flex-row w-full max-w-[1100px] mx-auto items-center p-6 sm:p-10 lg:p-16 gap-8 lg:gap-16"
+								>
+									<div className="flex-1 flex flex-col justify-center space-y-3 w-full">
+										<h2 className="text-3xl sm:text-4xl lg:text-5xl font-medium text-white leading-none tracking-[-0.03em]">
+											Talk to our sales team
+										</h2>
+
+										<div className="space-y-4 sm:space-y-6 pt-4">
+											<div className="flex gap-3 sm:gap-4">
+												<div className="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-white/10 flex items-center justify-center">
+													<svg
+														className="w-5 h-5 sm:w-6 sm:h-6 text-white"
+														fill="none"
+														viewBox="0 0 24 24"
+														stroke="currentColor"
+													>
+														<path
+															strokeLinecap="round"
+															strokeLinejoin="round"
+															strokeWidth={2}
+															d="M5 13l4 4L19 7"
+														/>
+													</svg>
+												</div>
+												<div>
+													<p className="text-sm sm:text-base text-white leading-[150%]">
+														Learn how Acme can transform your business with
+														tailored solutions and flexible pricing options.
+													</p>
+												</div>
+											</div>
+											<div className="flex gap-3 sm:gap-4">
+												<div className="flex-shrink-0 w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-white/10 flex items-center justify-center">
+													<svg
+														className="w-5 h-5 sm:w-6 sm:h-6 text-white"
+														fill="none"
+														viewBox="0 0 24 24"
+														stroke="currentColor"
+													>
+														<path
+															strokeLinecap="round"
+															strokeLinejoin="round"
+															strokeWidth={2}
+															d="M13 10V3L4 14h7v7l9-11h-7z"
+														/>
+													</svg>
+												</div>
+												<div>
+													<p className="text-sm sm:text-base text-white leading-[150%]">
+														Experience firsthand how Acme Platform accelerates
+														delivery &amp; drives results.
+													</p>
+												</div>
+											</div>
+										</div>
+
+										<div className="pt-6 sm:pt-8 mt-6 sm:mt-8 border-t border-white/20">
+											<p className="text-lg sm:text-xl lg:text-2xl text-white leading-[150%] mb-4">
+												Acme empowers our team to move faster and ship products
+												with confidence.
+											</p>
+											<div className="flex items-center gap-3 sm:gap-4">
+												<img
+													src="/professional-headshot.png"
+													alt="Sarah Chen"
+													className="w-10 h-10 sm:w-12 sm:h-12 rounded-full object-cover"
+												/>
+												<div>
+													<p className="text-base sm:text-lg lg:text-xl text-white">
+														Sarah Chen
+													</p>
+													<p className="text-sm sm:text-base text-white/70">
+														{'Chrono'}
+													</p>
+												</div>
+											</div>
+										</div>
+									</div>
+
+									<div className="flex-1 w-full">
+										<form className="space-y-4 sm:space-y-5">
+											{/* Name Field */}
+											<div>
+												<label
+													htmlFor="name"
+													className="block text-[10px] font-mono font-normal text-white mb-2 tracking-[0.5px] uppercase"
+												>
+													FULL NAME *
+												</label>
+												<input
+													type="text"
+													id="name"
+													name="name"
+													className="w-full px-4 py-2.5 rounded-lg bg-[#001F63] border-0 text-white placeholder:text-white/50 focus:outline-none focus:ring-2 focus:ring-white/20 transition-all text-sm h-10"
+												/>
+											</div>
+
+											{/* Work Email Field */}
+											<div>
+												<label
+													htmlFor="email"
+													className="block text-[10px] font-mono font-normal text-white mb-2 tracking-[0.5px] uppercase"
+												>
+													WORK EMAIL *
+												</label>
+												<input
+													type="email"
+													id="email"
+													name="phone"
+													className="w-full px-4 py-2.5 rounded-lg bg-[#001F63] border-0 text-white placeholder:text-white/50 focus:outline-none focus:ring-2 focus:ring-white/20 transition-all text-sm h-10"
+												/>
+											</div>
+
+											<div className="flex flex-col sm:flex-row gap-4">
+												<div className="flex-1">
+													<label
+														htmlFor="website"
+														className="block text-[10px] font-mono font-normal text-white mb-2 tracking-[0.5px] uppercase"
+													>
+														COMPANY WEBSITE
+													</label>
+													<input
+														type="url"
+														id="website"
+														name="website"
+														className="w-full px-4 py-2.5 rounded-lg bg-[#001F63] border-0 text-white placeholder:text-white/50 focus:outline-none focus:ring-2 focus:ring-white/20 transition-all text-sm h-10"
+													/>
+												</div>
+												<div className="sm:w-32 w-full">
+													<label
+														htmlFor="company-size"
+														className="block text-[10px] font-mono font-normal text-white mb-2 tracking-[0.5px] uppercase"
+													>
+														COMPANY SIZE
+													</label>
+													<select
+														id="company-size"
+														name="company-size"
+														className="w-full px-4 py-2.5 rounded-lg bg-[#001F63] border-0 text-white focus:outline-none focus:ring-2 focus:ring-white/20 transition-all appearance-none cursor-pointer text-sm h-10"
+														style={{
+															backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='white' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")`,
+															backgroundRepeat: 'no-repeat',
+															backgroundPosition: 'right 0.75rem center',
+															backgroundSize: '1rem',
+														}}
+													>
+														<option value="1-10">1-10</option>
+														<option value="11-50">11-50</option>
+														<option value="51-200">51-200</option>
+														<option value="201-500">201-500</option>
+														<option value="501+">501+</option>
+													</select>
+												</div>
+											</div>
+
+											{/* Message Field */}
+											<div>
+												<label
+													htmlFor="message"
+													className="block text-[10px] font-mono font-normal text-white mb-2 tracking-[0.5px] uppercase"
+												>
+													ANYTHING ELSE?
+												</label>
+												<textarea
+													id="message"
+													name="message"
+													rows={3}
+													className="w-full px-4 py-3 rounded-lg bg-[#001F63] border-0 text-white placeholder:text-white/50 focus:outline-none focus:ring-2 focus:ring-white/20 transition-all resize-none text-sm"
+												/>
+											</div>
+
+											{/* Submit Button */}
+											<button
+												type="submit"
+												className="w-full px-8 py-2.5 rounded-full bg-white text-[#0041C1] font-medium hover:bg-white/90 transition-colors tracking-[-0.03em] h-10"
+											>
+												Submit
+											</button>
+										</form>
+									</div>
+								</motion.div>
+							</div>
+							<motion.div
+								initial={{ opacity: 0, scale: 2 }}
+								animate={{ opacity: 1, scale: 1 }}
+								exit={{ opacity: 0 }}
+								layout={false}
+								transition={{ duration: 0.15, delay: 0.05 }}
+								className="absolute h-full inset-0 overflow-hidden pointer-events-none"
+								style={{
+									borderRadius: '24px',
+								}}
+							>
+								<MeshGradient
+									speed={1}
+									colors={['#2452F1', '#022474', '#163DB9', '#0B1D99']}
+									distortion={0.8}
+									swirl={0.1}
+									grainMixer={0}
+									grainOverlay={0}
+									className="inset-0 sticky top-0"
+									style={{ height: '100%', width: '100%' }}
+								/>
+							</motion.div>
+
+							{/* Close Button */}
+							<motion.button
+								onClick={handleClose}
+								className="absolute right-6 top-6 z-10 flex h-10 w-10 items-center justify-center text-white bg-transparent transition-colors hover:bg-white/10 rounded-full"
+								aria-label="Close"
+							>
+								<X className="h-5 w-5" />
+							</motion.button>
+						</motion.div>
+					</div>
+				)}
+			</AnimatePresence>
+		</>
+	);
 }
-

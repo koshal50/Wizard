@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MeshGradient } from '@paper-design/shaders-react';
-import { AsciiArt } from '@/components/ui/redshift';
+import { AsciiArt } from '@/components/ui/sss';
 
 export default function Hero() {
 	const [isExpanded, setIsExpanded] = useState(false);
@@ -31,10 +31,9 @@ export default function Hero() {
 				{/* Redshift animated ASCII background */}
 					<div className="absolute inset-0 z-0 overflow-hidden bg-black">
 						<AsciiArt className="pointer-events-none h-full w-full" />
-						<div className="pointer-events-none absolute inset-0 bg-black/25" aria-hidden="true" />
 					</div>
 
-					<div className="relative z-10 isolate flex flex-col items-center gap-4 sm:gap-6 rounded-2xl bg-black/35 px-5 py-6 text-center backdrop-blur-sm">
+					<div className="relative z-10 isolate flex flex-col items-center gap-4 sm:gap-6 px-5 py-6 text-center">
 						<h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-normal leading-[90%] tracking-[-0.03em] text-black mix-blend-exclusion max-w-2xl">
 							Build with AI. Verify with Wizard.
 						</h1>

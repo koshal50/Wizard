@@ -29,6 +29,7 @@ from wizard_kernel.belief.trust import source_tier_for_tool
 from wizard_kernel.contracts.agent import ToolRequest
 from wizard_kernel.contracts.node import InvestigationNode
 from wizard_kernel.contracts.status import LifecycleState
+from wizard_kernel.context.engine import ContextEngine
 from wizard_kernel.control import hypothesis as hyp_eval
 from wizard_kernel.control.goals import Goal, GoalEngine
 from wizard_kernel.control.investigation_graph import InvestigationGraph
@@ -89,6 +90,13 @@ def run(
     validator = ToolRequestValidator(inv.repository_path)
     completed_ids: set[str] = set()
 
+    # Context Engine: read-only projection of state into agent context (invariant 3).
+    # Its token budget is the LLM context window (distinct from the tool-call
+    # `budget` above); the window size is configurable per investigation.
+    context_engine = ContextEngine(
+        bus, max_context_tokens=inv.options.get("max_context_tokens", 8192)
+    )
+
     sandbox_mode = inv.options.get("sandbox_mode", "local_dev")
     sandbox = get_sandbox(sandbox_mode)
 
@@ -99,7 +107,7 @@ def run(
         sandbox.start(inv.repository_path)
         tools = ToolExecutor(sandbox, inv.repository_path)
         _run_loop(inv, manager, planner, explorer, verifier, kg, ev_engine, graph, goals,
-                  obs_store, tools, budget, bus, validator, completed_ids)
+                  obs_store, tools, budget, bus, validator, completed_ids, context_engine)
     except Exception as exc:  # noqa: BLE001
         manager.update(inv.id, state=LifecycleState.failed,
                        last_event=f"fatal: {exc}", error=str(exc))
@@ -123,6 +131,7 @@ def _run_loop(
     bus: event_bus.EventBus,
     validator: ToolRequestValidator,
     completed_ids: set[str],
+    context_engine: ContextEngine,
 ) -> None:
     # ── Scanning ──────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.scanning, last_event="fast scan started")
@@ -161,6 +170,10 @@ def _run_loop(
             log.info("investigation %s cancelled externally, halting loop.", inv.id)
             return
 
+        # State committed by the previous iteration is now visible — drop cached
+        # context so the Context Engine rebuilds against current state (§22).
+        context_engine.on_state_mutation()
+
         # Build goal_urgency and trust maps for priority scoring
         goal_urgency = {
             g.id: 0.0 if g.state == "satisfied" else 1.0
@@ -193,9 +206,10 @@ def _run_loop(
         manager.update(inv.id, last_event=f"executing {node.id} ({node.type})")
 
         # ── Phase 6: Explorer Agent determines HOW to execute this node ───────
-        # Build a trust-stripped context for the agent (invariant 3)
-        explorer_context = _build_explorer_context(inv, node, goals, kg, budget)
-        tool_action = _resolve_tool_action(node, explorer, explorer_context, validator, budget)
+        # Context Engine builds the trust-stripped packet (agent contract) plus the
+        # modular section view that drives KV-cache ordering + audit (invariant 3).
+        ctx = context_engine.build_context("explorer", inv, node, goals, kg, budget, obs_store)
+        tool_action = _resolve_tool_action(node, explorer, ctx.packet, validator, budget)
 
         if tool_action is None:
             # Validation failed — mark node failed, record the rejection as an observation
@@ -356,38 +370,6 @@ def _run_loop(
 
 
 # ── Phase 6 helpers ───────────────────────────────────────────────────────────
-
-def _build_explorer_context(
-    inv: Investigation,
-    node: InvestigationNode,
-    goals: GoalEngine,
-    kg: KnowledgeGraph,
-    budget: BudgetManager,
-) -> dict:
-    """Build a trust-stripped context packet for the Explorer Agent.
-
-    Invariant 3: agents never receive raw trust scores or graph internals.
-    They receive only what is needed to pick the next tool action.
-    """
-    return {
-        "investigation_id": inv.id,
-        "intent": inv.intent,
-        "targets": inv.targets,
-        "current_node": {
-            "id": node.id,
-            "type": node.type,
-            "action": node.action,
-            "goal_id": node.goal_id,
-        },
-        "active_goals": [
-            {"id": g.id, "name": g.name, "state": g.state}
-            for g in goals.open_goals()
-        ],
-        "kg_summary": kg.summary(),
-        "remaining_budget": budget.remaining,
-        # Agents never receive: trust scores, raw KG relationships, observation internals
-    }
-
 
 def _resolve_tool_action(
     node: InvestigationNode,

@@ -28,7 +28,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="bg-black">
       <body className={`font-sans ${instrumentSans.variable} ${jetbrainsMono.variable}`}>
         <Suspense fallback={null}>{children}</Suspense>
         <Analytics />

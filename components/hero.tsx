@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { GodRays, MeshGradient } from '@paper-design/shaders-react';
+import { MeshGradient } from '@paper-design/shaders-react';
+import { AsciiArt } from '@/components/ui/redshift';
 
 export default function Hero() {
 	const [isExpanded, setIsExpanded] = useState(false);
@@ -27,31 +28,10 @@ export default function Hero() {
 	return (
 		<>
 			<div className="relative flex min-h-screen flex-col items-center justify-center px-4 sm:px-6 py-12 sm:py-20">
-				{/* GodRays Background */}
-				<div className="absolute inset-0">
-					<GodRays
-						colorBack="#00000000"
-						colors={['#FFFFFF6E', '#F3F3F3F0', '#8A8A8A', '#989898']}
-						colorBloom="#FFFFFF"
-						offsetX={0.85}
-						offsetY={-1}
-						intensity={1}
-						spotty={0.45}
-						midSize={10}
-						midIntensity={0}
-						density={0.12}
-						bloom={0.15}
-						speed={1}
-						scale={1.6}
-						frame={3332042.8159981333}
-						style={{
-							height: '100%',
-							width: '100%',
-							position: 'absolute',
-							top: 0,
-							left: 0,
-						}}
-					/>
+				{/* Redshift animated ASCII background */}
+				<div className="absolute inset-0 overflow-hidden bg-black">
+					<AsciiArt className="h-full w-full" />
+					<div className="absolute inset-0 bg-black/25" aria-hidden="true" />
 				</div>
 
 				<div className="relative z-10 flex flex-col items-center gap-4 sm:gap-6 text-center">

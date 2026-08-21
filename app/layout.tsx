@@ -17,9 +17,9 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "v0 App",
-  description: "Created with v0",
-  generator: "v0.app",
+  title: "Wizard — AI writes the code. Wizard checks the reality.",
+  description: "Wizard autonomously investigates software repositories, executes what matters, and verifies what actually works with real evidence.",
+  generator: "Wizard",
 }
 
 export default function RootLayout({

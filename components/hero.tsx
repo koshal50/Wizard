@@ -29,21 +29,19 @@ export default function Hero() {
 		<>
 			<div className="relative flex min-h-screen flex-col items-center justify-center px-4 sm:px-6 py-12 sm:py-20">
 				{/* Redshift animated ASCII background */}
-				<div className="absolute inset-0 overflow-hidden bg-black">
-					<AsciiArt className="h-full w-full" />
-					<div className="absolute inset-0 bg-black/25" aria-hidden="true" />
-				</div>
+					<div className="absolute inset-0 z-0 overflow-hidden bg-black">
+						<AsciiArt className="pointer-events-none h-full w-full" />
+						<div className="pointer-events-none absolute inset-0 bg-black/25" aria-hidden="true" />
+					</div>
 
-				<div className="relative z-10 flex flex-col items-center gap-4 sm:gap-6 text-center">
-					<h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-normal leading-[90%] tracking-[-0.03em] text-black mix-blend-exclusion max-w-2xl">
-						Accelerate your marketing pipeline
-					</h1>
+					<div className="relative z-10 isolate flex flex-col items-center gap-4 sm:gap-6 rounded-2xl bg-black/35 px-5 py-6 text-center backdrop-blur-sm">
+						<h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-normal leading-[90%] tracking-[-0.03em] text-black mix-blend-exclusion max-w-2xl">
+							Build with AI. Verify with Wizard.
+						</h1>
 
-					<p className="text-base sm:text-lg md:text-xl leading-[160%] text-black max-w-2xl px-4">
-						Empower your team to focus on creation, not configuration. Build,
-						launch, and grow exceptional digital products with confidence and
-						speed.
-					</p>
+						<p className="text-base sm:text-lg md:text-xl leading-[160%] text-black max-w-2xl px-4">
+							Let Wizard investigate, execute, and verify your software automatically so you can build faster with confidence.
+						</p>
 
 					<AnimatePresence initial={false}>
 						{!isExpanded && (

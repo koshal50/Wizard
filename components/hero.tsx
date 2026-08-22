@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Check, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MeshGradient } from '@paper-design/shaders-react';
 import { AsciiArt } from '@/components/ui/sss';
@@ -49,6 +49,10 @@ export default function Hero() {
 
 		form.reset();
 		setSubmissionStatus('success');
+		window.setTimeout(() => {
+			setIsExpanded(false);
+			setSubmissionStatus('idle');
+		}, 3000);
 	};
 
 	useEffect(() => {
@@ -223,40 +227,47 @@ export default function Hero() {
 
 											{/* Submit Button */}
 							<AnimatePresence mode="wait" initial={false}>
-								{submissionStatus === 'success' && (
-									<motion.div
-										key="success"
-										role="status"
-										initial={{ opacity: 0, y: 8, scale: 0.96 }}
-										animate={{ opacity: 1, y: 0, scale: 1 }}
-										exit={{ opacity: 0, y: -8 }}
-										transition={{ duration: 0.35, ease: 'easeOut' }}
-										className="flex items-center gap-3 rounded-lg border border-emerald-300/30 bg-emerald-400/15 px-4 py-3 text-sm text-emerald-100"
-									>
-										<motion.span
-											initial={{ scale: 0, rotate: -45 }}
-											animate={{ scale: 1, rotate: 0 }}
-											transition={{ delay: 0.12, type: 'spring', stiffness: 400, damping: 16 }}
-											className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-400 text-[#003b2b]"
-										>
-											<Check className="h-4 w-4" strokeWidth={3} />
-										</motion.span>
-										<span>Form submitted. We&apos;ll be in touch soon.</span>
-									</motion.div>
-								)}
 								{submissionStatus === 'error' && (
 									<motion.p key="error" role="alert" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-white">
 										Something went wrong. Please try again.
 									</motion.p>
 								)}
 							</AnimatePresence>
-							<button
+							<motion.button
 								type="submit"
-								disabled={isSubmitting}
-								className="w-full px-8 py-2.5 rounded-full bg-white text-[#0041C1] font-medium hover:bg-white/90 transition-colors tracking-[-0.03em] h-10 disabled:cursor-wait disabled:opacity-70"
+								disabled={isSubmitting || submissionStatus === 'success'}
+								animate={{ backgroundColor: submissionStatus === 'success' ? '#19D66B' : '#FFFFFF' }}
+								transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+								className="relative flex h-10 w-full items-center justify-center overflow-hidden rounded-full px-8 py-2.5 font-medium tracking-[-0.03em] text-[#0041C1] transition-colors disabled:cursor-default"
+								aria-label={submissionStatus === 'success' ? 'Form submitted' : 'Submit form'}
 							>
-								{isSubmitting ? 'Sending…' : 'Submit'}
-							</button>
+								<AnimatePresence mode="wait" initial={false}>
+									{submissionStatus === 'success' ? (
+										<motion.svg
+											key="check"
+											viewBox="0 0 28 20"
+											className="h-6 w-7"
+											aria-hidden="true"
+										>
+											<motion.path
+												d="M2 10.5 9.5 18 26 2"
+												fill="none"
+												stroke="#FFFFFF"
+												strokeWidth="3.5"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+												initial={{ pathLength: 0 }}
+												animate={{ pathLength: 1 }}
+												transition={{ duration: 0.65, ease: [0.65, 0, 0.35, 1] }}
+											/>
+										</motion.svg>
+									) : (
+										<motion.span key="label" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+											{isSubmitting ? 'Sending…' : 'Submit'}
+										</motion.span>
+									)}
+								</AnimatePresence>
+							</motion.button>
 										</form>
 									</div>
 								</motion.div>

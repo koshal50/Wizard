@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MeshGradient } from '@paper-design/shaders-react';
 import { AsciiArt } from '@/components/ui/sss';
@@ -221,12 +221,34 @@ export default function Hero() {
 											</div>
 
 											{/* Submit Button */}
-							{submissionStatus === 'success' && (
-								<p role="status" className="text-sm text-white">Thanks — we&apos;ll be in touch soon.</p>
-							)}
-							{submissionStatus === 'error' && (
-								<p role="alert" className="text-sm text-white">Something went wrong. Please try again.</p>
-							)}
+							<AnimatePresence mode="wait" initial={false}>
+								{submissionStatus === 'success' && (
+									<motion.div
+										key="success"
+										role="status"
+										initial={{ opacity: 0, y: 8, scale: 0.96 }}
+										animate={{ opacity: 1, y: 0, scale: 1 }}
+										exit={{ opacity: 0, y: -8 }}
+										transition={{ duration: 0.35, ease: 'easeOut' }}
+										className="flex items-center gap-3 rounded-lg border border-emerald-300/30 bg-emerald-400/15 px-4 py-3 text-sm text-emerald-100"
+									>
+										<motion.span
+											initial={{ scale: 0, rotate: -45 }}
+											animate={{ scale: 1, rotate: 0 }}
+											transition={{ delay: 0.12, type: 'spring', stiffness: 400, damping: 16 }}
+											className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-400 text-[#003b2b]"
+										>
+											<Check className="h-4 w-4" strokeWidth={3} />
+										</motion.span>
+										<span>Form submitted. We&apos;ll be in touch soon.</span>
+									</motion.div>
+								)}
+								{submissionStatus === 'error' && (
+									<motion.p key="error" role="alert" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-sm text-white">
+										Something went wrong. Please try again.
+									</motion.p>
+								)}
+							</AnimatePresence>
 							<button
 								type="submit"
 								disabled={isSubmitting}

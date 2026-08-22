@@ -5,9 +5,17 @@ import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { MeshGradient } from '@paper-design/shaders-react';
 import { AsciiArt } from '@/components/ui/sss';
+import { createClient } from '@supabase/supabase-js';
+
+const supabase = createClient(
+	process.env.NEXT_PUBLIC_SUPABASE_URL!,
+	process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+);
 
 export default function Hero() {
 	const [isExpanded, setIsExpanded] = useState(false);
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [submissionStatus, setSubmissionStatus] = useState<'idle' | 'success' | 'error'>('idle');
 
 	const handleExpand = () => {
 		setIsExpanded(true);
@@ -15,6 +23,31 @@ export default function Hero() {
 
 	const handleClose = () => {
 		setIsExpanded(false);
+		setSubmissionStatus('idle');
+	};
+
+	const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		setIsSubmitting(true);
+		setSubmissionStatus('idle');
+
+		const formData = new FormData(event.currentTarget);
+		const { error } = await supabase.from('wizard_contact_submissions').insert({
+			name: String(formData.get('name') ?? '').trim(),
+			email: String(formData.get('email') ?? '').trim(),
+			website: String(formData.get('website') ?? '').trim() || null,
+			role: String(formData.get('role') ?? '').trim() || null,
+			message: String(formData.get('message') ?? '').trim() || null,
+		});
+
+		setIsSubmitting(false);
+		if (error) {
+			setSubmissionStatus('error');
+			return;
+		}
+
+		event.currentTarget.reset();
+		setSubmissionStatus('success');
 	};
 
 	useEffect(() => {
@@ -106,7 +139,7 @@ export default function Hero() {
 									</div>
 
 									<div className="flex-1 w-full">
-										<form className="space-y-4 sm:space-y-5">
+										<form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5">
 											{/* Name Field */}
 											<div>
 												<label
@@ -188,12 +221,19 @@ export default function Hero() {
 											</div>
 
 											{/* Submit Button */}
-											<button
-												type="submit"
-												className="w-full px-8 py-2.5 rounded-full bg-white text-[#0041C1] font-medium hover:bg-white/90 transition-colors tracking-[-0.03em] h-10"
-											>
-												Submit
-											</button>
+							{submissionStatus === 'success' && (
+								<p role="status" className="text-sm text-white">Thanks — we&apos;ll be in touch soon.</p>
+							)}
+							{submissionStatus === 'error' && (
+								<p role="alert" className="text-sm text-white">Something went wrong. Please try again.</p>
+							)}
+							<button
+								type="submit"
+								disabled={isSubmitting}
+								className="w-full px-8 py-2.5 rounded-full bg-white text-[#0041C1] font-medium hover:bg-white/90 transition-colors tracking-[-0.03em] h-10 disabled:cursor-wait disabled:opacity-70"
+							>
+								{isSubmitting ? 'Sending…' : 'Submit'}
+							</button>
 										</form>
 									</div>
 								</motion.div>

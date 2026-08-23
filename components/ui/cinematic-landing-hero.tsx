@@ -3,13 +3,27 @@
 import { useEffect, useRef } from "react"
 import { gsap } from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
+import { MeshGradient } from "@paper-design/shaders-react"
 import { cn } from "@/lib/utils"
 
 gsap.registerPlugin(ScrollTrigger)
 
+const terminalLines = [
+  "$ wizard inspect .",
+  "Scanning repository...",
+  "Reading package.json",
+  "Mapping dependencies...",
+  "Detecting runtime: Node.js 20",
+  "Checking startup command...",
+  "Installing dependencies...",
+  "Starting application...",
+  "Checking port 3000...",
+  "Collecting runtime output...",
+  "Wizard verified this repository.",
+]
+
 export function CinematicHero({ className }: { className?: string }) {
-  const root = useRef<HTMLDivElement>(null)
-  const card = useRef<HTMLDivElement>(null)
+  const root = useRef<HTMLElement>(null)
   const laptop = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -17,65 +31,95 @@ export function CinematicHero({ className }: { className?: string }) {
     if (!scope) return
 
     const ctx = gsap.context(() => {
-      gsap.set(".cinematic-card", { y: "110vh", autoAlpha: 1 })
-      gsap.set(".cinematic-copy, .cinematic-laptop, .cinematic-badge, .cinematic-terminal-line", { autoAlpha: 0 })
+      const card = scope.querySelector<HTMLElement>("[data-scene-card]")
+      const copy = scope.querySelector<HTMLElement>("[data-scene-copy]")
+      const screen = scope.querySelector<HTMLElement>("[data-scene-laptop]")
+      const lines = gsap.utils.toArray<HTMLElement>("[data-terminal-line]")
+      const badges = gsap.utils.toArray<HTMLElement>("[data-scene-badge]")
+      if (!card || !copy || !screen) return
+
+      gsap.set([copy, screen, ...badges], { autoAlpha: 0 })
+      gsap.set(screen, { y: 80, scale: 0.82, rotationX: 18, rotationY: -8 })
+      gsap.set(copy, { y: 40, filter: "blur(10px)" })
+      gsap.set(lines, { autoAlpha: 0, y: 8 })
+      gsap.set(badges, { y: 28, scale: 0.94 })
 
       const timeline = gsap.timeline({
         scrollTrigger: {
           trigger: scope,
           start: "top top",
           end: "bottom bottom",
-          scrub: 1,
-          // CSS sticky keeps React's DOM tree stable. ScrollTrigger's pin spacer
-          // mutates the DOM and can race React reconciliation during Fast Refresh.
-          pin: false,
+          scrub: 0.8,
           invalidateOnRefresh: true,
         },
       })
 
       timeline
-        .to(".cinematic-card", { y: 0, duration: 1.5, ease: "power3.inOut" })
-        .to(".cinematic-card", { width: "100%", height: "100%", borderRadius: 0, duration: 1 })
-        .fromTo(".cinematic-laptop", { y: 240, z: -700, rotationX: 55, rotationY: -28, scale: .65 }, { autoAlpha: 1, y: 0, z: 0, rotationX: 0, rotationY: 0, scale: 1, duration: 2, ease: "expo.out" }, "-=.4")
-        .fromTo(".cinematic-copy", { y: 60, filter: "blur(18px)" }, { autoAlpha: 1, y: 0, filter: "blur(0px)", duration: 1.2 }, "-=1.4")
-        .to(".cinematic-terminal-line", { autoAlpha: 1, stagger: .18, duration: .35 }, "-=1")
-        .fromTo(".cinematic-badge", { y: 80, scale: .7 }, { autoAlpha: 1, y: 0, scale: 1, stagger: .15, duration: 1 }, "-=.8")
-        .to({}, { duration: 1.6 })
-        .to([".cinematic-laptop", ".cinematic-copy", ".cinematic-badge"], { autoAlpha: 0, y: -50, z: -200, duration: 1 })
-        .to(".cinematic-card", { y: "-110vh", duration: 1.2, ease: "power3.in" })
+        .to(card, { scale: 1, duration: 0.2 })
+        .to(screen, { autoAlpha: 1, y: 0, scale: 1, rotationX: 0, rotationY: 0, duration: 0.24, ease: "power3.out" }, "<")
+        .to(copy, { autoAlpha: 1, y: 0, filter: "blur(0px)", duration: 0.16 }, "<0.05")
+        .to(lines, { autoAlpha: 1, y: 0, stagger: 0.035, duration: 0.08, ease: "none" }, "<0.05")
+        .to(badges, { autoAlpha: 1, y: 0, scale: 1, stagger: 0.05, duration: 0.12 }, "<0.1")
+        .to({}, { duration: 0.22 })
+        .to([copy, screen, ...badges], { autoAlpha: 0, y: -30, duration: 0.14 })
+    }, scope)
 
-    }, root)
     return () => ctx.revert()
   }, [])
 
   useEffect(() => {
     const move = (event: MouseEvent) => {
-      if (!laptop.current) return
-      gsap.to(laptop.current, { rotationY: (event.clientX / innerWidth - .5) * 12, rotationX: -(event.clientY / innerHeight - .5) * 10, duration: 1, ease: "power3.out" })
+      if (!laptop.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
+      gsap.to(laptop.current, {
+        rotationY: (event.clientX / window.innerWidth - 0.5) * 5,
+        rotationX: -(event.clientY / window.innerHeight - 0.5) * 4,
+        duration: 0.8,
+        ease: "power3.out",
+        overwrite: "auto",
+      })
     }
-    addEventListener("mousemove", move)
-    return () => removeEventListener("mousemove", move)
+    window.addEventListener("mousemove", move)
+    return () => window.removeEventListener("mousemove", move)
   }, [])
 
-  return <section ref={root} className={cn("relative flex min-h-[4200px] w-screen items-start justify-center overflow-hidden bg-transparent font-sans", className)}>
-    <div ref={card} className="cinematic-card sticky top-0 flex h-[92vh] w-[92vw] items-center justify-center overflow-hidden rounded-[32px] border border-white/10 text-white shadow-2xl" style={{ perspective: 1500, background: "linear-gradient(145deg, #004FE5 0%, #0038B8 100%)" }}>
-      <div className="cinematic-copy absolute left-6 top-10 z-10 max-w-xs text-center md:left-12 md:top-1/2 md:-translate-y-1/2 md:text-left">
-        <p className="mb-3 font-mono text-xs uppercase tracking-[.3em] text-blue-200/60">Wizard investigation</p>
-        <h2 className="text-3xl font-bold tracking-tight md:text-5xl">AI writes the code. Wizard checks the reality.</h2>
-        <p className="mt-5 text-sm leading-relaxed text-blue-100/70 md:text-base">Reads. Executes. Observes. Verifies.</p>
-      </div>
-      <div ref={laptop} className="cinematic-laptop relative z-20 mt-24 w-[82vw] max-w-[680px] transform-style-3d">
-        <div className="rounded-t-2xl border-8 border-zinc-700 bg-zinc-950 p-3 shadow-2xl md:rounded-t-3xl md:border-[14px] md:p-5">
-          <div className="aspect-[16/10] overflow-hidden rounded-lg bg-[#07101f] p-4 font-mono text-[9px] leading-5 text-blue-100 md:p-8 md:text-sm">
-            <p className="cinematic-terminal-line text-blue-400">$ wizard inspect .</p><p className="cinematic-terminal-line">Scanning repository...</p><p className="cinematic-terminal-line">Reading package.json</p><p className="cinematic-terminal-line">Mapping dependencies...</p><p className="cinematic-terminal-line">Detecting runtime: Node.js 20</p><p className="cinematic-terminal-line">Checking startup command...</p><p className="cinematic-terminal-line">Installing dependencies...</p><p className="cinematic-terminal-line">Starting application...</p><p className="cinematic-terminal-line">Checking port 3000...</p><p className="cinematic-terminal-line">Collecting runtime output...</p><p className="cinematic-terminal-line text-emerald-400">Wizard verified this repository.</p>
+  return (
+    <section ref={root} className={cn("relative min-h-[3200px] w-full overflow-hidden bg-transparent font-sans", className)}>
+      <div className="sticky top-0 flex min-h-screen items-center justify-center px-3 py-6 sm:px-6 lg:px-10">
+        <div data-scene-card className="relative flex min-h-[calc(100vh-3rem)] w-full max-w-[1440px] items-center justify-center overflow-hidden rounded-[28px] border border-white/15 text-white shadow-2xl sm:min-h-[calc(100vh-4rem)] sm:rounded-[40px]" style={{ perspective: 1500 }}>
+          <MeshGradient
+            speed={0.7}
+            colors={["#2452F1", "#022474", "#163DB9", "#0B1D99"]}
+            distortion={0.8}
+            swirl={0.1}
+            grainMixer={0}
+            grainOverlay={0}
+            className="absolute inset-0 h-full w-full"
+          />
+          <div className="absolute inset-0 bg-[#022474]/20" />
+
+          <div data-scene-copy className="absolute left-6 top-8 z-10 max-w-[320px] text-center sm:left-10 sm:top-12 sm:text-left lg:left-16 lg:top-1/2 lg:-translate-y-1/2">
+            <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.3em] text-blue-100/70 sm:text-xs">Wizard investigation</p>
+            <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">AI writes the code. Wizard checks the reality.</h2>
+            <p className="mt-5 text-sm leading-relaxed text-blue-50/80 sm:text-base">Reads. Executes. Observes. Verifies.</p>
+          </div>
+
+          <div ref={laptop} data-scene-laptop className="relative z-20 mt-32 w-[92vw] max-w-[680px] transform-style-3d sm:mt-20 lg:ml-52 lg:mt-8">
+            <div className="rounded-t-2xl border-8 border-zinc-700 bg-zinc-950 p-2 shadow-2xl sm:rounded-t-3xl sm:border-[14px] sm:p-5">
+              <div className="aspect-[16/10] overflow-hidden rounded-lg bg-[#07101f] p-3 font-mono text-[8px] leading-[1.65] text-blue-100 sm:p-6 sm:text-xs md:text-sm">
+                {terminalLines.map((line, index) => (
+                  <p key={line} data-terminal-line className={index === 0 ? "text-blue-400" : index === terminalLines.length - 1 ? "text-emerald-400" : undefined}>{line}</p>
+                ))}
+              </div>
+            </div>
+            <div className="mx-auto h-3 w-[112%] -translate-x-[5%] rounded-b-xl bg-gradient-to-b from-zinc-500 to-zinc-800 shadow-xl sm:h-5" />
+          </div>
+
+          <div className="absolute bottom-5 left-4 right-4 z-30 grid gap-3 sm:bottom-10 sm:left-10 sm:right-10 sm:grid-cols-2 lg:left-16 lg:right-16">
+            <div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Repository scan · Runtime verified</div>
+            <div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Evidence collected</div>
           </div>
         </div>
-        <div className="mx-auto h-3 w-[112%] -translate-x-[5%] rounded-b-xl bg-gradient-to-b from-zinc-500 to-zinc-800 shadow-xl md:h-5" />
       </div>
-      <div className="absolute bottom-5 left-4 right-4 z-30 flex flex-col gap-3 sm:bottom-10 sm:left-12 sm:right-12 sm:flex-row sm:justify-between">
-        <div className="cinematic-badge rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Repository scan · Runtime verified</div>
-        <div className="cinematic-badge rounded-xl border border-white/10 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Evidence collected</div>
-      </div>
-    </div>
-  </section>
+    </section>
+  )
 }

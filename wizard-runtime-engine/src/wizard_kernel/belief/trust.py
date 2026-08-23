@@ -64,6 +64,10 @@ def source_tier_for_tool(tool_name: str) -> SourceTier:
     """Infer evidence source tier from the tool that produced the observation."""
     if tool_name in ("execute_command", "check_port", "start_process", "read_process"):
         return "execution"
+    # Live browser interaction is execution-tier evidence (a real page, right now),
+    # exactly like running a command against a live system.
+    if tool_name.startswith("browser_"):
+        return "execution"
     if tool_name in ("read_file", "list_tree", "search_files", "path_exists"):
         return "config_parse"
     return "documentation"

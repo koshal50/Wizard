@@ -15,6 +15,10 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.6"]
+# Agentic browser (opt-in). The ONLY new dependency; uvicorn[standard] already
+# bundles websockets, so the screencast endpoint needs no new server dep.
+# After install:  playwright install chromium
+browser = ["playwright>=1.48"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -10,13 +10,17 @@ _REGISTERED_TOOLS = frozenset({
     "list_tree", "read_file", "search_files",
     "execute_command", "check_port", "path_exists",
     "start_process", "read_process", "kill_process", "list_processes",
+    # Agentic browser — a browser action is just another tool (opt-in).
+    "browser_navigate", "browser_snapshot", "browser_click",
+    "browser_type", "browser_back", "browser_extract",
 })
 
 
 class ToolExecutor:
-    def __init__(self, sandbox: SandboxRuntime, repo_path: str) -> None:
+    def __init__(self, sandbox: SandboxRuntime, repo_path: str, browser=None) -> None:
         self._sandbox = sandbox
         self._repo = Path(repo_path).resolve()
+        self._browser = browser  # BrowserRuntime | None — set only when browser_enabled
 
     def execute(self, action: dict, _: str | None = None) -> dict:
         """Main dispatch called from the investigation loop."""
@@ -123,3 +127,50 @@ class ToolExecutor:
         processes = [p.model_dump() for p in self._sandbox.list_processes()]
         return {"ok": True, "data": {"processes": processes, "count": len(processes)},
                 "error": None, "meta": {}}
+
+    # ── Agentic browser tools ────────────────────────────────────────────────
+    # A browser action is just another tool: it returns the same {ok,data,error,meta}
+    # envelope and any Playwright failure (timeout, missing element) propagates to
+    # execute()'s except clause → Observation, never a crash (invariant 4).
+
+    def _browser_ready(self) -> dict | None:
+        if self._browser is None:
+            return {"ok": False, "error": "browser not enabled for this investigation",
+                    "data": None, "meta": {}}
+        return None
+
+    def _tool_browser_navigate(self, url: str) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        data = self._browser.navigate(url)
+        return {"ok": True, "data": data, "error": None, "meta": {"url": data.get("url")}}
+
+    def _tool_browser_snapshot(self) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        data = self._browser.snapshot()
+        return {"ok": True, "data": data, "error": None, "meta": {"url": data.get("url")}}
+
+    def _tool_browser_click(self, selector: str) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        data = self._browser.click(selector)
+        return {"ok": True, "data": data, "error": None, "meta": {"selector": selector}}
+
+    def _tool_browser_type(self, selector: str, text: str) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        data = self._browser.fill(selector, text)
+        return {"ok": True, "data": data, "error": None, "meta": {"selector": selector}}
+
+    def _tool_browser_back(self) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        data = self._browser.back()
+        return {"ok": True, "data": data, "error": None, "meta": {"url": data.get("url")}}
+
+    def _tool_browser_extract(self) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        data = self._browser.extract()
+        return {"ok": True, "data": data, "error": None, "meta": {"url": data.get("url")}}

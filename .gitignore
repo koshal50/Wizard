@@ -1,2 +1,6 @@
 .agents
 wizard-runtime-engine/wizard-context-engine-final-architecture.md
+wizard-runtime-engine/agentic-browser-architecture.md
+.wizard
+.pytest_cache
+.claude

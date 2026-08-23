@@ -217,6 +217,47 @@ def _extract_tree(obs: Observation) -> list[ExtractResult]:
     return [ExtractResult("FILESYSTEM", "total_visible_files", count)]
 
 
+# ── Agentic browser extractors ────────────────────────────────────────────────
+# Browser observations carry the tool envelope's `data` dict (url/title/status,
+# plus snapshot/text/links). Claims are typed "WEB"; browser evidence is
+# execution-tier (see trust.source_tier_for_tool), so these can carry verify goals.
+
+@register("browser_action")
+def _extract_browser_action(obs: Observation) -> list[ExtractResult]:
+    data = obs.payload.get("data", {}) or {}
+    url = data.get("url")
+    if not url:
+        return []
+    results = [ExtractResult("WEB", "current_url", url)]
+    status = data.get("status")
+    if status is not None:
+        results.append(ExtractResult(
+            "WEB", f"http_status:{url}", status,
+            support_type="support" if 200 <= int(status) < 400 else "contradict",
+        ))
+    if title := data.get("title"):
+        results.append(ExtractResult("WEB", "page_title", title))
+    return results
+
+
+@register("page_content")
+def _extract_page_content(obs: Observation) -> list[ExtractResult]:
+    data = obs.payload.get("data", {}) or {}
+    url = data.get("url")
+    if not url:
+        return []
+    results = [ExtractResult("WEB", "current_url", url)]
+    if title := data.get("title"):
+        results.append(ExtractResult("WEB", "page_title", title))
+    if (node_count := data.get("node_count")) is not None:
+        results.append(ExtractResult("WEB", "a11y_node_count", node_count))
+    if (links := data.get("links")) is not None:
+        results.append(ExtractResult("WEB", "link_count", len(links)))
+    if data.get("text"):
+        results.append(ExtractResult("WEB", "has_text_content", True))
+    return results
+
+
 # ── Cognitive extraction (Phase 6) ────────────────────────────────────────────
 
 def extract_cognitive(obs: Observation, planner_interpret_fn=None) -> list[ExtractResult]:

@@ -60,6 +60,12 @@ _TOOL_TO_OBS_TYPE: dict[str, str] = {
     "path_exists":     "path_check",
     "start_process":   "command_result",
     "read_process":    "command_result",
+    "browser_navigate": "browser_action",
+    "browser_click":    "browser_action",
+    "browser_type":     "browser_action",
+    "browser_back":     "browser_action",
+    "browser_snapshot": "page_content",
+    "browser_extract":  "page_content",
 }
 
 # How many nodes complete before the Verifier Agent is consulted
@@ -87,7 +93,10 @@ def run(
     goals = GoalEngine(inv.id)
     obs_store = ObservationStore(inv.id)
     budget = BudgetManager(inv.budget_remaining)
-    validator = ToolRequestValidator(inv.repository_path)
+    validator = ToolRequestValidator(
+        inv.repository_path,
+        allowed_domains=inv.options.get("allowed_domains", []),
+    )
     completed_ids: set[str] = set()
 
     # Context Engine: read-only projection of state into agent context (invariant 3).
@@ -100,12 +109,23 @@ def run(
     sandbox_mode = inv.options.get("sandbox_mode", "local_dev")
     sandbox = get_sandbox(sandbox_mode)
 
+    # Agentic browser — opt-in per investigation (invariant 6: one runtime, never
+    # shared). get_browser does NOT import playwright; only browser.start() does,
+    # so a missing dependency surfaces as a clean investigation failure below.
+    browser = None
+    if inv.options.get("browser_enabled"):
+        from wizard_kernel.world import browser as browser_mod
+        browser = browser_mod.get_browser(inv.options)
+
     from wizard_kernel.ports.agents import get_agents
     explorer, verifier = get_agents(inv.options)
 
     try:
         sandbox.start(inv.repository_path)
-        tools = ToolExecutor(sandbox, inv.repository_path)
+        if browser is not None:
+            browser.start()
+            browser_mod.register_runtime(inv.id, browser)
+        tools = ToolExecutor(sandbox, inv.repository_path, browser=browser)
         _run_loop(inv, manager, planner, explorer, verifier, kg, ev_engine, graph, goals,
                   obs_store, tools, budget, bus, validator, completed_ids, context_engine)
     except Exception as exc:  # noqa: BLE001
@@ -113,6 +133,9 @@ def run(
                        last_event=f"fatal: {exc}", error=str(exc))
     finally:
         sandbox.stop()
+        if browser is not None:
+            browser_mod.unregister_runtime(inv.id)
+            browser.stop()
 
 
 def _run_loop(
@@ -209,7 +232,7 @@ def _run_loop(
         # Context Engine builds the trust-stripped packet (agent contract) plus the
         # modular section view that drives KV-cache ordering + audit (invariant 3).
         ctx = context_engine.build_context("explorer", inv, node, goals, kg, budget, obs_store)
-        tool_action = _resolve_tool_action(node, explorer, ctx.packet, validator, budget)
+        tool_action = _resolve_tool_action(node, explorer, ctx.packet, validator, budget, bus)
 
         if tool_action is None:
             # Validation failed — mark node failed, record the rejection as an observation
@@ -240,6 +263,11 @@ def _run_loop(
             obs_type=_TOOL_TO_OBS_TYPE.get(tool_name, "command_result"),
             payload=payload,
         )
+
+        # Narration plane: discrete browser.* events on the EventBus. Pixels stream
+        # separately over the screencast WebSocket and never enter event history.
+        if tool_name.startswith("browser_") and payload.get("ok"):
+            _emit_browser_narration(bus, tool_name, payload.get("data", {}) or {})
 
         # ── Deterministic hypothesis evaluation (invariant 3 — no LLM needed) ─
         source_tier = source_tier_for_tool(tool_name)
@@ -348,7 +376,7 @@ def _run_loop(
         # The Runtime independently decides how to respond to its assessment.
         if nodes_since_last_verify >= _VERIFIER_INTERVAL:
             nodes_since_last_verify = 0
-            _consult_verifier(inv, verifier, kg, goals, graph, planner)
+            _consult_verifier(inv, verifier, kg, goals, graph, planner, bus)
 
     if budget.is_exhausted():
         bus.emit(event_bus.BudgetExhausted, {"used": budget.used, "total": budget.total})
@@ -377,11 +405,16 @@ def _resolve_tool_action(
     context: dict,
     validator: ToolRequestValidator,
     budget: BudgetManager,
+    bus: event_bus.EventBus,
 ) -> dict | None:
     """Ask the Explorer Agent for a ToolRequest and validate it deterministically.
 
     Returns the sanitised action dict on success, None on validation failure.
     Falls back to the node's own action if the agent fails or returns an invalid request.
+
+    Emits the B8 decision-narration events (agent.decided / tool.rejected) so every
+    watch surface can see WHY the runtime chose an action — not browser-specific,
+    this lights up the file-investigation flow too.
     """
     # Ask the Explorer Agent — it must return a ToolRequest
     try:
@@ -396,9 +429,16 @@ def _resolve_tool_action(
     if agent_request is not None:
         validation = validator.validate(agent_request, budget.remaining)
         if validation.valid:
+            bus.emit(event_bus.AgentDecided, {
+                "node_id": node.id, "source": "explorer",
+                "tool": agent_request.tool, "reason": agent_request.reason,
+            })
             # Use agent's suggested tool with sanitised parameters
             return {"tool": agent_request.tool, "params": validation.sanitised_params}
         else:
+            bus.emit(event_bus.ToolRejected, {
+                "node_id": node.id, "tool": agent_request.tool, "reason": validation.reason,
+            })
             log.warning(
                 "Explorer agent ToolRequest rejected for node %s: %s — falling back to node action",
                 node.id, validation.reason,
@@ -413,8 +453,15 @@ def _resolve_tool_action(
     )
     fallback_validation = validator.validate(fallback_request, budget.remaining)
     if fallback_validation.valid:
+        bus.emit(event_bus.AgentDecided, {
+            "node_id": node.id, "source": "node_plan",
+            "tool": fallback_request.tool, "reason": fallback_request.reason,
+        })
         return {"tool": fallback_request.tool, "params": fallback_validation.sanitised_params}
 
+    bus.emit(event_bus.ToolRejected, {
+        "node_id": node.id, "tool": fallback_request.tool, "reason": fallback_validation.reason,
+    })
     log.error("Fallback node action also failed validation for node %s: %s",
               node.id, fallback_validation.reason)
     return None
@@ -427,6 +474,7 @@ def _consult_verifier(
     goals: GoalEngine,
     graph: InvestigationGraph,
     planner: "PlannerPort",
+    bus: event_bus.EventBus,
 ) -> None:
     """Ask the Verifier Agent to review current claims.
 
@@ -447,6 +495,8 @@ def _consult_verifier(
     if not claims_payload:
         return  # Nothing to review yet
 
+    bus.emit(event_bus.AgentConsulted,
+             {"agent_type": "verifier", "claims_reviewed": len(claims_payload)})
     try:
         assessment = verifier.assess(claims_payload)
     except Exception as exc:  # noqa: BLE001 — verifier failure is non-fatal (invariant 4)
@@ -501,6 +551,27 @@ def _missing_evidence_list(goals: GoalEngine, kg: KnowledgeGraph) -> list[str]:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _emit_browser_narration(bus: event_bus.EventBus, tool_name: str, data: dict) -> None:
+    """Emit the discrete browser.* narration event for a successful browser action.
+
+    Narration only: the live picture streams over the screencast WebSocket and
+    never enters EventBus history (two-plane model — see architecture §1)."""
+    if tool_name in ("browser_navigate", "browser_back"):
+        bus.emit(event_bus.BrowserNavigated, {
+            "url": data.get("url"), "status": data.get("status"), "title": data.get("title"),
+        })
+    elif tool_name in ("browser_click", "browser_type"):
+        bus.emit(event_bus.BrowserActed, {
+            "tool": tool_name, "url": data.get("url"), "selector": data.get("selector"),
+        })
+    elif tool_name in ("browser_snapshot", "browser_extract"):
+        bus.emit(event_bus.BrowserExtracted, {
+            "url": data.get("url"), "title": data.get("title"),
+            "node_count": data.get("node_count"),
+            "link_count": len(data.get("links", []) or []),
+        })
+
 
 def _safe_execute(tools: ToolExecutor, action: dict) -> dict:
     """Invariant 4: any exception becomes an error payload, never a crash."""

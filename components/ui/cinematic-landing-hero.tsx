@@ -2,10 +2,7 @@
 
 import { useEffect, useRef } from "react"
 import { gsap } from "gsap"
-import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { cn } from "@/lib/utils"
-
-gsap.registerPlugin(ScrollTrigger)
 
 export function CinematicHero({ className }: { className?: string }) {
   const root = useRef<HTMLDivElement>(null)
@@ -13,10 +10,15 @@ export function CinematicHero({ className }: { className?: string }) {
   const laptop = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    const scope = root.current
+    if (!scope) return
+
+    gsap.killTweensOf(scope.querySelectorAll("[class*='cinematic-']"))
+
     const ctx = gsap.context(() => {
       gsap.set(".cinematic-card", { y: "110vh", autoAlpha: 1 })
       gsap.set(".cinematic-copy, .cinematic-laptop, .cinematic-badge", { autoAlpha: 0 })
-      const timeline = gsap.timeline({ scrollTrigger: { trigger: root.current, start: "top top", end: "+=4200", pin: true, scrub: 1 } })
+      const timeline = gsap.timeline({ paused: true })
       timeline
         .to(".cinematic-card", { y: 0, duration: 1.5, ease: "power3.inOut" })
         .to(".cinematic-card", { width: "100%", height: "100%", borderRadius: 0, duration: 1 })
@@ -26,6 +28,20 @@ export function CinematicHero({ className }: { className?: string }) {
         .to({}, { duration: 1.6 })
         .to([".cinematic-laptop", ".cinematic-copy", ".cinematic-badge"], { autoAlpha: 0, y: -50, z: -200, duration: 1 })
         .to(".cinematic-card", { y: "-110vh", duration: 1.2, ease: "power3.in" })
+
+      const updateProgress = () => {
+        const bounds = scope.getBoundingClientRect()
+        const progress = Math.min(1, Math.max(0, -bounds.top / (scope.offsetHeight - window.innerHeight)))
+        timeline.progress(progress)
+      }
+
+      updateProgress()
+      window.addEventListener("scroll", updateProgress, { passive: true })
+      window.addEventListener("resize", updateProgress)
+      return () => {
+        window.removeEventListener("scroll", updateProgress)
+        window.removeEventListener("resize", updateProgress)
+      }
     }, root)
     return () => ctx.revert()
   }, [])
@@ -39,7 +55,7 @@ export function CinematicHero({ className }: { className?: string }) {
     return () => removeEventListener("mousemove", move)
   }, [])
 
-  return <section ref={root} className={cn("relative flex h-screen w-screen items-center justify-center overflow-hidden bg-transparent", className)}>
+  return <section ref={root} className={cn("relative flex min-h-[4200px] w-screen items-start justify-center overflow-hidden bg-transparent", className)}>
     <div ref={card} className="cinematic-card absolute flex h-[92vh] w-[92vw] items-center justify-center overflow-hidden rounded-[32px] border border-white/10 bg-[#004FE5] text-white shadow-2xl" style={{ perspective: 1500 }}>
       <div className="cinematic-copy absolute left-6 top-10 z-10 max-w-xs text-center md:left-12 md:top-1/2 md:-translate-y-1/2 md:text-left">
         <p className="mb-3 font-mono text-xs uppercase tracking-[.3em] text-blue-200/60">Wizard investigation</p>

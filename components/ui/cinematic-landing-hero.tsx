@@ -39,8 +39,8 @@ export function CinematicHero({ className }: { className?: string }) {
     return () => removeEventListener("mousemove", move)
   }, [])
 
-  return <section ref={root} className={cn("relative flex h-screen w-screen items-center justify-center overflow-hidden", className)}>
-    <div ref={card} className="cinematic-card absolute flex h-[92vh] w-[92vw] items-center justify-center overflow-hidden rounded-[32px] border border-white/10 bg-gradient-to-br from-[#162c6d] to-[#0a101d] text-white shadow-2xl" style={{ perspective: 1500 }}>
+  return <section ref={root} className={cn("relative flex h-screen w-screen items-center justify-center overflow-hidden bg-transparent", className)}>
+    <div ref={card} className="cinematic-card absolute flex h-[92vh] w-[92vw] items-center justify-center overflow-hidden rounded-[32px] border border-white/10 bg-[#004FE5] text-white shadow-2xl" style={{ perspective: 1500 }}>
       <div className="cinematic-copy absolute left-6 top-10 z-10 max-w-xs text-center md:left-12 md:top-1/2 md:-translate-y-1/2 md:text-left">
         <p className="mb-3 font-mono text-xs uppercase tracking-[.3em] text-blue-200/60">Wizard investigation</p>
         <h2 className="text-3xl font-bold tracking-tight md:text-5xl">AI writes the code. Wizard checks the reality.</h2>

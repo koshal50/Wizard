@@ -67,7 +67,7 @@ export default function Hero() {
 		<>
 			<div className="relative flex min-h-screen flex-col items-center justify-center px-4 sm:px-6 py-12 sm:py-20">
 				{/* Redshift animated ASCII background */}
-					<div className="absolute inset-0 z-0 overflow-hidden bg-black">
+					<div className="fixed inset-0 z-0 overflow-hidden bg-black">
 						<AsciiArt className="pointer-events-none h-full w-full" />
 					</div>
 

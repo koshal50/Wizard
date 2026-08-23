@@ -26,8 +26,9 @@ export function CinematicHero({ className }: { className?: string }) {
           start: "top top",
           end: "bottom bottom",
           scrub: 1,
-          pin: true,
-          anticipatePin: 1,
+          // CSS sticky keeps React's DOM tree stable. ScrollTrigger's pin spacer
+          // mutates the DOM and can race React reconciliation during Fast Refresh.
+          pin: false,
           invalidateOnRefresh: true,
         },
       })
@@ -43,7 +44,6 @@ export function CinematicHero({ className }: { className?: string }) {
         .to([".cinematic-laptop", ".cinematic-copy", ".cinematic-badge"], { autoAlpha: 0, y: -50, z: -200, duration: 1 })
         .to(".cinematic-card", { y: "-110vh", duration: 1.2, ease: "power3.in" })
 
-      requestAnimationFrame(() => ScrollTrigger.refresh())
     }, root)
     return () => ctx.revert()
   }, [])
@@ -58,7 +58,7 @@ export function CinematicHero({ className }: { className?: string }) {
   }, [])
 
   return <section ref={root} className={cn("relative flex min-h-[4200px] w-screen items-start justify-center overflow-hidden bg-transparent font-sans", className)}>
-    <div ref={card} className="cinematic-card absolute flex h-[92vh] w-[92vw] items-center justify-center overflow-hidden rounded-[32px] border border-white/10 text-white shadow-2xl" style={{ perspective: 1500, background: "linear-gradient(145deg, #004FE5 0%, #0038B8 100%)" }}>
+    <div ref={card} className="cinematic-card sticky top-0 flex h-[92vh] w-[92vw] items-center justify-center overflow-hidden rounded-[32px] border border-white/10 text-white shadow-2xl" style={{ perspective: 1500, background: "linear-gradient(145deg, #004FE5 0%, #0038B8 100%)" }}>
       <div className="cinematic-copy absolute left-6 top-10 z-10 max-w-xs text-center md:left-12 md:top-1/2 md:-translate-y-1/2 md:text-left">
         <p className="mb-3 font-mono text-xs uppercase tracking-[.3em] text-blue-200/60">Wizard investigation</p>
         <h2 className="text-3xl font-bold tracking-tight md:text-5xl">AI writes the code. Wizard checks the reality.</h2>

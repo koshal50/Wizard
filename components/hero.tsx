@@ -119,11 +119,11 @@ export default function Hero() {
 							layout
 							className="relative flex h-full w-full overflow-hidden bg-[#004FE5] transform-gpu will-change-transform"
 						>
-							<div className="h-full w-full overflow-y-auto scrollbar-hide">
+							<div className="h-full w-full overflow-y-auto overscroll-contain scrollbar-hide">
 								<motion.div
 									initial={{ opacity: 0 }}
 									animate={{ opacity: 1 }}
-									className="relative py-8 z-10 min-h-full flex flex-col lg:flex-row w-full max-w-[1100px] mx-auto items-center p-6 sm:p-10 lg:p-16 gap-8 lg:gap-16"
+									className="relative z-10 flex min-h-full w-full max-w-[1100px] flex-col items-start gap-8 px-6 py-10 pb-24 sm:p-10 lg:flex-row lg:items-center lg:gap-16 lg:p-16"
 								>
 <div className="flex-1 flex flex-col justify-center space-y-3 w-full">
 										<h2 className="text-3xl sm:text-4xl lg:text-5xl font-medium text-white leading-none tracking-[-0.03em]">
@@ -278,7 +278,7 @@ export default function Hero() {
 								exit={{ opacity: 0 }}
 								layout={false}
 								transition={{ duration: 0.15, delay: 0.05 }}
-								className="absolute h-full inset-0 overflow-hidden pointer-events-none"
+								className="absolute inset-0 z-0 h-full overflow-hidden pointer-events-none"
 								style={{
 									borderRadius: '24px',
 								}}

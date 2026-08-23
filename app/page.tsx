@@ -15,7 +15,7 @@ function StoreBadge({ store, detail }: { store: string; detail: string }) {
 
 function WizardFooter() {
   return (
-    <footer id="download" className="border-t border-white/10 bg-[#022474] px-6 py-14 font-sans text-white sm:px-10 sm:py-20">
+    <footer id="download" className="relative z-40 border-t border-white/15 bg-[#022474] px-6 py-14 font-sans text-white sm:px-10 sm:py-20">
       <div className="mx-auto flex max-w-[1440px] flex-col gap-10 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-xl">
           <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.3em] text-blue-200/70">Build with confidence</p>

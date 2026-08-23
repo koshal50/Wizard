@@ -1,0 +1,20 @@
+{
+  "name": "wizard-investigation-planner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Wizard AI Engine — LLM-powered Investigation Planner inside a deterministic Runtime (two-graph architecture).",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test --test-reporter=spec \"tests/**/*.test.ts\"",
+    "wizard": "node src/cli/wizard.ts",
+    "demo": "node src/cli/wizard.ts verify runtime ./sample-repos/sample-node-project"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "@types/node": "26.1.1"
+  }
+}

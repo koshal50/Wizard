@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+package*node_modules/
+# Build output
+dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+.env.local
+
+# Investigation runtime artifacts
+.wizard/
+investigations/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+
+.agents
+output/

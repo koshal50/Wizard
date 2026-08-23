@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node /tmp/probe.ts)",
+      "Bash(npx --offline tsc --version)",
+      "Bash(node _smoke_manifest.ts)",
+      "Bash(node node_modules/typescript/bin/tsc -p tsconfig.json)",
+      "Bash(echo \"TSC-EXIT=$?\")",
+      "Bash(node _smoke_llm.ts)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(rm -f _smoke_llm.ts)",
+      "Bash(node _smoke_planner.ts)",
+      "Bash(rm -f _smoke_planner.ts)",
+      "Bash(xargs wc -l)",
+      "Bash(mkdir -p /tmp/claude-1000/C--Wizard-New/3b9fb050-8e73-a2e4-047a-1a56dd33ae83/scratchpad)",
+      "Bash(printf 'const x: number = 41; console.log\\(\"ts-ok\", x+1\\);\\\\n')",
+      "Bash(node /tmp/claude-1000/C--Wizard-New/3b9fb050-8e73-a2e4-047a-1a56dd33ae83/scratchpad/probe.ts)",
+      "Bash(printf 'import { createIdFactory } from \"./src/util/ids.ts\";\\\\nconst f=createIdFactory\\(\\);\\\\nconsole.log\\(\"import-ok\", f.next\\(\"node\"\\), f.next\\(\"node\"\\)\\);\\\\n')",
+      "Bash(node /tmp/claude-1000/C--Wizard-New/3b9fb050-8e73-a2e4-047a-1a56dd33ae83/scratchpad/probe2.ts)",
+      "Bash(node \"_probe_real.ts\")",
+      "Bash(node src/cli/wizard.ts verify runtime dependencies ./sample-repos/sample-node-project)",
+      "Bash(echo \"WIZARD_EXIT: $?\")",
+      "Bash(node -e \"const fs=require\\('fs'\\);const d='./sample-repos/sample-node-project/.wizard';const md=fs.statSync\\(d+'/verification_report.md'\\);const snap=JSON.parse\\(fs.readFileSync\\(d+'/investigation.json','utf8'\\)\\);console.log\\('report bytes:',md.size\\);console.log\\('snapshot keys:',Object.keys\\(snap\\).join\\(', '\\)\\);console.log\\('snapshot state:',snap.state,'claims:',snap.claims.length,'nodes:',snap.investigationGraph.nodes.length\\);\")",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./package.json'\\).scripts,null,2\\)\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(echo \"TSC_EXIT: $?\")",
+      "Bash(npm test *)",
+      "Bash(node -e 'const fs=require\\('\\\\''fs'\\\\''\\); const j=JSON.parse\\(fs.readFileSync\\('\\\\''__TRACKED_VAR__/investigation.json'\\\\'','\\\\''utf8'\\\\''\\)\\); console.log\\('\\\\''snapshot OK — claims:'\\\\'', j.claims.length, '\\\\''| goals:'\\\\'', j.statistics.goalsSatisfied+'\\\\''/'\\\\''+j.statistics.goalsTotal, '\\\\''| state:'\\\\'', j.state, '\\\\''| terminationReason:'\\\\'', JSON.stringify\\(j.terminationReason\\)\\);')",
+      "Bash(node -e 'const fs=require\\('\\\\''fs'\\\\''\\); const md=fs.readFileSync\\('\\\\''__TRACKED_VAR__/verification_report.md'\\\\'','\\\\''utf8'\\\\''\\); console.log\\('\\\\''report bytes:'\\\\'', md.length, '\\\\''| leaks SECRET?'\\\\'', md.includes\\('\\\\''SECRET'\\\\''\\)\\); console.log\\(md.split\\('\\\\''\\\\n'\\\\''\\).slice\\(0,6\\).join\\('\\\\''\\\\n'\\\\''\\)\\);')"
+    ]
+  }
+}

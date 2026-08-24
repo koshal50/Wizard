@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wizard — Live Browser</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3;
+    --muted: #8b949e; --accent: #2f81f7; --ok: #3fb950; --bad: #f85149; --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+         background: var(--bg); color: var(--fg); height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+           background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  header .id { color: var(--muted); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .dot.off { background: var(--bad); }
+  label.toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+                 padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; }
+  label.toggle.active { border-color: var(--accent); color: var(--accent); }
+  main { flex: 1; display: grid; grid-template-columns: 380px 1fr; min-height: 0; }
+  #log { overflow-y: auto; padding: 10px; border-right: 1px solid var(--border); background: #0b0f14; }
+  .ev { padding: 5px 8px; margin-bottom: 5px; border-left: 3px solid var(--border);
+        border-radius: 3px; background: var(--panel); word-break: break-word; }
+  .ev .t { color: var(--muted); font-size: 11px; }
+  .ev .ttl { font-weight: 600; }
+  .ev.decided  { border-left-color: var(--accent); }
+  .ev.rejected { border-left-color: var(--bad); }
+  .ev.nav      { border-left-color: var(--ok); }
+  .ev.acted    { border-left-color: var(--warn); }
+  .ev.claim    { border-left-color: #a371f7; }
+  .ev.goal     { border-left-color: var(--ok); }
+  .ev .reason  { color: var(--muted); }
+  #stage { position: relative; display: flex; align-items: center; justify-content: center;
+           background: #010409; min-height: 0; overflow: hidden; }
+  #frame { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #frame.codrive { cursor: crosshair; outline: 2px solid var(--accent); }
+  #placeholder { position: absolute; color: var(--muted); text-align: center; padding: 20px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="wsdot"></span>
+    <h1>Wizard Live Browser</h1>
+    <span class="id" id="invid"></span>
+    <span class="spacer"></span>
+    <label class="toggle" id="takeover"><span class="dot off" id="tdot"></span> Take over</label>
+  </header>
+  <main>
+    <section id="log"></section>
+    <section id="stage">
+      <div id="placeholder">waiting for a live browser frame…<br />
+        <small>the agent's browser streams here when it navigates</small></div>
+      <img id="frame" alt="live browser" hidden />
+    </section>
+  </main>
+
+<script>
+(() => {
+  "use strict";
+  // Investigation id from /v1/investigations/{id}/live
+  const parts = location.pathname.split("/").filter(Boolean);
+  const invId = parts[parts.indexOf("investigations") + 1] || "";
+  document.getElementById("invid").textContent = invId;
+
+  const logEl = document.getElementById("log");
+  const frameEl = document.getElementById("frame");
+  const placeholder = document.getElementById("placeholder");
+  const wsdot = document.getElementById("wsdot");
+  const takeoverBtn = document.getElementById("takeover");
+  const tdot = document.getElementById("tdot");
+
+  // ── Narration plane: poll /events (text — works in every surface) ──────────
+  const CLASS = {
+    "agent.decided": "decided", "tool.rejected": "rejected",
+    "browser.navigated": "nav", "browser.acted": "acted", "browser.extracted": "nav",
+    "claim.admitted": "claim", "goal.satisfied": "goal",
+  };
+  function render(ev) {
+    const p = ev.payload || {};
+    const row = document.createElement("div");
+    row.className = "ev " + (CLASS[ev.event_type] || "");
+    let body = "";
+    switch (ev.event_type) {
+      case "agent.decided":
+        body = `<span class="ttl">▸ ${esc(p.tool)}</span> <span class="t">(${esc(p.source)})</span>` +
+               (p.reason ? `<div class="reason">${esc(p.reason)}</div>` : ""); break;
+      case "tool.rejected":
+        body = `<span class="ttl">✗ ${esc(p.tool)} rejected</span>` +
+               (p.reason ? `<div class="reason">${esc(p.reason)}</div>` : ""); break;
+      case "browser.navigated":
+        body = `<span class="ttl">🌐 ${esc(p.title || p.url)}</span>` +
+               `<div class="reason">${esc(p.url)} · HTTP ${esc(p.status)}</div>`; break;
+      case "browser.acted":
+        body = `<span class="ttl">🖱 ${esc(p.tool)}</span> <span class="reason">${esc(p.selector || "")}</span>`; break;
+      case "browser.extracted":
+        body = `<span class="ttl">📄 ${esc(p.title || p.url)}</span>` +
+               `<div class="reason">${esc(p.node_count)} a11y nodes · ${esc(p.link_count)} links</div>`; break;
+      case "claim.admitted":
+        body = `<span class="ttl">＋ claim</span> <span class="reason">${esc(p.claim_type)}: ${esc(p.key)}</span>`; break;
+      case "goal.satisfied":
+        body = `<span class="ttl">✓ goal ${esc(p.goal_name)}</span>`; break;
+      default:
+        body = `<span class="ttl">${esc(ev.event_type)}</span>`;
+    }
+    row.innerHTML = body + `<div class="t">seq ${ev.seq}</div>`;
+    logEl.appendChild(row);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+  let sinceSeq = 0;
+  async function pollEvents() {
+    try {
+      const r = await fetch(`/v1/investigations/${invId}/events?since_seq=${sinceSeq}`);
+      if (r.ok) {
+        const evs = await r.json();
+        for (const ev of evs) { render(ev); sinceSeq = Math.max(sinceSeq, ev.seq); }
+      }
+    } catch (_) { /* transient — keep polling */ }
+    setTimeout(pollEvents, 1000);
+  }
+  pollEvents();
+
+  // ── Pixel plane: screencast WebSocket (only web / VS Code webview) ─────────
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  let ws;
+  function connect() {
+    ws = new WebSocket(`${proto}//${location.host}/v1/investigations/${invId}/screencast`);
+    ws.onopen = () => wsdot.classList.add("on");
+    ws.onclose = () => { wsdot.classList.remove("on"); setTimeout(connect, 2000); };
+    ws.onerror = () => wsdot.classList.remove("on");
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === "frame") {
+        frameEl.hidden = false; placeholder.hidden = true;
+        // data: URI image — the target page's JS never runs in this browser.
+        frameEl.src = "data:image/jpeg;base64," + msg.data;
+      } else if (msg.type === "error") {
+        placeholder.innerHTML = esc(msg.message);
+      }
+    };
+  }
+  connect();
+
+  // ── Co-drive: send input ONLY while "take over" is active (default off) ────
+  let codrive = false;
+  takeoverBtn.addEventListener("click", () => {
+    codrive = !codrive;
+    takeoverBtn.classList.toggle("active", codrive);
+    tdot.classList.toggle("on", codrive);
+    tdot.classList.toggle("off", !codrive);
+    frameEl.classList.toggle("codrive", codrive);
+    if (codrive) frameEl.focus();
+  });
+  const send = (m) => { if (codrive && ws && ws.readyState === 1) ws.send(JSON.stringify(m)); };
+  function coords(e) {
+    const r = frameEl.getBoundingClientRect();
+    return {
+      x: (e.clientX - r.left) / r.width * (frameEl.naturalWidth || r.width),
+      y: (e.clientY - r.top) / r.height * (frameEl.naturalHeight || r.height),
+    };
+  }
+  let lastMove = 0;
+  frameEl.addEventListener("mousemove", (e) => {
+    const now = performance.now(); if (now - lastMove < 40) return; lastMove = now;
+    const c = coords(e); send({ kind: "mouse", type: "mouseMoved", x: c.x, y: c.y });
+  });
+  frameEl.addEventListener("mousedown", (e) => {
+    const c = coords(e); send({ kind: "mouse", type: "mousePressed", x: c.x, y: c.y, button: "left", clickCount: 1 }); });
+  frameEl.addEventListener("mouseup", (e) => {
+    const c = coords(e); send({ kind: "mouse", type: "mouseReleased", x: c.x, y: c.y, button: "left", clickCount: 1 }); });
+  frameEl.setAttribute("tabindex", "0");
+  frameEl.addEventListener("keydown", (e) => {
+    if (!codrive) return;
+    e.preventDefault();
+    if (e.key.length === 1) send({ kind: "key", type: "char", text: e.key, key: e.key });
+    else send({ kind: "key", type: "keyDown", key: e.key, text: "" });
+  });
+})();
+</script>
+</body>
+</html>

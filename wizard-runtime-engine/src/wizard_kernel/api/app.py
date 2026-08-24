@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from wizard_kernel.api import routes_health, routes_investigations
+from wizard_kernel.api import routes_health, routes_investigations, routes_browser
 from wizard_kernel.api.deps import get_manager
 
 log = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(routes_health.router)
     app.include_router(routes_investigations.router)
+    app.include_router(routes_browser.router)
     return app
 
 

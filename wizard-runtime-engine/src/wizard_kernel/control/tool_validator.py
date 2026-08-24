@@ -31,12 +31,22 @@ _PATH_TOOLS = frozenset({"read_file", "path_exists", "search_files"})
 # Tools that execute arbitrary commands — require extra scrutiny
 _EXEC_TOOLS = frozenset({"execute_command", "start_process"})
 
+# Browser tools — a browser action is just another tool. Navigation is URL-guarded
+# (the egress analog of the path-traversal guard); ALL browser tools are excluded
+# from dedup because identical params (e.g. browser_snapshot {}) address a *changed*
+# live page — deduping them would wrongly block legitimate re-observation.
+_URL_TOOLS = frozenset({"browser_navigate"})
+_BROWSER_TOOLS = frozenset({
+    "browser_navigate", "browser_snapshot", "browser_click",
+    "browser_type", "browser_back", "browser_extract",
+})
+
 # The full set of tools the Runtime accepts from agents
 _ALLOWED_TOOLS = frozenset({
     "list_tree", "read_file", "search_files",
     "execute_command", "check_port", "path_exists",
     "start_process", "read_process", "kill_process", "list_processes",
-})
+}) | _BROWSER_TOOLS
 
 
 @dataclass
@@ -49,10 +59,12 @@ class ValidationResult:
 class ToolRequestValidator:
     """Per-investigation validator. Holds dedup state — never shared across investigations."""
 
-    def __init__(self, workspace_root: str) -> None:
+    def __init__(self, workspace_root: str, allowed_domains: list[str] | None = None) -> None:
         self._root = Path(workspace_root).resolve()
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
+        # Fail-closed egress allowlist for browser_navigate. Empty → block all navigation.
+        self._allowed_domains = tuple(allowed_domains or ())
 
     def validate(self, request: ToolRequest, budget_remaining: int) -> ValidationResult:
         """Run all checks. Returns a ValidationResult with valid=True on pass."""
@@ -76,22 +88,32 @@ class ToolRequestValidator:
                 return result
             params = result.sanitised_params  # use the resolved, safe params
 
+        # 3b. URL egress guard for browser navigation (analog of path traversal)
+        if request.tool in _URL_TOOLS:
+            url_result = self._validate_url(params)
+            if not url_result.valid:
+                return url_result
+
         # 4. Structural validation — required parameters present
         struct_result = self._validate_structure(request.tool, params)
         if not struct_result.valid:
             return struct_result
 
-        # 5. Duplicate detection — fingerprint (tool + canonical params)
-        fingerprint = self._fingerprint(request.tool, params)
-        if fingerprint in self._seen_fingerprints:
-            return ValidationResult(
-                valid=False,
-                reason=(
-                    f"Duplicate request: {request.tool!r} with identical parameters has already "
-                    "been executed in this investigation. Agent may be in a cycle."
-                ),
-            )
-        self._seen_fingerprints.add(fingerprint)
+        # 5. Duplicate detection — fingerprint (tool + canonical params).
+        #    Browser tools are EXCLUDED: identical params address a changed live
+        #    page, so deduping them would wrongly block legitimate re-observation.
+        #    Budget still guarantees termination (invariant 7).
+        if request.tool not in _BROWSER_TOOLS:
+            fingerprint = self._fingerprint(request.tool, params)
+            if fingerprint in self._seen_fingerprints:
+                return ValidationResult(
+                    valid=False,
+                    reason=(
+                        f"Duplicate request: {request.tool!r} with identical parameters has already "
+                        "been executed in this investigation. Agent may be in a cycle."
+                    ),
+                )
+            self._seen_fingerprints.add(fingerprint)
 
         return ValidationResult(valid=True, sanitised_params=params)
 
@@ -122,6 +144,38 @@ class ToolRequestValidator:
         safe_params["path"] = str(resolved.relative_to(self._root))
         return ValidationResult(valid=True, sanitised_params=safe_params)
 
+    def _validate_url(self, params: dict) -> ValidationResult:
+        """Enforce that a navigation URL is http(s) and its host is allow-listed.
+
+        Fail-closed: an empty allowlist blocks ALL navigation. A host matches only
+        if it equals an allowed domain or is a subdomain of it — ``example.com``
+        admits ``docs.example.com`` but never ``evil-example.com``."""
+        from urllib.parse import urlparse
+
+        raw_url = params.get("url", "")
+        if not raw_url:
+            return ValidationResult(valid=False, reason="browser_navigate requires a 'url' parameter.")
+        parsed = urlparse(raw_url)
+        if parsed.scheme not in ("http", "https"):
+            return ValidationResult(
+                valid=False,
+                reason=f"Disallowed URL scheme {parsed.scheme!r}: only http/https may be navigated.",
+            )
+        host = (parsed.hostname or "").lower()
+        if not self._allowed_domains:
+            return ValidationResult(
+                valid=False,
+                reason="Navigation blocked: allowed_domains is empty (fail-closed egress policy).",
+            )
+        for domain in self._allowed_domains:
+            d = domain.lower().lstrip(".")
+            if host == d or host.endswith("." + d):
+                return ValidationResult(valid=True, sanitised_params=params)
+        return ValidationResult(
+            valid=False,
+            reason=f"Navigation to {host!r} blocked: not in allowed_domains {list(self._allowed_domains)}.",
+        )
+
     def _validate_structure(self, tool: str, params: dict) -> ValidationResult:
         """Check that required parameters for known tools are present and typed."""
         required: dict[str, type] = {}
@@ -135,6 +189,12 @@ class ToolRequestValidator:
             required = {"handle_id": str}
         elif tool == "check_port":
             required = {"port": int}
+        elif tool == "browser_navigate":
+            required = {"url": str}
+        elif tool == "browser_click":
+            required = {"selector": str}
+        elif tool == "browser_type":
+            required = {"selector": str, "text": str}
 
         for param_name, param_type in required.items():
             if param_name not in params:

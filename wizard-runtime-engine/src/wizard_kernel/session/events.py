@@ -29,6 +29,10 @@ BudgetExhausted      = "budget.exhausted"
 ReportGenerated      = "report.generated"
 AgentConsulted       = "agent.consulted"
 ToolRejected         = "tool.rejected"
+AgentDecided         = "agent.decided"        # B8: the decision itself (not browser-specific)
+BrowserNavigated     = "browser.navigated"    # narration plane — discrete browser events
+BrowserActed         = "browser.acted"
+BrowserExtracted     = "browser.extracted"
 
 
 @dataclass

@@ -1,11 +1,10 @@
 import Hero from "@/components/hero"
-import { CinematicHero } from "@/components/ui/cinematic-landing-hero"
-import { MeshGradient } from "@paper-design/shaders-react"
+import { CinematicHero, SafeMeshGradient } from "@/components/ui/cinematic-landing-hero"
 
 function WizardFooter() {
   return (
     <footer id="download" className="relative flex min-h-screen items-center overflow-hidden border-t border-white/15 px-6 py-14 font-sans text-white sm:px-10 sm:py-20">
-      <MeshGradient speed={0.45} colors={["#2452F1", "#022474", "#163DB9", "#0B1D99"]} distortion={0.7} swirl={0.12} grainMixer={0} grainOverlay={0} className="absolute inset-0 h-full w-full" />
+      <SafeMeshGradient speed={0.45} colors={["#2452F1", "#022474", "#163DB9", "#0B1D99"]} distortion={0.7} swirl={0.12} grainMixer={0} grainOverlay={0} className="absolute inset-0 h-full w-full" />
       <div className="absolute inset-0 bg-[#022474]/25" />
       <div className="relative z-10 mx-auto w-full max-w-[1440px]">
         <div className="flex flex-col gap-10 lg:flex-row lg:items-end lg:justify-between">

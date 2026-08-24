@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { gsap } from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { MeshGradient } from "@paper-design/shaders-react"
@@ -21,6 +21,30 @@ const terminalLines = [
   "Collecting runtime output...",
   "Wizard verified this repository.",
 ]
+
+function supportsWebGL() {
+  if (typeof document === "undefined") return false
+  try {
+    const canvas = document.createElement("canvas")
+    return Boolean(canvas.getContext("webgl2") || canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
+  } catch {
+    return false
+  }
+}
+
+export function SafeMeshGradient({ className, ...props }: React.ComponentProps<typeof MeshGradient>) {
+  const [enabled, setEnabled] = useState(false)
+
+  useEffect(() => {
+    setEnabled(supportsWebGL())
+  }, [])
+
+  if (!enabled) {
+    return <div aria-hidden="true" className={cn("bg-gradient-to-br from-[#2452F1] via-[#163DB9] to-[#022474]", className)} />
+  }
+
+  return <MeshGradient {...props} className={className} />
+}
 
 export function CinematicHero({ className }: { className?: string }) {
   const root = useRef<HTMLElement>(null)
@@ -90,7 +114,7 @@ export function CinematicHero({ className }: { className?: string }) {
     <section ref={root} className={cn("relative z-10 min-h-[4200px] w-full overflow-visible bg-transparent font-sans", className)}>
       <div className="sticky top-0 flex min-h-screen items-center justify-center px-3 py-4 sm:px-6 sm:py-6 lg:px-10">
         <div data-scene-card className="relative flex min-h-[calc(100vh-2rem)] w-full max-w-[1440px] flex-col items-center justify-center overflow-hidden rounded-[24px] border border-white/15 bg-gradient-to-br from-[#2452F1] via-[#163DB9] to-[#022474] text-white shadow-2xl sm:min-h-[calc(100vh-3rem)] sm:rounded-[40px] lg:flex-row" style={{ perspective: 1500 }}>
-          <MeshGradient
+          <SafeMeshGradient
             speed={0.7}
             colors={["#2452F1", "#022474", "#163DB9", "#0B1D99"]}
             distortion={0.8}

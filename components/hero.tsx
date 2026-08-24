@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MeshGradient } from '@paper-design/shaders-react';
+import { SafeMeshGradient } from '@/components/ui/cinematic-landing-hero';
 import { AsciiArt } from '@/components/ui/sss';
 import { createClient } from '@supabase/supabase-js';
 
@@ -283,7 +283,7 @@ export default function Hero() {
 									borderRadius: '24px',
 								}}
 							>
-								<MeshGradient
+								<SafeMeshGradient
 									speed={1}
 									colors={['#2452F1', '#022474', '#163DB9', '#0B1D99']}
 									distortion={0.8}

@@ -1,153 +1,37 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
 import { gsap } from "gsap"
 import { ScrollTrigger } from "gsap/ScrollTrigger"
 import { MeshGradient } from "@paper-design/shaders-react"
 import { cn } from "@/lib/utils"
 
-gsap.registerPlugin(ScrollTrigger)
-
-const terminalLines = [
-  "$ wizard inspect .",
-  "Scanning repository...",
-  "Reading package.json",
-  "Mapping dependencies...",
-  "Detecting runtime: Node.js 20",
-  "Checking startup command...",
-  "Installing dependencies...",
-  "Starting application...",
-  "Checking port 3000...",
-  "Collecting runtime output...",
-  "Wizard verified this repository.",
-]
+if (typeof window !== "undefined") gsap.registerPlugin(ScrollTrigger)
 
 function supportsWebGL() {
   if (typeof document === "undefined") return false
-  try {
-    const canvas = document.createElement("canvas")
-    return Boolean(canvas.getContext("webgl2") || canvas.getContext("webgl") || canvas.getContext("experimental-webgl"))
-  } catch {
-    return false
-  }
+  try { const c = document.createElement("canvas"); return Boolean(c.getContext("webgl2") || c.getContext("webgl")) } catch { return false }
 }
 
 export function SafeMeshGradient({ className, ...props }: React.ComponentProps<typeof MeshGradient>) {
   const [enabled, setEnabled] = useState(false)
-
-  useEffect(() => {
-    setEnabled(supportsWebGL())
-  }, [])
-
-  if (!enabled) {
-    return <div aria-hidden="true" className={cn("bg-gradient-to-br from-[#2452F1] via-[#163DB9] to-[#022474]", className)} />
-  }
-
-  return <MeshGradient {...props} className={className} />
+  useEffect(() => setEnabled(supportsWebGL()), [])
+  return enabled ? <MeshGradient {...props} className={className} /> : <div aria-hidden="true" className={cn("bg-gradient-to-br from-[#2452F1] via-[#163DB9] to-[#022474]", className)} />
 }
+
+function WizardAgent() { return <div className="wizard-agent"><span className="wizard-hat" /><span className="wizard-body">W</span><span className="wizard-spark">✦</span></div> }
+function Bar({ children }: { children: React.ReactNode }) { return <div className="window-bar"><i /><i /><i /><span>{children}</span></div> }
+
+function CodePanel() { return <div className="screen-panel"><Bar>wizard-repo / VS Code</Bar><div className="ide-body"><div className="file-tree"><b>EXPLORER</b><span>⌄ wizard-repo</span><em>◇ app/</em><em>◇ components/</em><em>◇ package.json</em><em>◇ README.md</em></div><pre><code><span className="pink">import</span> {'{'} verify {'}'} <span className="pink">from</span> <span className="green">&quot;@wizard/agent&quot;</span>{"\n\n"}<span className="blue">export async function</span> run() {'{'}{"\n"}  <span className="blue">const</span> evidence = <span className="pink">await</span> verify({'{'}{"\n"}    target: <span className="green">&quot;localhost:3000&quot;</span>,{"\n"}    mode: <span className="green">&quot;deep&quot;</span>{"\n"}  {'}'}){"\n"}{'}'}</code></pre><WizardAgent /></div></div> }
+function TerminalPanel() { return <div className="screen-panel"><Bar>terminal — wizard session</Bar><div className="terminal-copy"><p><span className="prompt">wizard@repo</span> ~/wizard-repo $ wizard inspect .</p><p className="dim">→ Reading repository structure</p><p className="dim">→ Checking package.json and routes</p><p className="dim">→ Starting development server</p><p><span className="prompt">wizard@repo</span> $ wizard verify --browser</p><p className="cursor-line">▋</p></div><WizardAgent /></div> }
+function RepoPanel() { const files = ["app/page.tsx", "components/hero.tsx", "components/ui/", "lib/utils.ts", "package.json"]; return <div className="screen-panel"><Bar>agent activity / repository map</Bar><div className="repo-map"><div className="repo-column"><b>REPOSITORY STRUCTURE</b>{files.map((file, i) => <div className="repo-file" key={file} style={{ animationDelay: `${i * 120}ms` }}>◇ {file}</div>)}</div><div className="agent-log"><WizardAgent /><p>Wizard is reading <strong>components/ui/</strong></p><p className="success">✓ 18 files mapped</p><p className="success">✓ No missing imports</p></div></div></div> }
+function BrowserPanel() { return <div className="screen-panel"><Bar>Chromium — localhost:3000</Bar><div className="browser-page"><div className="browser-nav">← <span>localhost:3000</span> ···</div><div className="browser-content"><span className="browser-pill">WIZARD BROWSER AGENT</span><h3>Running the real flow.</h3><p>Opening page · clicking primary CTA · capturing evidence</p><div className="browser-progress"><span /></div><div className="capture-card"><b>Screenshot captured</b><small>viewport 1280 × 800 · pass</small><strong>✓</strong></div></div><WizardAgent /></div></div> }
+function ReportPanel() { return <div className="screen-panel"><Bar>wizard / final verification report</Bar><div className="report-copy"><div className="report-mark">✓</div><div><span className="muted">FINAL VERIFICATION</span><h3>Ship with evidence.</h3><p>All critical paths passed. The repository is ready for review.</p></div></div><div className="report-stats"><span><b>05</b> stages</span><span><b>18</b> files</span><span><b>03</b> captures</span><strong>PASS</strong></div><WizardAgent /></div> }
 
 export function CinematicHero({ className }: { className?: string }) {
   const root = useRef<HTMLElement>(null)
   const laptop = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const scope = root.current
-    if (!scope) return
-
-    const ctx = gsap.context(() => {
-      const card = scope.querySelector<HTMLElement>("[data-scene-card]")
-      const copy = scope.querySelector<HTMLElement>("[data-scene-copy]")
-      const screen = scope.querySelector<HTMLElement>("[data-scene-laptop]")
-      const lines = gsap.utils.toArray<HTMLElement>("[data-terminal-line]")
-      const badges = gsap.utils.toArray<HTMLElement>("[data-scene-badge]")
-      if (!card || !copy || !screen) return
-
-      gsap.set([copy, screen, ...badges], { autoAlpha: 0 })
-      gsap.set(card, { scale: 0.72, borderRadius: 24 })
-      gsap.set(screen, { y: 80, scale: 0.82, rotationX: 18, rotationY: -8 })
-      gsap.set(copy, { y: 40, filter: "blur(10px)" })
-      gsap.set(lines, { autoAlpha: 0, y: 8 })
-      gsap.set(badges, { y: 28, scale: 0.94 })
-
-      const timeline = gsap.timeline({
-        scrollTrigger: {
-          trigger: scope,
-          start: "top top",
-          end: "bottom bottom",
-          scrub: 0.8,
-          invalidateOnRefresh: true,
-        },
-      })
-
-      timeline
-        .to(card, { scale: 1.08, borderRadius: 0, duration: 0.28, ease: "power2.out" })
-        .to(screen, { autoAlpha: 1, y: 0, scale: 1, rotationX: 0, rotationY: 0, duration: 0.28, ease: "power3.out" }, "<")
-        .to(copy, { autoAlpha: 1, y: 0, filter: "blur(0px)", duration: 0.2 }, "<0.04")
-        .to(lines, { autoAlpha: 1, y: 0, stagger: 0.055, duration: 0.12, ease: "none" }, "<0.04")
-        .to(badges, { autoAlpha: 1, y: 0, scale: 1, stagger: 0.06, duration: 0.2 }, "<0.12")
-        .to({}, { duration: 0.35 })
-        .to(screen, { y: -18, scale: 1.03, duration: 0.18, ease: "none" })
-        .to(lines.slice(6), { color: "#6ee7b7", duration: 0.18, stagger: 0.04 }, "<")
-        .to({}, { duration: 0.45 })
-        .to(card, { scale: 0.72, borderRadius: 24, duration: 0.2, ease: "power2.inOut" })
-    }, scope)
-
-    return () => ctx.revert()
-  }, [])
-
-  useEffect(() => {
-    const move = (event: MouseEvent) => {
-      if (!laptop.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return
-      gsap.to(laptop.current, {
-        rotationY: (event.clientX / window.innerWidth - 0.5) * 5,
-        rotationX: -(event.clientY / window.innerHeight - 0.5) * 4,
-        duration: 0.8,
-        ease: "power3.out",
-        overwrite: "auto",
-      })
-    }
-    window.addEventListener("mousemove", move)
-    return () => window.removeEventListener("mousemove", move)
-  }, [])
-
-  return (
-    <section ref={root} className={cn("relative z-10 min-h-[4200px] w-full overflow-visible bg-transparent font-sans", className)}>
-      <div className="sticky top-0 flex min-h-screen items-center justify-center px-3 py-4 sm:px-6 sm:py-6 lg:px-10">
-        <div data-scene-card className="relative flex min-h-[calc(100vh-2rem)] w-full max-w-[1440px] flex-col items-center justify-center overflow-hidden rounded-[24px] border border-white/15 bg-gradient-to-br from-[#2452F1] via-[#163DB9] to-[#022474] text-white shadow-2xl sm:min-h-[calc(100vh-3rem)] sm:rounded-[40px] lg:flex-row" style={{ perspective: 1500 }}>
-          <SafeMeshGradient
-            speed={0.7}
-            colors={["#2452F1", "#022474", "#163DB9", "#0B1D99"]}
-            distortion={0.8}
-            swirl={0.1}
-            grainMixer={0}
-            grainOverlay={0}
-            className="absolute inset-0 h-full w-full"
-          />
-          <div className="absolute inset-0 bg-[#022474]/20" />
-
-          <div data-scene-copy className="relative z-10 order-1 w-full max-w-[320px] px-5 pt-8 text-center sm:max-w-[420px] sm:px-8 sm:pt-12 sm:text-left lg:absolute lg:left-16 lg:top-1/2 lg:order-none lg:w-auto lg:-translate-y-1/2 lg:px-0 lg:pt-0">
-            <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.3em] text-blue-100/70 sm:text-xs">Wizard investigation</p>
-            <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">AI writes the code. Wizard checks the reality.</h2>
-            <p className="mt-5 text-sm leading-relaxed text-blue-50/80 sm:text-base">Reads. Executes. Observes. Verifies.</p>
-          </div>
-
-          <div ref={laptop} data-scene-laptop className="relative z-20 order-2 mt-5 w-[92vw] max-w-[680px] transform-style-3d sm:mt-8 lg:order-none lg:ml-52 lg:mt-8">
-            <div className="rounded-t-2xl border-8 border-zinc-700 bg-zinc-950 p-2 shadow-2xl sm:rounded-t-3xl sm:border-[14px] sm:p-5">
-              <div className="aspect-[16/10] overflow-hidden rounded-lg bg-[#07101f] p-3 font-mono text-[8px] leading-[1.65] text-blue-100 sm:p-6 sm:text-xs md:text-sm">
-                {terminalLines.map((line, index) => (
-                  <p key={line} data-terminal-line className={index === 0 ? "text-blue-400" : index === terminalLines.length - 1 ? "text-emerald-400" : undefined}>{line}</p>
-                ))}
-              </div>
-            </div>
-            <div className="mx-auto h-3 w-[112%] -translate-x-[5%] rounded-b-xl bg-gradient-to-b from-zinc-500 to-zinc-800 shadow-xl sm:h-5" />
-          </div>
-
-          <div className="relative z-30 order-3 grid w-[92vw] max-w-[680px] gap-3 px-3 pb-6 sm:grid-cols-2 sm:px-0 sm:pb-10 lg:absolute lg:bottom-10 lg:left-16 lg:right-16 lg:order-none lg:w-auto lg:max-w-none lg:px-0">
-            <div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Repository scan · Runtime verified</div>
-            <div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Evidence collected</div>
-          </div>
-        </div>
-      </div>
-    </section>
-  )
+  useEffect(() => { const scope = root.current; if (!scope) return; const ctx = gsap.context(() => { const card = scope.querySelector<HTMLElement>("[data-scene-card]"); const panels = gsap.utils.toArray<HTMLElement>("[data-screen-panel]"); const copy = scope.querySelector<HTMLElement>("[data-scene-copy]"); const badges = gsap.utils.toArray<HTMLElement>("[data-scene-badge]"); if (!card || !copy || !panels.length) return; gsap.set(card, { scale: .78, borderRadius: 28 }); gsap.set(copy, { autoAlpha: 0, y: 24 }); gsap.set(badges, { autoAlpha: 0, y: 18 }); gsap.set(panels, { autoAlpha: 0, scale: .96, y: 18 }); gsap.set(panels[0], { autoAlpha: 1, scale: 1, y: 0 }); const tl = gsap.timeline({ scrollTrigger: { trigger: scope, start: "top top", end: "bottom bottom", scrub: .6, invalidateOnRefresh: true } }); tl.to(card, { scale: 1, borderRadius: 0, duration: .12 }).to(copy, { autoAlpha: 1, y: 0, duration: .08 }, "<"); panels.forEach((panel, i) => { if (i > 0) tl.to(panels[i - 1], { autoAlpha: 0, scale: 1.03, duration: .05 }).to(panel, { autoAlpha: 1, scale: 1, y: 0, duration: .13 }); }); tl.to(badges, { autoAlpha: 1, y: 0, stagger: .04, duration: .08 }).to({}, { duration: .22 }).to(card, { scale: .78, borderRadius: 28, duration: .12 }); }, scope); return () => ctx.revert() }, [])
+  useEffect(() => { const move = (e: MouseEvent) => { if (!laptop.current || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return; gsap.to(laptop.current, { rotationY: (e.clientX / innerWidth - .5) * 4, rotationX: -(e.clientY / innerHeight - .5) * 3, duration: .8, overwrite: "auto" }) }; addEventListener("mousemove", move); return () => removeEventListener("mousemove", move) }, [])
+  return <section ref={root} className={cn("relative z-10 min-h-[6200px] w-full overflow-visible bg-transparent font-sans", className)}><div className="sticky top-0 flex min-h-screen items-center justify-center px-3 py-4 sm:px-6 lg:px-10"><div data-scene-card className="scene-card relative flex min-h-[calc(100vh-2rem)] w-full max-w-[1440px] items-center justify-center overflow-hidden border border-white/15 bg-gradient-to-br from-[#2452F1] via-[#163DB9] to-[#022474] text-white shadow-2xl" style={{ perspective: 1500 }}><SafeMeshGradient speed={.7} colors={["#2452F1", "#022474", "#163DB9", "#0B1D99"]} distortion={.8} swirl={.1} grainMixer={0} grainOverlay={0} className="absolute inset-0 h-full w-full" /><div className="absolute inset-0 bg-[#022474]/20" /><div data-scene-copy className="absolute left-5 top-8 z-30 max-w-[280px] sm:left-10 sm:top-12 sm:max-w-[380px] lg:left-16 lg:top-1/2 lg:-translate-y-1/2"><p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">Wizard investigation</p><h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">AI writes the code. Wizard checks the reality.</h2><p className="mt-5 text-sm leading-relaxed text-blue-50/80 sm:text-base">Watch an agent read, execute, browse, and verify the work.</p></div><div ref={laptop} className="relative z-20 mt-24 w-[94vw] max-w-[760px] lg:ml-48 lg:mt-8"><div className="rounded-t-2xl border-8 border-zinc-700 bg-zinc-950 p-2 shadow-2xl sm:rounded-t-3xl sm:border-[14px] sm:p-5"><div className="screen relative aspect-[16/10] overflow-hidden rounded-lg bg-[#07101f] p-2 font-mono text-[8px] sm:p-4 sm:text-[11px] md:text-xs">{[<CodePanel key="code" />, <TerminalPanel key="terminal" />, <RepoPanel key="repo" />, <BrowserPanel key="browser" />, <ReportPanel key="report" />].map((panel, i) => <div key={i} data-screen-panel className="absolute inset-0">{panel}</div>)}</div></div><div className="mx-auto h-3 w-[112%] -translate-x-[5%] rounded-b-xl bg-gradient-to-b from-zinc-500 to-zinc-800 shadow-xl sm:h-5" /></div><div className="absolute bottom-5 left-3 right-3 z-40 grid gap-2 sm:bottom-8 sm:left-10 sm:right-10 sm:grid-cols-2 lg:bottom-10"><div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-center text-[10px] backdrop-blur-xl sm:text-left">Repository scan · Runtime verified</div><div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-center text-[10px] backdrop-blur-xl sm:text-left">Evidence collected</div></div></div></div><style jsx global>{` .screen-panel{height:100%;color:#cbd5e1}.window-bar{height:13%;display:flex;align-items:center;gap:5px;padding:0 10px;background:#0d1729;color:#64748b;font-size:.72em}.window-bar i{width:6px;height:6px;border-radius:50%;background:#ef4444}.window-bar i:nth-child(2){background:#eab308}.window-bar i:nth-child(3){background:#22c55e}.window-bar span{margin-left:6px}.ide-body,.repo-map,.browser-page{height:87%;display:flex;position:relative}.file-tree{width:31%;padding:14px 10px;background:#0b1424;color:#64748b;display:flex;flex-direction:column;gap:8px}.file-tree b,.repo-column>b{color:#94a3b8;font-size:.7em}.file-tree em{font-style:normal;color:#64748b}.screen pre{margin:0;padding:18px;line-height:1.65;white-space:pre-wrap}.pink{color:#f472b6}.green,.success{color:#6ee7b7}.blue,.prompt{color:#60a5fa}.wizard-agent{position:absolute;right:13%;bottom:12%;width:25px;height:35px;z-index:3;filter:drop-shadow(0 4px 5px #020617)}.wizard-body{position:absolute;bottom:0;left:5px;width:18px;height:19px;border-radius:8px 8px 4px 4px;background:#2452f1;color:white;font-weight:800;text-align:center;font-size:12px}.wizard-hat{position:absolute;top:0;left:0;border-left:12px solid transparent;border-right:12px solid transparent;border-bottom:19px solid #f59e0b;transform:rotate(-8deg)}.wizard-spark{position:absolute;right:-9px;top:2px;color:#fbbf24}.terminal-copy{padding:18px;line-height:1.9}.dim,.muted{color:#64748b}.cursor-line{color:#60a5fa}.repo-column{width:55%;padding:15px;display:flex;flex-direction:column;gap:9px}.repo-file{padding:7px 10px;border:1px solid #1e3a5f;border-radius:5px;color:#93c5fd;animation:repoIn .5s both}.agent-log{padding:22px 10px;color:#94a3b8}.browser-page{display:block}.browser-nav{padding:8px 12px;background:#111f34;color:#94a3b8}.browser-content{padding:16px 12%;}.browser-pill{color:#60a5fa;font-size:.7em}.browser-content h3,.report-copy h3{font-size:1.6em;color:white;margin:8px 0}.browser-content p,.report-copy p{color:#94a3b8}.browser-progress{height:5px;background:#1e3a5f;border-radius:4px;margin:20px 0}.browser-progress span{display:block;width:68%;height:100%;background:#60a5fa;border-radius:4px}.capture-card{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid #285083;background:#102342}.capture-card small{display:block;color:#64748b}.capture-card strong{margin-left:auto;color:#6ee7b7}.report-copy{display:flex;gap:16px;padding:22px 18px;align-items:center}.report-mark{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:#164e63;color:#6ee7b7;font-size:24px}.report-stats{display:flex;gap:18px;padding:14px 18px;border-top:1px solid #1e3a5f;color:#94a3b8}.report-stats b{display:block;color:white;font-size:1.3em}.report-stats strong{margin-left:auto;color:#6ee7b7}@keyframes repoIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}@media(max-width:640px){.scene-card{min-height:calc(100vh - 2rem)}.file-tree{width:35%;padding:8px 5px;gap:5px}.screen pre{padding:10px;font-size:.82em}.terminal-copy{padding:10px;font-size:.9em}.repo-column{padding:10px 6px;gap:5px}.repo-file{padding:5px}.browser-content{padding:12px 8%}.report-copy{padding:15px 10px}.report-stats{gap:8px;padding:10px;font-size:.8em}.wizard-agent{transform:scale(.8);transform-origin:bottom right}}`}</style></section>
 }

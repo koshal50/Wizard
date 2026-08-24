@@ -25,3 +25,12 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
+
+# Static-analysis search paths.
+# demo/ contains serve_live.py and see_agent_flow.py — scripts that are not part of the
+# installable package but must be importable from each other when analysed by the IDE.
+[tool.pyrefly]
+search_paths = ["src", "demo"]
+
+[tool.pyright]
+extraPaths = ["demo"]

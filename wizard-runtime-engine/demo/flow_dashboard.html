@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wizard — Live Agent Flow</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3;
+    --muted: #8b949e; --accent: #2f81f7; --ok: #3fb950; --bad: #f85149;
+    --planner: #b388ff; --explorer: #4dd0a0; --verifier: #ffb74d;
+    --sandbox: #8fa8c8; --kernel: #5f8fd8; --flow: #e0e6ee;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body {
+    height: 100%; margin: 0;
+    font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--bg); color: var(--fg);
+  }
+  body { display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ── header ─────────────────────────────────────────────────────────────── */
+  header {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;
+    padding: 8px 14px; flex-shrink: 0;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap; }
+  .spacer { flex: 1; min-width: 8px; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--muted); display: inline-block; flex-shrink: 0;
+  }
+  .dot.on  { background: var(--ok);  box-shadow: 0 0 6px var(--ok); }
+  .dot.off { background: var(--bad); }
+  .pill {
+    font-size: 11px; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+  }
+  .pill.on   { color: var(--accent); border-color: var(--accent); }
+  .pill.good { color: var(--ok);     border-color: var(--ok); }
+  .pill.bad  { color: var(--bad);    border-color: var(--bad); }
+  button {
+    font: inherit; background: #172233; color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px 12px; cursor: pointer; font-size: 12px; white-space: nowrap;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+
+  /* ── two-pane layout ────────────────────────────────────────────────────── */
+  main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: minmax(280px, 380px) 1fr;
+    grid-template-rows: 1fr;
+    min-height: 0;           /* essential: lets flex children shrink below content */
+    overflow: hidden;
+  }
+
+  /* each grid child is a flex column */
+  main > section {
+    display: flex; flex-direction: column;
+    min-width: 0; min-height: 0; overflow: hidden;
+  }
+  main > section + section { border-left: 1px solid var(--border); }
+
+  /* ── shared pane header ─────────────────────────────────────────────────── */
+  .pane-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 14px; flex-shrink: 0;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
+    color: var(--muted);
+  }
+
+  /* ── left pane: scrollable agent trace ──────────────────────────────────── */
+  #log {
+    flex: 1; overflow-y: auto;
+    padding: 10px; background: #0b0f14;
+  }
+  .row {
+    border-left: 2px solid var(--border);
+    padding: 4px 0 5px 9px; margin-bottom: 6px;
+    word-break: break-word;
+  }
+  .row .who {
+    font-size: 10px; text-transform: uppercase;
+    letter-spacing: .8px; color: var(--muted);
+  }
+  .row .ttl  { font-weight: 600; }
+  .row .det  { color: var(--muted); white-space: pre-wrap; margin-top: 2px; }
+  .row .rules { margin-top: 3px; }
+  .row .rules div { color: #6f89a8; font-size: 11px; }
+  .row .rules div::before { content: "· "; }
+  .row .seq  { color: #445; margin-right: 5px; }
+  .row.planner  { border-left-color: var(--planner); }
+  .row.planner  .who { color: var(--planner); }
+  .row.explorer { border-left-color: var(--explorer); }
+  .row.explorer .who { color: var(--explorer); }
+  .row.verifier { border-left-color: var(--verifier); }
+  .row.verifier .who { color: var(--verifier); }
+  .row.sandbox  { border-left-color: var(--sandbox); }
+  .row.sandbox  .who { color: var(--sandbox); }
+  .row.kernel   { border-left-color: var(--kernel); }
+  .row.kernel   .who { color: var(--kernel); }
+  .row.flow     { border-left-color: var(--flow); }
+  .row.flow     .who { color: var(--flow); }
+  .row.err      { border-left-color: var(--bad); }
+  .row.err .who, .row.err .ttl { color: var(--bad); }
+
+  /* ── right pane: live browser ───────────────────────────────────────────── */
+  #stageInner {
+    flex: 1; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    background: #010409; overflow: hidden; min-height: 0;
+  }
+  #frame {
+    max-width: 100%; max-height: 100%;
+    object-fit: contain; display: none;
+  }
+  #placeholder {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    color: var(--muted); text-align: center; padding: 20px;
+    gap: 8px; pointer-events: none;
+  }
+  #placeholder code { color: var(--accent); }
+  #urlbar {
+    padding: 5px 14px; flex-shrink: 0;
+    background: var(--panel); border-top: 1px solid var(--border);
+    color: var(--muted); font-size: 11px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* ── responsive: collapse to stacked at narrow widths ──────────────────── */
+  @media (max-width: 700px) {
+    main {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 1fr;
+    }
+    main > section + section {
+      border-left: none;
+      border-top: 1px solid var(--border);
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot" id="wsdot"></span>
+  <h1>Wizard — Live Agent Flow</h1>
+  <span class="pill" id="p-state">idle</span>
+  <span class="pill" id="p-cast">screencast: waiting</span>
+  <span class="spacer"></span>
+  <button id="btn-start">Start run</button>
+  <button id="btn-report" disabled>Terminal report</button>
+</header>
+
+<main>
+  <!-- left: agent trace -->
+  <section>
+    <div class="pane-head">Agent execution</div>
+    <div id="log"></div>
+  </section>
+
+  <!-- right: live browser -->
+  <section>
+    <div class="pane-head">
+      Browser — the agent's own Chromium
+      <span id="castnote" style="margin-left:auto"></span>
+    </div>
+    <div id="stageInner">
+      <img id="frame" alt="live browser frame">
+      <div id="placeholder">
+        <span>waiting for a live browser frame…</span>
+        <small>attaches to <code>/v1/investigations/&lt;id&gt;/screencast</code><br>
+        once the agent starts driving a page</small>
+      </div>
+    </div>
+    <div id="urlbar">—</div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// ── state ─────────────────────────────────────────────────────────────────────
+const AGENTS = ["planner", "explorer", "verifier", "sandbox", "kernel", "flow"];
+let sinceSeq = 0, ws = null, wsInv = "";
+let autoScroll = true, done = false;
+
+const $ = (id) => document.getElementById(id);
+const logEl      = $("log");
+const frameEl    = $("frame");
+const placeholder = $("placeholder");
+const wsdot      = $("wsdot");
+
+logEl.addEventListener("scroll", () => {
+  autoScroll = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 60;
+});
+
+// ── left pane: append-only agent trace ───────────────────────────────────────
+function addRow(e) {
+  const div = document.createElement("div");
+  const agent = AGENTS.includes(e.agent) ? e.agent : "flow";
+  div.className = "row " + agent + (e.kind === "error" ? " err" : "");
+
+  const who = document.createElement("div");
+  who.className = "who";
+  const t = new Date(e.ts * 1000).toLocaleTimeString();
+  who.textContent = `${e.agent} · ${e.kind} · ${t}`
+                  + (e.inv_id ? ` · ${e.inv_id.slice(0, 10)}` : "");
+
+  const titleEl = document.createElement("div");
+  const seq = document.createElement("span");
+  seq.className = "seq"; seq.textContent = "#" + e.seq;
+  const ttl = document.createElement("span");
+  ttl.className = "ttl"; ttl.textContent = e.title || "";
+  titleEl.append(seq, ttl);
+  div.append(who, titleEl);
+
+  if (e.detail) {
+    const d = document.createElement("div");
+    d.className = "det"; d.textContent = e.detail;
+    div.append(d);
+  }
+  if (e.rules && e.rules.length) {
+    const r = document.createElement("div");
+    r.className = "rules";
+    for (const rule of e.rules) {
+      const x = document.createElement("div"); x.textContent = rule; r.append(x);
+    }
+    div.append(r);
+  }
+  logEl.append(div);
+  if (autoScroll) logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function pollTrace() {
+  try {
+    const r = await fetch(`/flow/trace?since_seq=${sinceSeq}`);
+    if (r.ok) {
+      const j = await r.json();
+      for (const e of j.entries) addRow(e);
+      trackUrl(j.entries);
+      sinceSeq = j.last_seq;
+    }
+  } catch (_) { /* transient — retry next tick */ }
+}
+
+// ── right pane: screencast WebSocket ─────────────────────────────────────────
+function attachCast(invId) {
+  if (!invId || wsInv === invId) return;
+  wsInv = invId;
+  if (ws) { try { ws.close(); } catch (_) {} }
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/v1/investigations/${invId}/screencast`);
+
+  $("p-cast").textContent = "screencast: connecting";
+  $("p-cast").className = "pill";
+
+  ws.onopen = () => wsdot.classList.add("on");
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); } catch (_) { return; }
+    if (msg.type === "frame") {
+      frameEl.src = "data:image/jpeg;base64," + msg.data;
+      frameEl.style.display = "block";
+      placeholder.hidden = true;
+      $("p-cast").textContent = "screencast: live";
+      $("p-cast").className = "pill good";
+      wsdot.classList.add("on");
+    } else if (msg.type === "error") {
+      placeholder.hidden = false;
+      placeholder.innerHTML =
+        `<span>${esc(msg.message || "screencast unavailable")}</span>
+         <small>the browser session does not exist or has no active screencast</small>`;
+      $("p-cast").textContent = "screencast: unavailable";
+      $("p-cast").className = "pill bad";
+    }
+  };
+
+  ws.onclose = () => {
+    wsdot.classList.remove("on");
+    if ($("p-cast").textContent === "screencast: live")
+      $("p-cast").textContent = "screencast: closed";
+    $("p-cast").className = "pill";
+    wsInv = "";    // allow reconnect on next pollState()
+    if (!done) setTimeout(() => attachCast(invId), 2000);
+  };
+
+  ws.onerror = () => {
+    wsdot.classList.remove("on");
+    $("p-cast").className = "pill bad";
+  };
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// URL bar follows browser.navigated kernel events in the trace stream.
+function trackUrl(entries) {
+  for (const e of entries) {
+    if (e.agent === "kernel" && e.title === "browser.navigated") {
+      try {
+        const p = JSON.parse(e.detail);
+        if (p.url) $("urlbar").textContent =
+          p.url + (p.status ? `   [${p.status}]` : "") + (p.title ? `   ${p.title}` : "");
+      } catch (_) {}
+    }
+  }
+}
+
+// ── state polling ─────────────────────────────────────────────────────────────
+async function pollState() {
+  try {
+    const r = await fetch("/flow/state");
+    if (!r.ok) return;
+    const j = await r.json();
+
+    $("p-state").textContent = j.state;
+    $("p-state").className = "pill " +
+      (j.state === "failed"  ? "bad"  :
+       j.state === "done"    ? "good" :
+       j.state === "idle"    ? ""     : "on");
+
+    if (j.primary_id) attachCast(j.primary_id);
+
+    $("btn-start").disabled  = j.state !== "idle";
+    $("btn-report").disabled = !j.report_ready;
+    if (j.state === "done" || j.state === "failed") done = true;
+  } catch (_) {}
+}
+
+// ── controls ──────────────────────────────────────────────────────────────────
+$("btn-start").onclick = async () => {
+  $("btn-start").disabled = true;
+  try { await fetch("/flow/start", { method: "POST" }); } catch (_) {}
+  pollState();
+};
+$("btn-report").onclick = () => window.open("/flow/terminal-report", "_blank");
+
+// ── boot ──────────────────────────────────────────────────────────────────────
+// Reading this page triggers TRACE.mark_viewer() so the conductor knows
+// someone is watching before it starts the investigations.
+pollState();
+pollTrace();
+setInterval(pollTrace, 500);
+setInterval(pollState, 900);
+</script>
+</body>
+</html>

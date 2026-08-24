@@ -141,7 +141,7 @@ class HttpPlanner:
         self, manifest: RepositoryManifest, intent: str, targets: list[str]
     ) -> TechnologyPlan:
         data = self._post("/plan/initial", {
-            "manifest": manifest.model_dump(),
+            "manifest": manifest.model_dump(mode="json"),
             "intent": intent,
             "targets": targets,
         })
@@ -154,9 +154,14 @@ class HttpPlanner:
     def interpret(
         self, node: InvestigationNode, obs: Observation
     ) -> list[InvestigationNode]:
+        # mode="json" is required, not cosmetic: Observation.created_at is a datetime,
+        # and httpx's json= encoder is stdlib json.dumps, which raises TypeError on it.
+        # loop._run_loop calls planner.interpret() unguarded, so that TypeError would
+        # propagate to run()'s handler and fail the whole investigation on the first
+        # escalated node.
         data = self._post("/plan/interpret", {
-            "node": node.model_dump(),
-            "observation": obs.model_dump(),
+            "node": node.model_dump(mode="json"),
+            "observation": obs.model_dump(mode="json"),
         })
         return [InvestigationNode.model_validate(n) for n in data.get("new_nodes", [])]
 

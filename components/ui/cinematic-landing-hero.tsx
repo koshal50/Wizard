@@ -39,7 +39,7 @@ export function CinematicHero({ className }: { className?: string }) {
       if (!card || !copy || !screen) return
 
       gsap.set([copy, screen, ...badges], { autoAlpha: 0 })
-      gsap.set(card, { scale: 0.72 })
+      gsap.set(card, { scale: 0.72, borderRadius: 24 })
       gsap.set(screen, { y: 80, scale: 0.82, rotationX: 18, rotationY: -8 })
       gsap.set(copy, { y: 40, filter: "blur(10px)" })
       gsap.set(lines, { autoAlpha: 0, y: 8 })
@@ -56,12 +56,16 @@ export function CinematicHero({ className }: { className?: string }) {
       })
 
       timeline
-        .to(card, { scale: 1, duration: 0.22, ease: "power2.out" })
+        .to(card, { scale: 1.08, borderRadius: 0, duration: 0.28, ease: "power2.out" })
         .to(screen, { autoAlpha: 1, y: 0, scale: 1, rotationX: 0, rotationY: 0, duration: 0.28, ease: "power3.out" }, "<")
         .to(copy, { autoAlpha: 1, y: 0, filter: "blur(0px)", duration: 0.2 }, "<0.04")
         .to(lines, { autoAlpha: 1, y: 0, stagger: 0.055, duration: 0.12, ease: "none" }, "<0.04")
-        .to(badges, { autoAlpha: 1, y: 0, scale: 1, stagger: 0.06, duration: 0.16 }, "<0.12")
-        .to({}, { duration: 0.62 })
+        .to(badges, { autoAlpha: 1, y: 0, scale: 1, stagger: 0.06, duration: 0.2 }, "<0.12")
+        .to({}, { duration: 0.35 })
+        .to(screen, { y: -18, scale: 1.03, duration: 0.18, ease: "none" })
+        .to(lines.slice(6), { color: "#6ee7b7", duration: 0.18, stagger: 0.04 }, "<")
+        .to({}, { duration: 0.45 })
+        .to(card, { scale: 0.72, borderRadius: 24, duration: 0.2, ease: "power2.inOut" })
     }, scope)
 
     return () => ctx.revert()
@@ -114,7 +118,7 @@ export function CinematicHero({ className }: { className?: string }) {
             <div className="mx-auto h-3 w-[112%] -translate-x-[5%] rounded-b-xl bg-gradient-to-b from-zinc-500 to-zinc-800 shadow-xl sm:h-5" />
           </div>
 
-          <div className="absolute bottom-5 left-4 right-4 z-30 grid gap-3 sm:bottom-10 sm:left-10 sm:right-10 sm:grid-cols-2 lg:left-16 lg:right-16">
+          <div className="relative z-30 order-3 grid w-[92vw] max-w-[680px] gap-3 px-3 pb-6 sm:grid-cols-2 sm:px-0 sm:pb-10 lg:absolute lg:bottom-10 lg:left-16 lg:right-16 lg:order-none lg:w-auto lg:max-w-none lg:px-0">
             <div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Repository scan · Runtime verified</div>
             <div data-scene-badge className="rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-center text-xs backdrop-blur-xl sm:text-left">Evidence collected</div>
           </div>

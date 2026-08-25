@@ -122,3 +122,44 @@
 		@apply bg-background text-foreground;
 	}
 }
+
+.screen-panel {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	background: #07101f;
+	color: #dbeafe;
+	contain: layout paint;
+	backface-visibility: hidden;
+}
+.window-bar {
+	display: flex;
+	align-items: center;
+	gap: 0.35rem;
+	height: 2rem;
+	padding: 0 0.75rem;
+	border-bottom: 1px solid rgb(255 255 255 / 0.1);
+	background: #0b1424;
+	color: #94a3b8;
+	font-size: 0.7rem;
+}
+.window-bar i { width: 0.4rem; height: 0.4rem; border-radius: 999px; background: #475569; }
+.window-bar span { margin-left: 0.35rem; }
+.ide-body, .repo-map, .browser-page, .report-copy, .report-stats { position: relative; z-index: 1; }
+.ide-body { display: grid; grid-template-columns: 30% 1fr; height: calc(100% - 2rem); }
+.file-tree { display: flex; flex-direction: column; gap: 0.45rem; padding: 1rem; border-right: 1px solid rgb(255 255 255 / 0.08); color: #94a3b8; }
+.file-tree b, .repo-column b, .muted { color: #60a5fa; font-size: 0.65rem; letter-spacing: 0.12em; }
+.file-tree em { color: #64748b; font-style: normal; }
+.screen-panel pre { margin: 0; padding: 1rem; color: #cbd5e1; line-height: 1.65; white-space: pre-wrap; }
+.pink { color: #f472b6; } .green { color: #86efac; } .blue { color: #60a5fa; }
+.terminal-copy { padding: 1.2rem; color: #86efac; line-height: 1.8; position: relative; z-index: 2; text-shadow: 0 0 8px rgb(74 222 128 / 0.35); }
+.terminal-copy p { margin: 0; } .prompt { color: #fbbf24; } .dim { color: #4ade80; opacity: 0.72; } .cursor-line { animation: crt-blink 1s steps(2, end) infinite; }
+.crt-scanlines { position: absolute; inset: 2rem 0 0; z-index: 1; pointer-events: none; background: repeating-linear-gradient(0deg, rgb(74 222 128 / 0.04) 0, rgb(74 222 128 / 0.04) 1px, transparent 1px, transparent 4px); mix-blend-mode: screen; }
+.repo-map { display: grid; grid-template-columns: 1fr 1fr; height: calc(100% - 2rem); gap: 1rem; padding: 1rem; }
+.repo-column { display: flex; flex-direction: column; gap: 0.7rem; } .repo-file { color: #cbd5e1; }
+.agent-log { padding: 1rem; border: 1px solid rgb(96 165 250 / 0.22); background: rgb(15 23 42 / 0.72); } .success { color: #86efac; }
+.browser-page { height: calc(100% - 2rem); background: #f8fafc; color: #0f172a; } .browser-nav { padding: 0.65rem 1rem; background: #e2e8f0; color: #475569; } .browser-content { padding: 2rem; } .browser-pill { color: #2563eb; font-size: 0.65rem; letter-spacing: 0.1em; } .browser-content h3 { font-size: 1.3rem; margin: 1rem 0 0.5rem; } .browser-progress { height: 0.35rem; margin-top: 1.5rem; background: #cbd5e1; } .browser-progress span { display: block; width: 72%; height: 100%; background: #2563eb; }
+.report-copy { display: flex; gap: 1rem; align-items: center; padding: 2rem; } .report-mark { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; border-radius: 999px; background: #22c55e; color: #052e16; font-weight: 800; } .report-copy h3 { margin: 0.5rem 0; font-size: 1.3rem; } .report-copy p { color: #94a3b8; } .report-stats { display: flex; gap: 1rem; padding: 0 2rem; color: #94a3b8; } .report-stats b { color: #fff; } .report-stats strong { color: #86efac; }
+@keyframes crt-blink { 50% { opacity: 0; } }
+@media (max-width: 640px) { .window-bar { height: 1.75rem; font-size: 0.55rem; } .ide-body { grid-template-columns: 32% 1fr; } .file-tree { padding: 0.55rem; gap: 0.3rem; } .screen-panel pre { padding: 0.6rem; font-size: 0.6rem; } .repo-map { gap: 0.5rem; padding: 0.6rem; } .browser-content { padding: 1rem; } .report-copy { padding: 1rem; } .report-stats { padding: 0 1rem; font-size: 0.65rem; } }
+

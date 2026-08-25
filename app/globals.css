@@ -185,4 +185,12 @@
 @keyframes terminal-type { 0%,100% { opacity: .56; } 20%,80% { opacity: 1; } }
 @keyframes repo-read { 0%,100% { color: #cbd5e1; } 40%,65% { color: #86efac; text-shadow: 0 0 8px rgb(134 239 172 / .4); } }
 @media (prefers-reduced-motion: reduce) { .live-dot, .code-stream::after, .typing-caret, .activity-file, .terminal-copy p, .repo-file { animation: none; } }
+.report-timeline { display: flex; flex-direction: column; gap: .7rem; padding: 0 2rem 1.5rem; color: #94a3b8; }
+.report-timeline span { border-left: 2px solid #22c55e; padding-left: .7rem; }
+.report-pulse { animation: live-pulse 1.2s ease-in-out infinite; color: #86efac; }
+.code-current { color: #f8fafc; background: rgb(96 165 250 / .16); }
+.repo-fire { display: inline-block; margin-right: .45rem; color: #f59e0b; animation: repo-fire 1s steps(2,end) infinite; }
+.repo-file-active { color: #f8fafc; text-shadow: 0 0 8px rgb(134 239 172 / .35); }
+@media (max-width: 640px) { .scene-card > div > div:last-child { max-width: 100%; } .screen { min-width: 0; } .ide-body { grid-template-columns: 27% 1fr; } .file-tree { font-size: 7px; } .repo-map { grid-template-columns: 1.05fr .95fr; } .report-copy { gap: .6rem; } .report-copy h3 { font-size: 1rem; } .report-copy p { font-size: .7rem; } .report-timeline { padding: 0 1rem 1rem; font-size: .65rem; } }
+
 

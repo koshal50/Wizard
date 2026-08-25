@@ -4,8 +4,17 @@ import { useState } from "react"
 import { ArrowLeft, ArrowRight, Lock, MoreHorizontal, Plus, RefreshCw, Search, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
-export function Browser({ className }: { className?: string }) {
-  const [url, setUrl] = useState("https://wizard.run/verify")
+interface BrowserProps {
+  className?: string
+  initialUrl?: string
+  initialTabs?: Array<{ id?: string; title?: string; url?: string }>
+  showBookmarksBar?: boolean
+  showStatusBar?: boolean
+  enableTabManagement?: boolean
+}
+
+export function Browser({ className, initialUrl = "https://wizardagents.vercel.app" }: BrowserProps) {
+  const [url, setUrl] = useState(initialUrl)
   const [loading, setLoading] = useState(false)
   const run = () => { setLoading(true); window.setTimeout(() => setLoading(false), 900) }
   return <div className={cn("flex h-full flex-col overflow-hidden rounded-xl border border-slate-700 bg-[#101827] text-slate-200 shadow-2xl", className)}>

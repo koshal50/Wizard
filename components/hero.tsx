@@ -32,6 +32,10 @@ export default function Hero() {
 		setSubmissionStatus('idle');
 
 		const form = event.currentTarget;
+		if (!form.reportValidity()) {
+			setIsSubmitting(false);
+			return;
+		}
 		const formData = new FormData(form);
 		const { error } = await supabase.from('wizard_contact_submissions').insert({
 			name: String(formData.get('name') ?? '').trim(),

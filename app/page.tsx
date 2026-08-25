@@ -1,5 +1,6 @@
 import Hero from "@/components/hero"
 import { CinematicHero, SafeMeshGradient } from "@/components/ui/cinematic-landing-hero"
+import { SmoothCursor } from "@/components/ui/smooth-cursor"
 
 function WizardFooter() {
   return (
@@ -25,5 +26,5 @@ function WizardFooter() {
 }
 
 export default function Home() {
-  return <main className="min-h-screen bg-black"><Hero /><CinematicHero /><WizardFooter /></main>
+  return <main className="min-h-screen bg-black"><Hero /><CinematicHero /><WizardFooter /><SmoothCursor /></main>
 }

@@ -1,6 +1,5 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Analytics } from "@vercel/analytics/next"
 import { Suspense } from "react"
 import { Inter_Tight, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
@@ -17,9 +16,8 @@ const jetbrainsMono = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "v0 App",
-  description: "Created with v0",
-  generator: "v0.app",
+  title: "Wizard — Verify the reality",
+  description: "Wizard investigates, executes, browses, and verifies your work with evidence.",
 }
 
 export default function RootLayout({
@@ -31,7 +29,6 @@ export default function RootLayout({
     <html lang="en" className="bg-black">
       <body className={`font-sans ${instrumentSans.variable} ${jetbrainsMono.variable}`}>
         <Suspense fallback={null}>{children}</Suspense>
-        <Analytics />
       </body>
     </html>
   )

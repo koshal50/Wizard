@@ -166,21 +166,21 @@
 .browser-agent-cursor span { position: absolute; right: -0.45rem; bottom: -0.35rem; width: 0.35rem; height: 0.35rem; border: 2px solid #2563eb; border-radius: 999px; animation: browser-click-pulse 3.6s linear infinite; }
 @keyframes browser-cursor-path { 0% { left: 18%; top: 54%; } 24% { left: 68%; top: 42%; } 32% { left: 68%; top: 42%; } 58% { left: 45%; top: 69%; } 66% { left: 45%; top: 69%; } 100% { left: 18%; top: 54%; } }
 @keyframes browser-click-pulse { 24%, 32%, 58%, 66% { transform: scale(2.4); opacity: 0.2; } 0%, 23%, 33%, 57%, 67%, 100% { transform: scale(1); opacity: 1; } }
-@media (max-width: 640px) { .window-bar { height: 1.75rem; font-size: 0.55rem; } .ide-body { grid-template-columns: 32% 1fr; } .file-tree { padding: 0.55rem; gap: 0.3rem; } .screen-panel pre { padding: 0.6rem; font-size: 0.6rem; } .repo-map { gap: 0.5rem; padding: 0.6rem; } .browser-content { padding: 1rem; } .report-copy { padding: 1rem; } .report-stats { padding: 0 1rem; font-size: 0.65rem; } }
+@keyframes repo-fire { 50% { color: #fde68a; text-shadow: 0 0 10px #f59e0b; transform: scale(1.15); } }\n@keyframes terminal-type { 0%, 8% { clip-path: inset(0 100% 0 0); } 55%, 100% { clip-path: inset(0 0 0 0); } }\n@media (max-width: 640px) { .window-bar { height: 1.75rem; font-size: 0.55rem; } .ide-body { grid-template-columns: 32% 1fr; } .file-tree { padding: 0.55rem; gap: 0.3rem; } .screen-panel pre { padding: 0.6rem; font-size: 0.6rem; } .repo-map { gap: 0.5rem; padding: 0.6rem; } .browser-content { padding: 1rem; } .report-copy { padding: 1rem; } .report-stats { padding: 0 1rem; font-size: 0.65rem; } }
 
 .live-dot { margin-left: auto; color: #86efac; font-size: .55rem; letter-spacing: .12em; animation: live-pulse 1.4s ease-in-out infinite; }
 .code-stream { position: relative; }
-.code-stream::after { content: ""; position: absolute; left: 1rem; right: 1rem; bottom: 1rem; height: 1.2em; background: linear-gradient(90deg, transparent, rgb(96 165 250 / .18), transparent); animation: code-scan 2.6s linear infinite; pointer-events: none; }
+.code-stream::after { content: ""; position: absolute; left: 1rem; right: 1rem; bottom: 1rem; height: 1.2em; background: rgb(96 165 250 / .08); animation: code-write 5.2s steps(18,end) infinite; pointer-events: none; }
 .typing-caret { display: inline-block; width: .45em; height: 1em; margin-right: .2em; background: #60a5fa; vertical-align: -.15em; animation: caret-blink .85s steps(2,end) infinite; }
 .activity-file { animation: file-scan 2.8s ease-in-out infinite; }
 .activity-delay-1 { animation-delay: .7s; }
-.terminal-copy p { animation: terminal-type 4.8s steps(1,end) infinite; }
+.terminal-copy p { overflow: hidden; white-space: nowrap; clip-path: inset(0 100% 0 0); animation: terminal-type 7s steps(32,end) infinite; }
 .terminal-copy p:nth-child(2) { animation-delay: .4s; } .terminal-copy p:nth-child(3) { animation-delay: .8s; } .terminal-copy p:nth-child(4) { animation-delay: 1.2s; }
-.repo-file { animation: repo-read 3.2s ease-in-out infinite; } .repo-file:nth-child(2) { animation-delay: .4s; } .repo-file:nth-child(3) { animation-delay: .8s; } .repo-file:nth-child(4) { animation-delay: 1.2s; }
+.repo-file { position: relative; padding-left: 1.1rem; animation: repo-read 3.2s ease-in-out infinite; } .repo-file::before { content: "◆"; position: absolute; left: 0; color: #fbbf24; animation: repo-fire 1.2s steps(2,end) infinite; } .repo-file:nth-child(2) { animation-delay: .4s; } .repo-file:nth-child(3) { animation-delay: .8s; } .repo-file:nth-child(4) { animation-delay: 1.2s; }
 .repo-file::first-letter { color: #fbbf24; }
 @keyframes live-pulse { 50% { opacity: .45; } }
 @keyframes caret-blink { 50% { opacity: 0; } }
-@keyframes code-scan { from { transform: translateY(-3rem); } to { transform: translateY(3rem); } }
+@keyframes code-write { 0%, 12% { clip-path: inset(0 100% 0 0); } 62%, 100% { clip-path: inset(0 0 0 0); } }
 @keyframes file-scan { 0%,100% { color: #64748b; } 45%,65% { color: #fbbf24; text-shadow: 0 0 8px rgb(251 191 36 / .5); } }
 @keyframes terminal-type { 0%,100% { opacity: .56; } 20%,80% { opacity: 1; } }
 @keyframes repo-read { 0%,100% { color: #cbd5e1; } 40%,65% { color: #86efac; text-shadow: 0 0 8px rgb(134 239 172 / .4); } }

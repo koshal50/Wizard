@@ -326,19 +326,24 @@ function BrowserPanel() {
       className="screen-panel"
     >
       <Browser
-        initialUrl="https://wizardagents.vercel.app"
-        initialTabs={[
-          {
-            id: "wizard",
-            title: "wizardagents.vercel.app",
-            url: "https://wizardagents.vercel.app",
-          },
-        ]}
-        showBookmarksBar={false}
-        showStatusBar={false}
-        enableTabManagement={true}
-        className="h-full rounded-none border-0 shadow-none"
-      />
+  initialUrl="https://wizardagents.vercel.app"
+  initialTabs={[
+    {
+      id: "wizard",
+      title: "wizardagents.vercel.app",
+      url: "https://wizardagents.vercel.app",
+    },
+  ]}
+  showWindowControls={false}
+  showBookmarksBar={false}
+  showStatusBar={false}
+  enableTabManagement={true}
+  enableBookmarks={true}
+  enableHistory={true}
+  enableDownloads={false}
+  enableSettings={false}
+  className="h-full rounded-none border-0 shadow-none"
+/>
 
       <span
         className="browser-agent-cursor"

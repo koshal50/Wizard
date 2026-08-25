@@ -148,9 +148,7 @@ function Terminal() {
 
   useEffect(() => {
     const id = window.setInterval(() => {
-      setCount(
-        (v) => (v + 1) % (commands.length + 1)
-      )
+      setCount((v) => (v + 1) % (commands.length + 1))
     }, 1300)
 
     return () => window.clearInterval(id)
@@ -158,45 +156,102 @@ function Terminal() {
 
   return (
     <div
-      data-screen-panel
-      className="screen-panel"
+      className="absolute inset-0 flex flex-col bg-[#05080d] text-white"
+      style={{
+        zIndex: 10,
+      }}
     >
-      <Bar>terminal — wizard session</Bar>
+      {/* Terminal window bar */}
+      <div className="flex h-10 shrink-0 items-center border-b border-white/10 bg-[#0b1424] px-4 font-mono text-[10px] text-slate-300 sm:text-xs">
+        <div className="mr-3 flex gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
+          <span className="h-2.5 w-2.5 rounded-full bg-yellow-400" />
+          <span className="h-2.5 w-2.5 rounded-full bg-green-400" />
+        </div>
 
-      <div className="crt-scanlines" />
+        <span>terminal — wizard session</span>
 
-      <div className="terminal-copy">
-        {commands.slice(0, count).map((cmd, i) => (
-          <p
-            key={cmd}
-            className="terminal-line"
-          >
-            <span className="prompt">
+        <span className="ml-auto rounded border border-green-400/30 px-2 py-0.5 text-[8px] text-green-400">
+          LIVE
+        </span>
+      </div>
+
+      {/* Terminal body */}
+      <div
+        className="relative flex-1 overflow-hidden p-5 font-mono text-[9px] leading-relaxed sm:p-8 sm:text-xs"
+        style={{
+          background:
+            "radial-gradient(circle at top left, rgba(37,99,235,0.08), transparent 40%), #05080d",
+        }}
+      >
+        {/* Scanlines */}
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background:
+              "repeating-linear-gradient(0deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 4px)",
+          }}
+        />
+
+        {/* Actual terminal content */}
+        <div className="relative z-10">
+          {commands.slice(0, count).map((cmd, i) => (
+            <div
+              key={cmd}
+              className="mb-5"
+            >
+              <div>
+                <span className="text-cyan-400">
+                  wizard@repo
+                </span>
+
+                <span className="text-slate-500">
+                  {" "}
+                  ~/wizard-repo
+                </span>
+
+                <span className="text-white">
+                  {" "}
+                  $
+                </span>
+
+                <span className="ml-2 text-white">
+                  {cmd}
+                </span>
+              </div>
+
+              <div className="mt-1 text-green-400/80">
+                ✓ completed —{" "}
+                {i === 0
+                  ? "structure mapped"
+                  : i === 1
+                    ? "source indexed"
+                    : i === 2
+                      ? "browser verified"
+                      : "report written"}
+              </div>
+            </div>
+          ))}
+
+          {/* Current prompt */}
+          <div className="mt-2">
+            <span className="text-cyan-400">
               wizard@repo
-            </span>{" "}
-            ~/wizard-repo $ {cmd}
-
-            <br />
-
-            <span className="dim">
-              ✓ completed —{" "}
-              {i === 0
-                ? "structure mapped"
-                : i === 1
-                  ? "source indexed"
-                  : i === 2
-                    ? "browser verified"
-                    : "report written"}
             </span>
-          </p>
-        ))}
 
-        <p>
-          <span className="prompt">
-            wizard@repo
-          </span>{" "}
-          $ <span className="typing-caret" />
-        </p>
+            <span className="text-slate-500">
+              {" "}
+              ~/wizard-repo
+            </span>
+
+            <span className="text-white">
+              {" "}
+              $
+            </span>
+
+            <span className="ml-2 inline-block h-4 w-2 animate-pulse bg-white align-middle" />
+          </div>
+        </div>
       </div>
     </div>
   )

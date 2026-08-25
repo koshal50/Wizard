@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
-  ChevronDown,
   Globe,
   Lock,
   Maximize2,
@@ -164,8 +163,8 @@ export function Browser({
   const [isFullscreen, setIsFullscreen] =
     useState(false)
 
-  const [verificationStep, setVerificationStep] =
-    useState(0)
+  const [iframeLoaded, setIframeLoaded] =
+    useState(false)
 
   const isDark =
     theme === "dark" ||
@@ -177,6 +176,7 @@ export function Browser({
 
   useEffect(() => {
     setInputUrl(activeTab?.url || "")
+    setIframeLoaded(false)
   }, [activeTab?.id, activeTab?.url])
 
   const bookmarks = useMemo(
@@ -202,6 +202,7 @@ export function Browser({
     const tabId = activeTab?.id || ""
 
     setInputUrl(url)
+    setIframeLoaded(false)
 
     setCanGoBack(true)
     setCanGoForward(false)
@@ -270,6 +271,7 @@ export function Browser({
     )
 
     setInputUrl("")
+    setIframeLoaded(false)
 
     onTabCreate?.(newTab)
   }
@@ -305,6 +307,8 @@ export function Browser({
       setInputUrl(
         remaining[nextIndex].url
       )
+
+      setIframeLoaded(false)
     }
 
     setTabs(remaining)
@@ -328,6 +332,8 @@ export function Browser({
       setInputUrl(selected.url)
     }
 
+    setIframeLoaded(false)
+
     onTabSwitch?.(tabId)
   }
 
@@ -335,6 +341,8 @@ export function Browser({
     if (!activeTab) {
       return
     }
+
+    setIframeLoaded(false)
 
     setTabs((current) =>
       current.map((tab) =>
@@ -390,26 +398,17 @@ export function Browser({
     )
   }
 
-  const runVerification = () => {
-    setVerificationStep(1)
+  const currentUrl =
+    activeTab?.url || initialUrl
 
-    window.setTimeout(() => {
-      setVerificationStep(2)
-    }, 500)
-
-    window.setTimeout(() => {
-      setVerificationStep(3)
-    }, 1100)
-
-    window.setTimeout(() => {
-      setVerificationStep(4)
-    }, 1700)
-  }
+  const isBlank =
+    currentUrl === "about:blank" ||
+    currentUrl === ""
 
   return (
     <div
       className={cn(
-        "flex h-full w-full flex-col overflow-hidden rounded-xl border shadow-2xl",
+        "relative flex h-full w-full flex-col overflow-hidden rounded-xl border shadow-2xl",
         isDark
           ? "border-slate-700 bg-slate-950 text-slate-100"
           : "border-slate-300 bg-slate-100 text-slate-800",
@@ -495,7 +494,7 @@ export function Browser({
         </div>
       )}
 
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-slate-300 bg-slate-100 px-2 dark:border-slate-700 dark:bg-slate-850">
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-slate-300 bg-slate-100 px-2 dark:border-slate-700 dark:bg-slate-800">
         <button
           onClick={goBack}
           disabled={!canGoBack}
@@ -530,7 +529,7 @@ export function Browser({
           className="ml-1 flex min-w-0 flex-1"
         >
           <div className="flex min-w-0 flex-1 items-center rounded-lg border border-slate-300 bg-white px-2.5 dark:border-slate-600 dark:bg-slate-900">
-            {activeTab?.url.startsWith(
+            {currentUrl.startsWith(
               "https://"
             ) ? (
               <Lock className="mr-2 h-3 w-3 shrink-0 text-emerald-500" />
@@ -599,7 +598,7 @@ export function Browser({
         )}
 
       {showBookmarks && (
-        <div className="absolute z-40 mt-16 ml-2 w-48 rounded-lg border border-slate-200 bg-white p-2 shadow-xl">
+        <div className="absolute left-2 top-16 z-50 w-48 rounded-lg border border-slate-200 bg-white p-2 text-slate-800 shadow-xl">
           <p className="px-2 py-1 text-[9px] font-semibold">
             Bookmarks
           </p>
@@ -621,7 +620,7 @@ export function Browser({
 
       {showHistory &&
         enableHistory && (
-          <div className="absolute z-40 mt-16 ml-2 w-48 rounded-lg border border-slate-200 bg-white p-3 shadow-xl">
+          <div className="absolute left-2 top-16 z-50 w-48 rounded-lg border border-slate-200 bg-white p-3 text-slate-800 shadow-xl">
             <p className="text-[9px] font-semibold">
               History
             </p>
@@ -655,183 +654,69 @@ export function Browser({
           </div>
         )}
 
-      <div className="relative flex min-h-0 flex-1 overflow-hidden bg-white">
-        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-          {activeTab?.isLoading && (
-            <div className="absolute left-0 right-0 top-0 z-30 h-0.5 overflow-hidden bg-blue-100">
-              <div className="h-full w-1/2 animate-[loading_0.9s_ease-in-out_infinite] bg-blue-600" />
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
+        {isBlank ? (
+          <div className="flex h-full items-center justify-center bg-slate-50">
+            <div className="text-center">
+              <Search className="mx-auto h-8 w-8 text-slate-300" />
+
+              <h2 className="mt-3 text-sm font-semibold text-slate-700">
+                New Tab
+              </h2>
+
+              <p className="mt-1 text-[8px] text-slate-400">
+                Search or enter a web address
+              </p>
             </div>
-          )}
+          </div>
+        ) : (
+          <>
+            {!iframeLoaded && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-white">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600" />
 
-          {activeTab?.url ===
-            "about:blank" ||
-          !activeTab?.url ? (
-            <div className="flex flex-1 items-center justify-center bg-slate-50">
-              <div className="text-center">
-                <Search className="mx-auto h-8 w-8 text-slate-300" />
-
-                <h2 className="mt-3 text-sm font-semibold text-slate-700">
-                  New Tab
-                </h2>
-
-                <p className="mt-1 text-[8px] text-slate-400">
-                  Search or enter a web address
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-gradient-to-br from-slate-50 via-white to-blue-50 p-5">
-              <div className="absolute inset-0 opacity-30">
-                <div className="absolute left-1/4 top-1/4 h-32 w-32 rounded-full bg-blue-200 blur-3xl" />
-                <div className="absolute bottom-1/4 right-1/4 h-32 w-32 rounded-full bg-indigo-200 blur-3xl" />
-              </div>
-
-              <div className="relative w-full max-w-[420px] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
-                <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2">
-                  <div className="flex items-center gap-2">
-                    <div className="flex h-5 w-5 items-center justify-center rounded bg-blue-600 text-[8px] font-bold text-white">
-                      W
-                    </div>
-
-                    <span className="text-[8px] font-semibold text-slate-700">
-                      Wizard
-                    </span>
-                  </div>
-
-                  <span className="text-[7px] text-slate-400">
-                    {hostname(
-                      activeTab.url
-                    )}
-                  </span>
-                </div>
-
-                <div className="p-6">
-                  <div className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-[7px] font-semibold text-blue-600">
-                    <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
-                    LIVE VERIFICATION
-                  </div>
-
-                  <h2 className="text-xl font-bold tracking-tight text-slate-900">
-                    Your build is ready.
-                  </h2>
-
-                  <p className="mt-2 text-[9px] leading-relaxed text-slate-500">
-                    Wizard is checking the generated
-                    application against the requested
-                    behavior.
-                  </p>
-
-                  <button
-                    onClick={runVerification}
-                    className="mt-5 rounded-lg bg-blue-600 px-4 py-2 text-[8px] font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                  >
-                    {verificationStep === 0
-                      ? "Run verification"
-                      : verificationStep < 4
-                        ? "Verifying..."
-                        : "Verification complete"}
-                  </button>
-
-                  <div className="mt-5 space-y-2 border-t border-slate-100 pt-4">
-                    <div className="flex items-center gap-2 text-[8px]">
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded-full",
-                          verificationStep >= 1
-                            ? "bg-emerald-100 text-emerald-600"
-                            : "bg-slate-100 text-slate-300"
-                        )}
-                      >
-                        {verificationStep >= 1
-                          ? "✓"
-                          : "1"}
-                      </span>
-
-                      <span className="text-slate-600">
-                        Open application
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 text-[8px]">
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded-full",
-                          verificationStep >= 2
-                            ? "bg-emerald-100 text-emerald-600"
-                            : "bg-slate-100 text-slate-300"
-                        )}
-                      >
-                        {verificationStep >= 2
-                          ? "✓"
-                          : "2"}
-                      </span>
-
-                      <span className="text-slate-600">
-                        Execute browser action
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 text-[8px]">
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded-full",
-                          verificationStep >= 3
-                            ? "bg-emerald-100 text-emerald-600"
-                            : "bg-slate-100 text-slate-300"
-                        )}
-                      >
-                        {verificationStep >= 3
-                          ? "✓"
-                          : "3"}
-                      </span>
-
-                      <span className="text-slate-600">
-                        Capture browser evidence
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2 text-[8px]">
-                      <span
-                        className={cn(
-                          "flex h-4 w-4 items-center justify-center rounded-full",
-                          verificationStep >= 4
-                            ? "bg-emerald-100 text-emerald-600"
-                            : "bg-slate-100 text-slate-300"
-                        )}
-                      >
-                        {verificationStep >= 4
-                          ? "✓"
-                          : "4"}
-                      </span>
-
-                      <span className="text-slate-600">
-                        Verification passed
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50 px-4 py-2">
-                  <span className="text-[7px] text-slate-400">
-                    Wizard Agent
-                  </span>
-
-                  <span className="flex items-center gap-1 text-[7px] text-emerald-600">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    {verificationStep >= 4
-                      ? "PASS"
-                      : "READY"}
+                  <span className="text-[8px] text-slate-400">
+                    Loading {hostname(currentUrl)}
                   </span>
                 </div>
               </div>
+            )}
 
-              <div className="absolute bottom-2 right-3 flex items-center gap-1 text-[7px] text-slate-400">
-                <Lock className="h-2.5 w-2.5" />
-                Secure browser session
-              </div>
+            <iframe
+              key={currentUrl}
+              src={currentUrl}
+              title={hostname(currentUrl)}
+              className={cn(
+                "h-full w-full border-0",
+                iframeLoaded
+                  ? "opacity-100"
+                  : "opacity-0"
+              )}
+              onLoad={() => {
+                setIframeLoaded(true)
+
+                setTabs((current) =>
+                  current.map((tab) =>
+                    tab.isActive
+                      ? {
+                          ...tab,
+                          isLoading: false,
+                        }
+                      : tab
+                  )
+                )
+              }}
+              allow="fullscreen"
+              loading="eager"
+            />
+
+            <div className="pointer-events-none absolute bottom-2 right-3 z-30 flex items-center gap-1 rounded bg-white/80 px-2 py-1 text-[7px] text-slate-500 shadow-sm backdrop-blur-sm">
+              <Lock className="h-2.5 w-2.5 text-emerald-500" />
+              Secure browser session
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
 
       {showStatusBar && (
@@ -847,18 +732,7 @@ export function Browser({
           </span>
         </div>
       )}
-
-      <style jsx>{`
-        @keyframes loading {
-          0% {
-            transform: translateX(-100%);
-          }
-
-          100% {
-            transform: translateX(200%);
-          }
-        }
-      `}</style>
     </div>
   )
 }
+

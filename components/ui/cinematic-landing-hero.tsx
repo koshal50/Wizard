@@ -3,6 +3,7 @@
 import React, { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { Browser } from "@/components/ui/browser"
+import { FileTree, wizardFileStructure } from "@/components/ui/file-tree"
 
 interface GradientProps extends React.HTMLAttributes<HTMLDivElement> {
   speed?: number
@@ -15,12 +16,10 @@ interface GradientProps extends React.HTMLAttributes<HTMLDivElement> {
 
 export function SafeMeshGradient({
   className,
-  ...props
 }: GradientProps) {
   return (
     <div
       aria-hidden="true"
-      {...props}
       className={cn(
         "absolute inset-0 bg-[linear-gradient(135deg,#2452F1_0%,#163DB9_48%,#022474_100%)]",
         className
@@ -261,58 +260,24 @@ function Repository() {
   const [active, setActive] = useState(0)
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setActive(
-        (v) => (v + 1) % files.length
-      )
-    }, 850)
-
+    const id = window.setInterval(() => setActive((v) => (v + 1) % files.length), 1100)
     return () => window.clearInterval(id)
   }, [])
 
   return (
-    <div
-      data-screen-panel
-      className="screen-panel"
-    >
+    <div data-screen-panel className="screen-panel">
       <Bar>agent activity / repository map</Bar>
-
       <div className="repo-map">
         <div className="repo-column">
           <b>REPOSITORY STRUCTURE</b>
-
-          {files.map((file, i) => (
-            <div
-              className={cn(
-                "repo-file",
-                i === active &&
-                "repo-file-active"
-              )}
-              key={file}
-            >
-              <span className="repo-fire">
-                ◆
-              </span>
-
-              {file}
-            </div>
-          ))}
+          <FileTree data={wizardFileStructure} className="repo-tree" />
         </div>
-
         <div className="agent-log">
-          <p>Agent reading</p>
-
-          <strong>
-            {files[active]}
-          </strong>
-
-          <p className="success">
-            ✓ scanning source symbols
-          </p>
-
-          <p className="success">
-            ✓ {active + 14} files mapped
-          </p>
+          <p className="muted">AGENT READING</p>
+          <strong className="repo-file-active">{files[active]}</strong>
+          <p className="success">✓ scanning source symbols</p>
+          <p className="success">✓ {active + 14} files mapped</p>
+          <p className="repo-trace">trace: {files[(active + 1) % files.length]}</p>
         </div>
       </div>
     </div>

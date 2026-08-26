@@ -5,14 +5,20 @@ import React, {
   useRef,
   useState,
 } from "react"
+
 import { cn } from "@/lib/utils"
+
 import { Browser } from "@/components/ui/browser"
+
 import {
   FileTree,
   wizardFileStructure,
 } from "@/components/ui/file-tree"
+
 import { MacbookPro } from "@/components/ui/macbook-pro"
+
 import AIAgentPipeline from "@/components/ui/ai-agent-pipeline"
+
 import MacOSDock from "@/components/ui/mac-os-dock"
 
 interface GradientProps
@@ -143,10 +149,13 @@ export function SafeMeshGradient({
         style={{
           backgroundColor:
             "#123A6B",
+
           backgroundImage:
             "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.215'/></svg>\"), radial-gradient(150% 48.4% at 41.58% 6%, rgba(234,247,251,.92) 0%, rgba(234,247,251,0) 53%), radial-gradient(150% 48.4% at 42.42% 33%, rgba(127,198,230,.92) 0%, rgba(127,198,230,0) 53%), radial-gradient(150% 48.4% at 51.19% 67%, rgba(46,124,192,.92) 0%, rgba(46,124,192,0) 53%), radial-gradient(150% 48.4% at 53.67% 94%, rgba(18,58,107,.92) 0%, rgba(18,58,107,0) 53%)",
+
           backgroundSize:
             "120px 120px, auto, auto, auto, auto",
+
           backgroundBlendMode:
             "overlay, normal, normal, normal, normal",
         }}
@@ -829,11 +838,9 @@ export function CinematicHero({
     }
   }, [])
 
-  /*
-   * ========================================================
-   * APPLICATION STAGE
-   * ========================================================
-   */
+  /* ========================================================
+     APPLICATION STAGE
+  ======================================================== */
 
   const raw =
     progress *
@@ -858,11 +865,9 @@ export function CinematicHero({
       ? applications[stage + 1]
       : null
 
-  /*
-   * ========================================================
-   * OUTER CINEMATIC OBJECT
-   * ========================================================
-   */
+  /* ========================================================
+     OUTER CINEMATIC OBJECT
+  ======================================================== */
 
   const sceneEntry =
     phase(
@@ -888,11 +893,9 @@ export function CinematicHero({
     sceneEntry * 36 +
     sceneExit * 36
 
-  /*
-   * ========================================================
-   * APPLICATION HANDOFF
-   * ========================================================
-   */
+  /* ========================================================
+     APPLICATION HANDOFF
+  ======================================================== */
 
   const minimize =
     phase(
@@ -936,11 +939,9 @@ export function CinematicHero({
       1
     )
 
-  /*
-   * ========================================================
-   * OUTGOING APPLICATION
-   * ========================================================
-   */
+  /* ========================================================
+     OUTGOING APPLICATION
+  ======================================================== */
 
   const outgoingScale =
     1 -
@@ -959,11 +960,9 @@ export function CinematicHero({
     1 -
     desktop * 0.48
 
-  /*
-   * ========================================================
-   * INCOMING APPLICATION
-   * ========================================================
-   */
+  /* ========================================================
+     INCOMING APPLICATION
+  ======================================================== */
 
   const incomingY =
     100 -
@@ -1013,19 +1012,33 @@ export function CinematicHero({
     >
       <div className="sticky top-0 h-screen w-full overflow-hidden">
 
+        {/* =====================================================
+            ONE CINEMATIC SCENE
+        ===================================================== */}
+
         <div
           className="absolute left-1/2 top-1/2"
           style={{
-            width: "100vw",
-            height: "100vh",
+            width:
+              "100vw",
+
+            height:
+              "100vh",
+
             transform:
               `translate(-50%,-50%) scale(${sceneScale})`,
+
             transformOrigin:
               "center center",
+
             willChange:
               "transform",
           }}
         >
+
+          {/* ===================================================
+              OCEANIC BACKGROUND
+          =================================================== */}
 
           <div
             aria-hidden="true"
@@ -1040,23 +1053,23 @@ export function CinematicHero({
 
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
 
-          {/* =================================================
-              RESPONSIVE CONTENT
-          ================================================= */}
+          {/* ===================================================
+              RESPONSIVE SCENE CONTENT
+          =================================================== */}
 
           <div className="absolute inset-0 flex items-center justify-center">
             <div
               className="
-                flex
+                grid
                 w-full
                 max-w-[1540px]
-                flex-col
+                grid-cols-1
                 items-center
                 gap-8
                 px-4
-                sm:gap-10
-                md:gap-12
-                lg:flex-row
+                py-12
+                min-[768px]:grid-cols-[minmax(260px,340px)_minmax(0,1fr)]
+                min-[768px]:gap-10
                 lg:gap-14
                 lg:px-10
               "
@@ -1066,7 +1079,15 @@ export function CinematicHero({
                   TEXT
               ================================================= */}
 
-              <div className="w-full max-w-[340px] shrink-0 lg:w-[340px]">
+              <div
+                className="
+                  mx-auto
+                  w-full
+                  max-w-[340px]
+                  min-w-0
+                  min-[768px]:mx-0
+                "
+              >
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
                   Wizard investigation
                 </p>
@@ -1096,21 +1117,24 @@ export function CinematicHero({
               {/* =================================================
                   MACBOOK
 
-                  IMPORTANT:
+                  The critical responsive rule is here.
 
-                  Desktop and laptop sizing are exactly the
-                  original sizing.
+                  Below 768px the MacBook gets 92vw.
 
-                  The 92vw width applies ONLY below 640px.
+                  At 768px and above it returns to a
+                  constrained grid column.
+
+                  This prevents laptops and tablets from
+                  receiving an oversized full width MacBook.
               ================================================= */}
 
               <div
                 className="
                   relative
+                  mx-auto
                   w-full
+                  min-w-0
                   max-w-[1180px]
-                  shrink-0
-                  max-[639px]:w-[92vw]
                 "
               >
                 <div className="relative aspect-[650/400] w-full">
@@ -1151,10 +1175,13 @@ export function CinematicHero({
                         style={{
                           transform:
                             `translate3d(${outgoingX}%,${outgoingY}%,0) scale(${outgoingScale}) rotate(${outgoingRotation}deg)`,
+
                           transformOrigin:
                             "center center",
+
                           opacity:
                             outgoingOpacity,
+
                           pointerEvents:
                             "none",
                         }}
@@ -1176,8 +1203,10 @@ export function CinematicHero({
                             style={{
                               transform:
                                 `translate3d(0,${incomingY}%,0)`,
+
                               opacity:
                                 opening,
+
                               pointerEvents:
                                 "none",
                             }}
@@ -1197,8 +1226,10 @@ export function CinematicHero({
                         style={{
                           opacity:
                             dockVisible,
+
                           transform:
                             `translate3d(-50%,${(1 - dockVisible) * 18}px,0)`,
+
                           pointerEvents:
                             dockVisible >
                             0.96
@@ -1235,8 +1266,10 @@ export function CinematicHero({
                             style={{
                               left:
                                 `${cursorX}%`,
+
                               top:
                                 `${cursorY}%`,
+
                               transform:
                                 `translate(-6px,-5px) scale(${
                                   click >
@@ -1244,6 +1277,7 @@ export function CinematicHero({
                                     ? 0.82
                                     : 1
                                 })`,
+
                               filter:
                                 "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
                             }}

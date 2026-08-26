@@ -39,11 +39,23 @@ const supabase =
   )
 
 export default function Hero() {
+  const heroRef =
+    useRef<HTMLElement>(null)
+
   const asciiRef =
     useRef<AsciiArtHandle>(null)
 
   const scrollFrame =
     useRef<number | null>(null)
+
+  const cinematicStart =
+    useRef(0)
+
+  const cinematicDistance =
+    useRef(1)
+
+  const cinematicVisible =
+    useRef(true)
 
   const [isExpanded, setIsExpanded] =
     useState(false)
@@ -65,40 +77,80 @@ export default function Hero() {
    * CINEMATIC BACKGROUND
    * --------------------------------------------------
    *
-   * This is deliberately not React state.
+   * The video is controlled entirely outside React.
    *
-   * Scrolling only talks directly to
-   * AsciiArt through its imperative ref.
+   * React does not receive scroll progress.
+   *
+   * Scroll
+   * ↓
+   * requestAnimationFrame
+   * ↓
+   * calculate local cinematic progress
+   * ↓
+   * AsciiArt.setProgress()
+   *
+   * No React render happens during this process.
    */
 
   useEffect(() => {
+    const element =
+      heroRef.current
+
+    if (!element) {
+      return
+    }
+
+    const calculateGeometry =
+      () => {
+        const rect =
+          element.getBoundingClientRect()
+
+        cinematicStart.current =
+          window.scrollY +
+          rect.top
+
+        /*
+         * The cinematic deliberately
+         * occupies more scroll distance
+         * than one viewport.
+         *
+         * Increase this number if the
+         * cinematic should move even slower.
+         */
+        cinematicDistance.current =
+          Math.max(
+            window.innerHeight * 1.75,
+            1
+          )
+      }
+
     const updateBackground =
       () => {
         scrollFrame.current =
           null
 
-        const scrollY =
-          window.scrollY
+        if (
+          !cinematicVisible.current
+        ) {
+          return
+        }
 
-        const viewportHeight =
-          window.innerHeight
+        const start =
+          cinematicStart.current
 
-        /*
-         * Give the background enough
-         * vertical distance to tell its
-         * story slowly.
-         */
-        const cinematicDistance =
-          viewportHeight *
-          1.75
+        const distance =
+          cinematicDistance.current
 
         const progress =
           Math.min(
             1,
             Math.max(
               0,
-              scrollY /
-                cinematicDistance
+              (
+                window.scrollY -
+                start
+              ) /
+                distance
             )
           )
 
@@ -107,12 +159,8 @@ export default function Hero() {
         )
       }
 
-    const handleScroll =
+    const scheduleUpdate =
       () => {
-        /*
-         * Never run more than one
-         * scroll calculation per frame.
-         */
         if (
           scrollFrame.current !==
           null
@@ -126,23 +174,75 @@ export default function Hero() {
           )
       }
 
+    const handleResize =
+      () => {
+        calculateGeometry()
+        scheduleUpdate()
+      }
+
+    /*
+     * Only run the cinematic
+     * controller while this Hero is
+     * actually visible.
+     */
+    const observer =
+      new IntersectionObserver(
+        entries => {
+          const entry =
+            entries[0]
+
+          cinematicVisible.current =
+            Boolean(
+              entry?.isIntersecting
+            )
+
+          if (
+            cinematicVisible.current
+          ) {
+            calculateGeometry()
+            scheduleUpdate()
+          }
+        },
+        {
+          threshold: 0,
+          rootMargin:
+            "100px 0px 100px 0px",
+        }
+      )
+
+    observer.observe(element)
+
+    calculateGeometry()
+
     window.addEventListener(
       "scroll",
-      handleScroll,
+      scheduleUpdate,
       {
         passive: true,
       }
     )
 
-    /*
-     * Establish initial position.
-     */
-    updateBackground()
+    window.addEventListener(
+      "resize",
+      handleResize,
+      {
+        passive: true,
+      }
+    )
+
+    scheduleUpdate()
 
     return () => {
+      observer.disconnect()
+
       window.removeEventListener(
         "scroll",
-        handleScroll
+        scheduleUpdate
+      )
+
+      window.removeEventListener(
+        "resize",
+        handleResize
       )
 
       if (
@@ -173,6 +273,7 @@ export default function Hero() {
   const handleClose =
     () => {
       setIsExpanded(false)
+
       setSubmissionStatus(
         "idle"
       )
@@ -185,6 +286,7 @@ export default function Hero() {
       event.preventDefault()
 
       setIsSubmitting(true)
+
       setSubmissionStatus(
         "idle"
       )
@@ -276,9 +378,11 @@ export default function Hero() {
     }
 
   /*
-   * Prevent background scrolling while
-   * the contact experience is open.
+   * --------------------------------------------------
+   * CONTACT MODAL SCROLL LOCK
+   * --------------------------------------------------
    */
+
   useEffect(() => {
     if (isExpanded) {
       document.body.style.overflow =
@@ -301,6 +405,7 @@ export default function Hero() {
           ================================================== */}
 
       <section
+        ref={heroRef}
         className="
           relative
           flex
@@ -318,11 +423,11 @@ export default function Hero() {
         {/* ==================================================
             CINEMATIC WORLD
 
-            This layer owns the video.
+            The video is completely independent
+            from the text and CTA.
 
-            It does not transform the text.
-            It does not transform the CTA.
-            It does not participate in their layout.
+            Nothing inside the content below
+            transforms because of video progress.
             ================================================== */}
 
         <div
@@ -1122,8 +1227,11 @@ export default function Hero() {
               </div>
 
               {/* Close */}
+
               <motion.button
-                onClick={handleClose}
+                onClick={
+                  handleClose
+                }
                 className="
                   absolute
                   right-6

@@ -334,8 +334,10 @@ function BrowserPanel() {
   const [page, setPage] = useState(0)
   const pages = [
     { title: "wizardagents.vercel.app", url: "https://wizardagents.vercel.app" },
-    { title: "wizardagents.vercel.app/docs", url: "https://wizardagents.vercel.app/docs" },
-    { title: "wizardagents.vercel.app/verify", url: "https://wizardagents.vercel.app/verify" },
+    { title: "wizardagents.vercel.app/koshal", url: "https://github.com/koshal50" },
+    { title: "wizardagents.vercel.app/yash", url: "https://github.com/yashbabhulkar1729-del" },
+    { title: "wizardagents.vercel.app/diksha", url: "https://github.com/DikshaUnavane" },
+    { title: "wizardagents.vercel.app/shivam", url: "https://github.com/shiv669" },
   ]
   const current = pages[page]
 
@@ -359,7 +361,6 @@ function BrowserPanel() {
         enableSettings={false}
         className="h-full rounded-none border-0 shadow-none"
       />
-      <span className="browser-agent-cursor" aria-hidden="true"><span /></span>
     </div>
   )
 }

@@ -42,10 +42,7 @@ const applications: AppId[] = [
   "report",
 ]
 
-const applicationNames: Record<
-  AppId,
-  string
-> = {
+const applicationNames: Record<AppId, string> = {
   finder: "Finder",
   vscode: "VS Code",
   terminal: "Terminal",
@@ -82,22 +79,12 @@ const repositoryFiles = [
   "Dockerfile",
 ]
 
-function clamp(
-  value: number,
-  min = 0,
-  max = 1
-) {
-  return Math.min(
-    max,
-    Math.max(min, value)
-  )
+function clamp(value: number) {
+  return Math.min(1, Math.max(0, value))
 }
 
-function smoothstep(
-  value: number
-) {
+function ease(value: number) {
   const x = clamp(value)
-
   return x * x * (3 - 2 * x)
 }
 
@@ -106,16 +93,21 @@ function phase(
   start: number,
   end: number
 ) {
-  return smoothstep(
-    clamp(
-      (value - start) /
-      Math.max(
-        0.0001,
-        end - start
-      )
-    )
+  if (value <= start) return 0
+  if (value >= end) return 1
+
+  return ease(
+    (value - start) /
+      Math.max(0.0001, end - start)
   )
 }
+
+/* =========================================================
+   OCEANIC BACKGROUND
+
+   This is the only outer scene layer that moves.
+   The MacBook and text are outside this transform.
+========================================================= */
 
 export function SafeMeshGradient({
   className,
@@ -151,7 +143,7 @@ export function SafeMeshGradient({
           mixBlendMode: "overlay",
         }}
       >
-        <filter id="wizard-grain">
+        <filter id="wizard-oceanic-grain-final">
           <feTurbulence
             type="fractalNoise"
             baseFrequency="0.8"
@@ -168,12 +160,16 @@ export function SafeMeshGradient({
         <rect
           width="100%"
           height="100%"
-          filter="url(#wizard-grain)"
+          filter="url(#wizard-oceanic-grain-final)"
         />
       </svg>
     </div>
   )
 }
+
+/* =========================================================
+   WINDOW BAR
+========================================================= */
 
 function WindowBar({
   title,
@@ -203,19 +199,21 @@ function WindowBar({
   )
 }
 
+/* =========================================================
+   FINDER
+========================================================= */
+
 function FinderSurface() {
-  const [active, setActive] =
-    useState(0)
+  const [active, setActive] = useState(0)
 
   useEffect(() => {
-    const timer =
-      window.setInterval(() => {
-        setActive(
-          value =>
-            (value + 1) %
-            repositoryFiles.length
-        )
-      }, 1900)
+    const timer = window.setInterval(() => {
+      setActive(
+        value =>
+          (value + 1) %
+          repositoryFiles.length
+      )
+    }, 1900)
 
     return () =>
       window.clearInterval(timer)
@@ -254,7 +252,7 @@ function FinderSurface() {
           </h3>
 
           <p className="mt-3 max-w-md text-[8px] leading-relaxed text-slate-500 sm:text-[9px]">
-            Wizard begins with metadata.
+            Wizard starts with metadata.
             File names, directories,
             extensions and sizes are
             available before source
@@ -282,29 +280,30 @@ function FinderSurface() {
   )
 }
 
+/* =========================================================
+   VS CODE
+========================================================= */
+
 function VSCodeSurface() {
-  const [line, setLine] =
-    useState(0)
+  const [line, setLine] = useState(0)
 
   useEffect(() => {
-    const timer =
-      window.setInterval(() => {
-        setLine(
-          value =>
-            (value + 1) %
-            (code.length + 1)
-        )
-      }, 1450)
+    const timer = window.setInterval(() => {
+      setLine(
+        value =>
+          (value + 1) %
+          (code.length + 1)
+      )
+    }, 1450)
 
     return () =>
       window.clearInterval(timer)
   }, [])
 
-  const visible =
-    code.slice(
-      0,
-      Math.max(1, line)
-    )
+  const visible = code.slice(
+    0,
+    Math.max(1, line)
+  )
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -344,15 +343,12 @@ function VSCodeSurface() {
           <code>
             {visible.map(
               (text, index) => (
-                <React.Fragment
-                  key={index}
-                >
+                <React.Fragment key={index}>
                   <span
                     className={cn(
                       index ===
-                      visible.length -
-                      1 &&
-                      "rounded bg-blue-500/10 text-white"
+                        visible.length - 1 &&
+                        "rounded bg-blue-500/10 text-white"
                     )}
                   >
                     {text || " "}
@@ -373,19 +369,21 @@ function VSCodeSurface() {
   )
 }
 
+/* =========================================================
+   TERMINAL
+========================================================= */
+
 function TerminalSurface() {
-  const [count, setCount] =
-    useState(0)
+  const [count, setCount] = useState(0)
 
   useEffect(() => {
-    const timer =
-      window.setInterval(() => {
-        setCount(
-          value =>
-            (value + 1) %
-            (commands.length + 1)
-        )
-      }, 1850)
+    const timer = window.setInterval(() => {
+      setCount(
+        value =>
+          (value + 1) %
+          (commands.length + 1)
+      )
+    }, 1850)
 
     return () =>
       window.clearInterval(timer)
@@ -402,48 +400,43 @@ function TerminalSurface() {
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.11),transparent_45%)]" />
 
         <div className="relative">
-          {commands
-            .slice(0, count)
-            .map(
-              (
-                command,
-                index
-              ) => (
-                <div
-                  key={command}
-                  className="mb-5 sm:mb-6"
-                >
-                  <div>
-                    <span className="text-cyan-400">
-                      wizard@repo
-                    </span>
+          {commands.slice(0, count).map(
+            (command, index) => (
+              <div
+                key={command}
+                className="mb-5 sm:mb-6"
+              >
+                <div>
+                  <span className="text-cyan-400">
+                    wizard@repo
+                  </span>
 
-                    <span className="text-slate-500">
-                      {" "}
-                      ~/wizard repo $
-                    </span>
+                  <span className="text-slate-500">
+                    {" "}
+                    ~/wizard repo $
+                  </span>
 
-                    <span className="ml-2 text-white">
-                      {command}
-                    </span>
-                  </div>
-
-                  <div className="mt-1 text-emerald-400/75">
-                    {index === 0 &&
-                      "investigation request created"}
-
-                    {index === 1 &&
-                      "repository manifest generated"}
-
-                    {index === 2 &&
-                      "dependencies installed"}
-
-                    {index === 3 &&
-                      "runtime listening on port 3000"}
-                  </div>
+                  <span className="ml-2 text-white">
+                    {command}
+                  </span>
                 </div>
-              )
-            )}
+
+                <div className="mt-1 text-emerald-400/75">
+                  {index === 0 &&
+                    "investigation request created"}
+
+                  {index === 1 &&
+                    "repository manifest generated"}
+
+                  {index === 2 &&
+                    "dependencies installed"}
+
+                  {index === 3 &&
+                    "runtime listening on port 3000"}
+                </div>
+              </div>
+            )
+          )}
 
           <div>
             <span className="text-cyan-400">
@@ -463,6 +456,10 @@ function TerminalSurface() {
   )
 }
 
+/* =========================================================
+   WIZARD
+========================================================= */
+
 function WizardSurface() {
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -472,7 +469,7 @@ function WizardSurface() {
       />
 
       <div className="h-[calc(100%-32px)] overflow-hidden bg-[#081321] p-5 font-mono sm:p-8">
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-[6px] uppercase tracking-[.2em] text-slate-600">
               Investigation
@@ -562,6 +559,10 @@ function WizardSurface() {
   )
 }
 
+/* =========================================================
+   BROWSER
+========================================================= */
+
 function BrowserSurface() {
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -589,6 +590,10 @@ function BrowserSurface() {
     </div>
   )
 }
+
+/* =========================================================
+   REPORT
+========================================================= */
 
 function ReportSurface() {
   return (
@@ -628,31 +633,51 @@ function Surface({
   return <ReportSurface />
 }
 
-function stageAt(
-  progress: number
-) {
-  const count =
-    applications.length
+/* =========================================================
+   DOCK
+========================================================= */
 
-  return Math.min(
-    count - 1,
-    Math.floor(
-      progress * count
-    )
-  )
-}
+const dockApps = [
+  {
+    id: "finder",
+    name: "Finder",
+    icon:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232A80FF'/%3E%3Cpath d='M8 11.5C8 9.57 9.57 8 11.5 8h9C22.43 8 24 9.57 24 11.5v9c0 1.93-1.57 3.5-3.5 3.5h-9C9.57 24 8 22.43 8 20.5v-9Z' fill='white' fill-opacity='.92'/%3E%3Ccircle cx='13' cy='15' r='1.5' fill='%232A80FF'/%3E%3Ccircle cx='19' cy='15' r='1.5' fill='%232A80FF'/%3E%3Cpath d='M12 19c2.5 1.8 5.5 1.8 8 0' stroke='%232A80FF' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
+  },
+  {
+    id: "vscode",
+    name: "VS Code",
+    icon: "",
+  },
+  {
+    id: "terminal",
+    name: "Terminal",
+    icon:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231B1B1B'/%3E%3Cpath d='m9 11 5 5-5 5' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M16 21h7' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E",
+  },
+  {
+    id: "wizard",
+    name: "Wizard",
+    icon:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230B1424'/%3E%3Cpath d='M16 6 18.7 13.3 26 16l-7.3 2.7L16 26l-2.7-7.3L6 16l7.3-2.7L16 6Z' fill='%2360A5FA'/%3E%3Ccircle cx='16' cy='16' r='3' fill='white' fill-opacity='.9'/%3E%3C/svg%3E",
+  },
+  {
+    id: "browser",
+    name: "Browser",
+    icon:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23F8FAFC'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%232563EB' stroke-width='2'/%3E%3Cpath d='M7 16h18M16 7c3 3 4.5 6 4.5 9s-1.5 6-4.5 9M16 7c-3 3-4.5 6-4.5 9s1.5 6 4.5 9' stroke='%232563EB' stroke-width='1.2'/%3E%3C/svg%3E",
+  },
+  {
+    id: "report",
+    name: "Verification Report",
+    icon:
+      "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E5E7EB'/%3E%3Cpath d='M10 7h9l4 4v14H10V7Z' fill='white' stroke='%239CA3AF'/%3E%3Cpath d='M19 7v5h4M13 16h7M13 20h7' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
+  },
+]
 
-function localStageProgress(
-  progress: number
-) {
-  const count =
-    applications.length
-
-  const raw =
-    progress * count
-
-  return raw - Math.floor(raw)
-}
+/* =========================================================
+   CINEMATIC HERO
+========================================================= */
 
 export function CinematicHero({
   className,
@@ -662,7 +687,7 @@ export function CinematicHero({
   const root =
     useRef<HTMLElement>(null)
 
-  const [scrollProgress, setScrollProgress] =
+  const [progress, setProgress] =
     useState(0)
 
   useEffect(() => {
@@ -674,38 +699,35 @@ export function CinematicHero({
       const element =
         root.current
 
-      if (!element)
-        return
+      if (!element) return
 
       const rect =
         element.getBoundingClientRect()
 
-      const totalDistance =
+      const distance =
         Math.max(
           1,
           element.offsetHeight -
-          window.innerHeight
+            window.innerHeight
         )
 
-      const value =
+      const next =
         clamp(
-          -rect.top /
-          totalDistance
+          -rect.top / distance
         )
 
-      setScrollProgress(
+      setProgress(
         current =>
           Math.abs(
-            current - value
-          ) > 0.0003
-            ? value
+            current - next
+          ) > 0.0004
+            ? next
             : current
       )
     }
 
     const onScroll = () => {
-      if (frame)
-        return
+      if (frame) return
 
       frame =
         window.requestAnimationFrame(
@@ -738,408 +760,303 @@ export function CinematicHero({
         onScroll
       )
 
-      if (frame)
+      if (frame) {
         window.cancelAnimationFrame(
           frame
         )
+      }
     }
   }, [])
 
   /*
-   * ------------------------------------------------
-   * MACBOOK LEVEL CHOREOGRAPHY
-   * ------------------------------------------------
-   *
-   * The entire laptop is independent from the
-   * applications inside it.
-   *
-   * This restores the original cinematic behavior:
-   *
-   * entering:
-   * small rounded card
-   *
-   * middle:
-   * almost full viewport
-   *
-   * exiting:
-   * small rounded card again
+   * ---------------------------------------------------------
+   * STORY STAGE
+   * ---------------------------------------------------------
    */
 
-  const entry =
-    phase(
-      scrollProgress,
-      0,
-      0.12
-    )
-
-  const exit =
-    phase(
-      scrollProgress,
-      0.88,
-      1
-    )
-
-  const laptopScale =
-    0.78 +
-    entry * 0.22 -
-    exit * 0.22
-
-  const laptopRadius =
-    34 -
-    entry * 34 +
-    exit * 34
-
-  const laptopY =
-    7 -
-    entry * 7 +
-    exit * 7
-
-  const laptopOpacity =
-    0.65 +
-    entry * 0.35 -
-    exit * 0.08
-
-  /*
-   * The side copy subtly gets out of the way once
-   * the MacBook becomes the primary visual.
-   *
-   * This is not a fade in or fade out animation.
-   * It is simply spatial prioritization.
-   */
-
-  const copyScale =
-    1 -
-    phase(
-      scrollProgress,
-      0.08,
-      0.28
-    ) *
-    0.08
-
-  const copyX =
-    -phase(
-      scrollProgress,
-      0.08,
-      0.28
-    ) *
-    18
-
-  /*
-   * ------------------------------------------------
-   * APPLICATION CHOREOGRAPHY
-   * ------------------------------------------------
-   */
+  const raw =
+    progress *
+    applications.length
 
   const stage =
-    stageAt(scrollProgress)
+    Math.min(
+      applications.length - 1,
+      Math.floor(raw)
+    )
 
   const local =
-    localStageProgress(
-      scrollProgress
-    )
+    raw - Math.floor(raw)
 
   const current =
     applications[stage]
 
-  const previous =
-    stage > 0
-      ? applications[stage - 1]
+  const next =
+    stage <
+    applications.length - 1
+      ? applications[stage + 1]
       : null
 
   /*
-   * Each application has a long resting period.
-   *
-   * 0 to 58 percent
-   * current application owns the screen
-   *
-   * 58 to 66 percent
-   * current application shrinks
-   *
-   * 66 to 72 percent
-   * desktop becomes visible
-   *
-   * 72 to 79 percent
-   * Dock appears
-   *
-   * 79 to 84 percent
-   * agent cursor travels
-   *
-   * 84 to 88 percent
-   * click
-   *
-   * 88 to 100 percent
-   * new application expands
+   * ---------------------------------------------------------
+   * ONLY OCEANIC BACKGROUND MOVES HERE
+   * ---------------------------------------------------------
    */
 
-  const shrink =
+  const oceanEntry =
+    phase(progress, 0, 0.14)
+
+  const oceanExit =
+    phase(progress, 0.9, 1)
+
+  const oceanScale =
+    0.74 +
+    oceanEntry * 0.26 -
+    oceanExit * 0.2
+
+  const oceanRadius =
+    38 -
+    oceanEntry * 38 +
+    oceanExit * 38
+
+  /*
+   * ---------------------------------------------------------
+   * APPLICATION HANDOFF
+   * ---------------------------------------------------------
+   *
+   * Stable application:
+   *
+   * 0.00 to 0.72
+   *
+   * Minimize:
+   *
+   * 0.72 to 0.80
+   *
+   * Desktop:
+   *
+   * 0.78 to 0.85
+   *
+   * Dock:
+   *
+   * 0.83 to 0.89
+   *
+   * Cursor:
+   *
+   * 0.88 to 0.94
+   *
+   * Click:
+   *
+   * 0.93 to 0.96
+   *
+   * New application:
+   *
+   * 0.96 to 1.00
+   */
+
+  const minimize =
     phase(
       local,
-      0.58,
-      0.66
+      0.72,
+      0.8
     )
 
   const desktop =
     phase(
       local,
-      0.65,
-      0.72
+      0.78,
+      0.85
     )
 
   const dock =
     phase(
       local,
-      0.72,
-      0.79
-    ) *
-    (1 -
-      phase(
-        local,
-        0.84,
-        0.9
-      ))
+      0.83,
+      0.89
+    )
 
-  const pointerTravel =
+  const pointer =
     phase(
       local,
-      0.77,
-      0.84
+      0.88,
+      0.94
     )
 
   const click =
     phase(
       local,
-      0.84,
-      0.87
+      0.93,
+      0.96
     )
 
-  const opening =
+  const open =
     phase(
       local,
-      0.87,
+      0.96,
       1
     )
 
   /*
-   * Previous application.
+   * Only the CURRENT application can shrink.
    */
 
-  const previousScale =
+  const outgoingScale =
     1 -
-    shrink * 0.58
+    minimize * 0.58
 
-  const previousX =
-    shrink * -18
+  const outgoingX =
+    -minimize * 17
 
-  const previousY =
-    shrink * -13
+  const outgoingY =
+    -minimize * 11
 
-  const previousRotate =
-    shrink * -1.4
-
-  const previousOpacity =
-    1 -
-    desktop * 0.48
+  const outgoingRotation =
+    -minimize * 1.2
 
   /*
-   * New application.
-   *
-   * It does NOT exist as a visible window
-   * until after the Dock interaction.
-   *
-   * This is the important fix.
+   * NEXT application never scales.
+   * It is already the size of the entire display.
+   * It simply enters from below.
    */
 
-  const newAppScale =
-    stage === 0
-      ? 1
-      : 0.42 +
-      opening * 0.58
-
-  const newAppY =
-    stage === 0
-      ? 0
-      : 10 -
-      opening * 10
-
-  const newAppOpacity =
-    stage === 0
-      ? 1
-      : opening
+  const incomingY =
+    100 -
+    open * 100
 
   /*
-   * Desktop wallpaper.
+   * Desktop only becomes visible while the
+   * current application has moved away.
    */
 
   const desktopOpacity =
-    stage === 0
-      ? 0
-      : desktop
+    next
+      ? desktop
+      : 0
 
   /*
-   * Dock.
-   *
-   * It cannot appear at the same time as the
-   * new application.
+   * Dock only exists during the handoff.
    */
 
-  const dockOpacity =
-    stage === 0
-      ? 0
-      : dock
+  const dockVisible =
+    next
+      ? dock *
+        (1 - open)
+      : 0
 
   /*
-   * Agent cursor.
-   *
-   * It begins away from the Dock, travels toward
-   * the correct icon, then presses and disappears.
+   * Cursor target.
    */
 
-  const iconIndex =
-    applications.indexOf(
-      current
-    )
+  const nextIndex =
+    next
+      ? applications.indexOf(next)
+      : stage
 
   const iconFraction =
     applications.length <= 1
       ? 0.5
-      : iconIndex /
-      (applications.length - 1)
-
-  const cursorStartX =
-    42 +
-    (stage % 2) * 15
-
-  const cursorTargetX =
-    25 +
-    iconFraction * 50
-
-  const cursorStartY =
-    58
-
-  const cursorTargetY =
-    87
+      : nextIndex /
+        (applications.length - 1)
 
   const cursorX =
-    cursorStartX +
-    (cursorTargetX -
-      cursorStartX) *
-    pointerTravel
+    40 +
+    (25 +
+      iconFraction * 50 -
+      40) *
+      pointer
 
   const cursorY =
-    cursorStartY +
-    (cursorTargetY -
-      cursorStartY) *
-    pointerTravel
-
-  const cursorScale =
-    click > 0
-      ? 0.82
-      : 1
-
-  const cursorOpacity =
-    stage === 0 ||
-      pointerTravel === 0 ||
-      opening > 0
-      ? 0
-      : 1
-
-  /*
-   * The current app is completely hidden until
-   * the Dock interaction has finished.
-   *
-   * This removes the small new window overlapping
-   * the old window.
-   */
-
-  const currentVisibility =
-    stage === 0
-      ? 1
-      : opening
+    56 +
+    31 * pointer
 
   return (
     <section
       ref={root}
       className={cn(
-        "relative min-h-[11800px] overflow-visible bg-transparent font-sans",
+        "relative min-h-[15000px] overflow-visible bg-transparent font-sans",
         className
       )}
     >
       <div className="sticky top-0 flex min-h-screen w-full items-center justify-center overflow-hidden">
-        <div className="relative flex min-h-screen w-full items-center justify-center">
-          <SafeMeshGradient />
+        <div className="relative min-h-screen w-full">
 
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
+          {/* ===================================================
+              OCEANIC BACKGROUND
+              ONLY THIS TRANSFORMS
+             =================================================== */}
 
-          <div className="relative z-20 flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 py-12 lg:flex-row lg:gap-14 lg:px-10">
-            <div
-              className="w-full max-w-[340px] shrink-0"
-              style={{
-                transform:
-                  `translate3d(${copyX}px,0,0) scale(${copyScale})`,
-              }}
-            >
-              <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
-                Wizard investigation
-              </p>
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute z-0 overflow-hidden"
+            style={{
+              inset: "-28%",
+              borderRadius:
+                `${oceanRadius}px`,
+              transform:
+                `scale(${oceanScale})`,
+              transformOrigin:
+                "center center",
+              willChange:
+                "transform, border-radius",
+            }}
+          >
+            <SafeMeshGradient />
+          </div>
 
-              <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
-                AI writes the
-                code.
-                <br />
-                Wizard checks the
-                reality.
-              </h2>
+          <div className="pointer-events-none absolute inset-0 z-[1] bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
 
-              <p className="mt-5 max-w-[310px] text-sm leading-relaxed text-blue-50/80">
-                Wizard works inside
-                the workflow you
-                already use.
-              </p>
+          {/* ===================================================
+              STATIC FOREGROUND
+             =================================================== */}
 
-              <p className="mt-8 font-mono text-[7px] uppercase tracking-[.24em] text-blue-100/35">
-                {applicationNames[current]}
-              </p>
-            </div>
+          <div className="absolute inset-0 z-20 flex items-center justify-center">
+            <div className="flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 lg:flex-row lg:gap-14 lg:px-10">
 
-            <div className="relative w-full max-w-[1180px] lg:ml-4">
-              <div
-                className="relative mx-auto aspect-[650/400] w-full"
-                style={{
-                  transform:
-                    `translate3d(0,${laptopY}%,0) scale(${laptopScale})`,
-                  opacity:
-                    laptopOpacity,
-                  borderRadius:
-                    `${laptopRadius}px`,
-                  transformOrigin:
-                    "center center",
-                  willChange:
-                    "transform, opacity",
-                }}
-              >
-                <div
-                  className="absolute inset-0 overflow-hidden"
-                  style={{
-                    borderRadius:
-                      `${laptopRadius}px`,
-                  }}
-                >
+              {/* STATIC TEXT */}
+
+              <div className="w-full max-w-[340px] shrink-0">
+                <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
+                  Wizard investigation
+                </p>
+
+                <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
+                  AI writes the code.
+                  <br />
+                  Wizard checks the
+                  reality.
+                </h2>
+
+                <p className="mt-5 max-w-[310px] text-sm leading-relaxed text-blue-50/80">
+                  Wizard works inside
+                  the workflow you already
+                  use.
+                </p>
+
+                <p className="mt-8 font-mono text-[7px] uppercase tracking-[.24em] text-blue-100/35">
+                  {applicationNames[current]}
+                </p>
+              </div>
+
+              {/* STATIC MACBOOK */}
+
+              <div className="relative w-full max-w-[1180px] lg:ml-4">
+                <div className="relative mx-auto aspect-[650/400] w-full">
+
                   <MacbookPro
                     className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
                     aria-label="Wizard autonomous investigation"
                     role="img"
                   >
-                    <div className="screen relative h-full w-full overflow-hidden bg-[#111827]">
-                      {/*
-                       * Desktop.
-                       *
-                       * It is behind every application.
-                       * Nothing is rendered above it until
-                       * the previous window has moved away.
-                       */}
+                    <div
+                      className="screen relative h-full w-full overflow-hidden bg-[#111827]"
+                      style={{
+                        isolation:
+                          "isolate",
+                      }}
+                    >
+
+                      {/* Desktop */}
 
                       <div
-                        className="absolute inset-0"
+                        className="absolute inset-0 z-0"
                         style={{
                           opacity:
                             desktopOpacity,
@@ -1148,158 +1065,114 @@ export function CinematicHero({
                         }}
                       />
 
-                      {/*
-                       * PREVIOUS WINDOW
-                       *
-                       * This is the only application
-                       * visible before the Dock.
-                       */}
+                      {/* =================================================
+                          CURRENT APPLICATION
 
-                      {previous && (
-                        <div
-                          className="absolute inset-[4%] z-20 overflow-hidden rounded-[10px] shadow-2xl"
-                          style={{
-                            transform:
-                              `translate3d(${previousX}%,${previousY}%,0) scale(${previousScale}) rotate(${previousRotate}deg)`,
-                            opacity:
-                              previousOpacity,
-                            transformOrigin:
-                              "center center",
-                            pointerEvents:
-                              "none",
-                            willChange:
-                              "transform, opacity",
-                          }}
-                        >
-                          <Surface
-                            app={
-                              previous
-                            }
-                          />
-                        </div>
-                      )}
-
-                      {/*
-                       * CURRENT WINDOW
-                       *
-                       * Completely absent during the
-                       * Dock phase.
-                       *
-                       * It is created visually only after
-                       * the click has completed.
-                       */}
+                          Full display until handoff.
+                          This is the only place where an application
+                          is allowed to minimize.
+                         ================================================= */}
 
                       <div
-                        className="absolute inset-0 z-40 overflow-hidden"
+                        className="absolute inset-0 z-20 overflow-hidden"
                         style={{
                           transform:
-                            `translate3d(0,${newAppY}%,0) scale(${newAppScale})`,
-                          opacity:
-                            currentVisibility,
+                            `translate3d(${outgoingX}%,${outgoingY}%,0) scale(${outgoingScale}) rotate(${outgoingRotation}deg)`,
                           transformOrigin:
-                            "center bottom",
+                            "center center",
+                          opacity:
+                            1 -
+                            desktop * 0.45,
                           pointerEvents:
-                            opening >
-                              0.95
-                              ? "auto"
-                              : "none",
+                            "none",
                           willChange:
                             "transform, opacity",
                         }}
                       >
                         <Surface
-                          app={
-                            current
-                          }
+                          app={current}
                         />
                       </div>
 
-                      {/*
-                       * Dock
-                       *
-                       * It exists in the desktop
-                       * layer, never above an opening
-                       * application.
-                       */}
+                      {/* =================================================
+                          NEXT APPLICATION
+
+                          Never scales.
+                          Never shrinks.
+                          Enters at 100 percent display size.
+                         ================================================= */}
+
+                      {next &&
+                        open > 0 && (
+                          <div
+                            className="absolute inset-0 z-40 overflow-hidden"
+                            style={{
+                              transform:
+                                `translate3d(0,${incomingY}%,0)`,
+                              opacity:
+                                open,
+                              pointerEvents:
+                                "none",
+                            }}
+                          >
+                            <Surface
+                              app={next}
+                            />
+                          </div>
+                        )}
+
+                      {/* =================================================
+                          DOCK
+                         ================================================= */}
 
                       <div
                         className="absolute bottom-[5%] left-1/2 z-[100]"
                         style={{
                           opacity:
-                            dockOpacity,
+                            dockVisible,
                           transform:
-                            `translate3d(-50%,${(1 - dockOpacity) * 20}px,0) scale(${0.68 + dockOpacity * 0.12})`,
+                            `translate3d(-50%,${(1 - dockVisible) * 18}px,0) scale(.78)`,
                           pointerEvents:
-                            dockOpacity >
-                              0.9
+                            dockVisible >
+                            0.96
                               ? "auto"
                               : "none",
                         }}
                       >
                         <MacOSDock
-                          apps={[
-                            {
-                              id: "finder",
-                              name: "Finder",
-                              icon:
-                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232A80FF'/%3E%3Cpath d='M8 11.5C8 9.57 9.57 8 11.5 8h9C22.43 8 24 9.57 24 11.5v9c0 1.93-1.57 3.5-3.5 3.5h-9C9.57 24 8 22.43 8 20.5v-9Z' fill='white' fill-opacity='.92'/%3E%3Ccircle cx='13' cy='15' r='1.5' fill='%232A80FF'/%3E%3Ccircle cx='19' cy='15' r='1.5' fill='%232A80FF'/%3E%3Cpath d='M12 19c2.5 1.8 5.5 1.8 8 0' stroke='%232A80FF' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
-                            },
-                            {
-                              id: "vscode",
-                              name: "VS Code",
-                              icon: "",
-                            },
-                            {
-                              id: "terminal",
-                              name: "Terminal",
-                              icon:
-                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231B1B1B'/%3E%3Cpath d='m9 11 5 5-5 5' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M16 21h7' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E",
-                            },
-                            {
-                              id: "wizard",
-                              name: "Wizard",
-                              icon:
-                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230B1424'/%3E%3Cpath d='M16 6 18.7 13.3 26 16l-7.3 2.7L16 26l-2.7-7.3L6 16l7.3-2.7L16 6Z' fill='%2360A5FA'/%3E%3Ccircle cx='16' cy='16' r='3' fill='white' fill-opacity='.9'/%3E%3C/svg%3E",
-                            },
-                            {
-                              id: "browser",
-                              name: "Browser",
-                              icon:
-                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23F8FAFC'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%232563EB' stroke-width='2'/%3E%3Cpath d='M7 16h18M16 7c3 3 4.5 6 4.5 9s-1.5 6-4.5 9M16 7c-3 3-4.5 6-4.5 9s1.5 6 4.5 9' stroke='%232563EB' stroke-width='1.2'/%3E%3C/svg%3E",
-                            },
-                            {
-                              id: "report",
-                              name: "Verification Report",
-                              icon:
-                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E5E7EB'/%3E%3Cpath d='M10 7h9l4 4v14H10V7Z' fill='white' stroke='%239CA3AF'/%3E%3Cpath d='M19 7v5h4M13 16h7M13 20h7' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
-                            },
-                          ]}
-                          onAppClick={() => { }}
-                          openApps={[current]}
+                          apps={dockApps}
+                          onAppClick={() => {}}
+                          openApps={
+                            next
+                              ? [next]
+                              : [current]
+                          }
                           className="scale-[.72] sm:scale-[.78] md:scale-[.84]"
                         />
                       </div>
 
-                      {/*
-                       * Wizard pointer.
-                       *
-                       * It appears only after the
-                       * previous window has moved away.
-                       */}
+                      {/* =================================================
+                          WIZARD POINTER
+                         ================================================= */}
 
-                      {cursorOpacity >
-                        0 && (
+                      {next &&
+                        pointer > 0 &&
+                        open === 0 && (
                           <div
+                            aria-hidden="true"
                             className="pointer-events-none absolute z-[150] hidden md:block"
                             style={{
                               left:
                                 `${cursorX}%`,
                               top:
                                 `${cursorY}%`,
-                              opacity:
-                                cursorOpacity,
                               transform:
-                                `translate(-6px,-5px) scale(${cursorScale})`,
+                                `translate(-6px,-5px) scale(${
+                                  click >
+                                  0.2
+                                    ? 0.82
+                                    : 1
+                                })`,
                               filter:
                                 "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
                             }}
@@ -1319,9 +1192,9 @@ export function CinematicHero({
                             </svg>
 
                             {click >
-                              0 && (
-                                <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
-                              )}
+                              0.2 && (
+                              <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
+                            )}
                           </div>
                         )}
                     </div>

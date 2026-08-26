@@ -5,6 +5,7 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
+  useState,
 } from "react"
 
 export interface AsciiArtHandle {
@@ -16,21 +17,9 @@ interface AsciiArtProps {
 }
 
 const FRAME_COUNT = 240
-
-const FRAME_PATH = (index: number) =>
-  `/cinematic/wizard-frames/frame_${String(
-    index + 1
-  ).padStart(4, "0")}.webp`
-
-const MAX_DPR = 1
-
-const PRELOAD_AHEAD = 24
-
-const INITIAL_PRELOAD = 48
-
-const FRAME_EPSILON = 0.002
-
-type FrameImage = HTMLImageElement | null
+const FRAME_PATH = "/cinematic/wizard-frames"
+const POSTER_PATH =
+  "/cinematic/wizard-frames/frame_0001.webp"
 
 export const AsciiArt = forwardRef<
   AsciiArtHandle,
@@ -39,17 +28,9 @@ export const AsciiArt = forwardRef<
   const canvasRef =
     useRef<HTMLCanvasElement>(null)
 
-  const containerRef =
-    useRef<HTMLDivElement>(null)
-
-  const framesRef =
-    useRef<FrameImage[]>(
+  const imagesRef =
+    useRef<(HTMLImageElement | null)[]>(
       new Array(FRAME_COUNT).fill(null)
-    )
-
-  const loadingRef =
-    useRef<boolean[]>(
-      new Array(FRAME_COUNT).fill(false)
     )
 
   const loadedRef =
@@ -63,291 +44,408 @@ export const AsciiArt = forwardRef<
   const renderedFrameRef =
     useRef(-1)
 
-  const requestedFrameRef =
-    useRef(0)
-
   const animationFrameRef =
     useRef<number | null>(null)
-
-  const preloadCursorRef =
-    useRef(0)
 
   const resizeFrameRef =
     useRef<number | null>(null)
 
-  const readyRef =
-    useRef(false)
+  const [cinematicReady, setCinematicReady] =
+    useState(false)
 
-  const destroyedRef =
-    useRef(false)
+  /*
+   * Parent communicates with the renderer
+   * without causing React renders.
+   */
+  useImperativeHandle(
+    ref,
+    () => ({
+      setProgress(progress: number) {
+        targetProgressRef.current =
+          Math.min(
+            1,
+            Math.max(0, progress)
+          )
+      },
+    }),
+    []
+  )
 
-  const canvasWidthRef =
-    useRef(0)
+  /*
+   * Draw one frame.
+   */
+  const drawFrame = (
+    frameIndex: number
+  ) => {
+    const canvas =
+      canvasRef.current
 
-  const canvasHeightRef =
-    useRef(0)
+    const image =
+      imagesRef.current[frameIndex]
 
-  const drawFrame =
-    (frameIndex: number) => {
-      const canvas =
-        canvasRef.current
-
-      if (!canvas) {
-        return
-      }
-
-      const image =
-        framesRef.current[
-          frameIndex
-        ]
-
-      if (!image) {
-        return
-      }
-
-      const ctx =
-        canvas.getContext("2d", {
-          alpha: false,
-          desynchronized: true,
-        })
-
-      if (!ctx) {
-        return
-      }
-
-      const canvasWidth =
-        canvasWidthRef.current
-
-      const canvasHeight =
-        canvasHeightRef.current
-
-      if (
-        canvasWidth <= 0 ||
-        canvasHeight <= 0
-      ) {
-        return
-      }
-
-      /*
-       * Cover calculation.
-       *
-       * The source is 16:9.
-       * The canvas follows the viewport.
-       */
-      const imageWidth =
-        image.naturalWidth
-
-      const imageHeight =
-        image.naturalHeight
-
-      if (
-        imageWidth <= 0 ||
-        imageHeight <= 0
-      ) {
-        return
-      }
-
-      const scale =
-        Math.max(
-          canvasWidth /
-            imageWidth,
-          canvasHeight /
-            imageHeight
-        )
-
-      const drawWidth =
-        imageWidth * scale
-
-      const drawHeight =
-        imageHeight * scale
-
-      const x =
-        (canvasWidth -
-          drawWidth) /
-        2
-
-      const y =
-        (canvasHeight -
-          drawHeight) /
-        2
-
-      ctx.drawImage(
-        image,
-        x,
-        y,
-        drawWidth,
-        drawHeight
-      )
-
-      renderedFrameRef.current =
-        frameIndex
+    if (!canvas || !image) {
+      return
     }
 
-  const loadFrame =
-    (index: number) => {
-      if (
-        index < 0 ||
-        index >= FRAME_COUNT
-      ) {
-        return
-      }
+    const context =
+      canvas.getContext("2d", {
+        alpha: false,
+        desynchronized: true,
+      })
 
-      if (
-        loadedRef.current[index] ||
-        loadingRef.current[index]
-      ) {
-        return
-      }
+    if (!context) {
+      return
+    }
 
-      loadingRef.current[index] =
+    const width =
+      canvas.clientWidth
+
+    const height =
+      canvas.clientHeight
+
+    if (
+      width <= 0 ||
+      height <= 0
+    ) {
+      return
+    }
+
+    const devicePixelRatio =
+      Math.min(
+        window.devicePixelRatio || 1,
+        2
+      )
+
+    const pixelWidth =
+      Math.round(
+        width * devicePixelRatio
+      )
+
+    const pixelHeight =
+      Math.round(
+        height * devicePixelRatio
+      )
+
+    if (
+      canvas.width !== pixelWidth ||
+      canvas.height !== pixelHeight
+    ) {
+      canvas.width = pixelWidth
+      canvas.height = pixelHeight
+
+      context.imageSmoothingEnabled =
         true
+
+      context.imageSmoothingQuality =
+        "high"
+    }
+
+    const sourceWidth =
+      image.naturalWidth
+
+    const sourceHeight =
+      image.naturalHeight
+
+    const sourceRatio =
+      sourceWidth /
+      sourceHeight
+
+    const destinationRatio =
+      width / height
+
+    let drawWidth: number
+    let drawHeight: number
+    let offsetX: number
+    let offsetY: number
+
+    /*
+     * Same visual behavior as
+     * object-fit: cover.
+     */
+    if (
+      sourceRatio >
+      destinationRatio
+    ) {
+      drawHeight = height
+      drawWidth =
+        height *
+        sourceRatio
+
+      offsetX =
+        (width - drawWidth) / 2
+
+      offsetY = 0
+    } else {
+      drawWidth = width
+      drawHeight =
+        width /
+        sourceRatio
+
+      offsetX = 0
+
+      offsetY =
+        (height - drawHeight) / 2
+    }
+
+    context.setTransform(
+      devicePixelRatio,
+      0,
+      0,
+      devicePixelRatio,
+      0,
+      0
+    )
+
+    context.clearRect(
+      0,
+      0,
+      width,
+      height
+    )
+
+    context.drawImage(
+      image,
+      offsetX,
+      offsetY,
+      drawWidth,
+      drawHeight
+    )
+
+    renderedFrameRef.current =
+      frameIndex
+  }
+
+  /*
+   * Load frames progressively.
+   *
+   * The first frame gets priority so the
+   * cinematic can appear immediately.
+   */
+  useEffect(() => {
+    let cancelled = false
+
+    const loadFrame = (
+      index: number
+    ) => {
+      if (cancelled) {
+        return
+      }
+
+      if (
+        imagesRef.current[index]
+      ) {
+        return
+      }
 
       const image =
         new Image()
 
       image.decoding = "async"
 
-      image.loading = "eager"
-
       image.src =
-        FRAME_PATH(index)
+        `${FRAME_PATH}/frame_${String(
+          index + 1
+        ).padStart(4, "0")}.webp`
 
-      image.onload = () => {
-        if (destroyedRef.current) {
+      image.onload = async () => {
+        if (cancelled) {
           return
         }
 
-        framesRef.current[index] =
+        try {
+          if (
+            "decode" in image
+          ) {
+            await image.decode()
+          }
+        } catch {
+          /*
+           * The image can still be drawn
+           * even if decode() rejects.
+           */
+        }
+
+        if (cancelled) {
+          return
+        }
+
+        imagesRef.current[index] =
           image
 
         loadedRef.current[index] =
           true
 
-        loadingRef.current[index] =
-          false
-
         /*
-         * If this is the frame currently
-         * requested by scroll, render it
-         * immediately on the next RAF.
+         * The first usable frame means
+         * the cinematic can take over.
          */
-        if (
-          requestedFrameRef.current ===
-          index
-        ) {
-          if (
-            animationFrameRef.current ===
-            null
-          ) {
-            animationFrameRef.current =
-              window.requestAnimationFrame(
-                render
-              )
-          }
+        if (index === 0) {
+          drawFrame(0)
+          setCinematicReady(true)
         }
       }
 
       image.onerror = () => {
-        loadingRef.current[index] =
-          false
-      }
-    }
-
-  const preloadAround =
-    (centerFrame: number) => {
-      const start =
-        Math.max(
-          0,
-          centerFrame
-        )
-
-      const end =
-        Math.min(
-          FRAME_COUNT - 1,
-          centerFrame +
-            PRELOAD_AHEAD
-        )
-
-      /*
-       * Load the current frame first.
-       */
-      loadFrame(centerFrame)
-
-      /*
-       * Then load frames in both
-       * directions around the current
-       * position.
-       */
-      for (
-        let distance = 1;
-        distance <=
-        PRELOAD_AHEAD;
-        distance++
-      ) {
-        loadFrame(
-          centerFrame +
-            distance
-        )
-
-        loadFrame(
-          centerFrame -
-            distance
-        )
-      }
-
-      /*
-       * Keep the variables explicit so
-       * this function remains easy to
-       * tune later.
-       */
-      void start
-      void end
-    }
-
-  const render =
-    () => {
-      animationFrameRef.current =
-        null
-
-      if (destroyedRef.current) {
-        return
-      }
-
-      const targetFrame =
-        requestedFrameRef.current
-
-      if (
-        targetFrame ===
-        renderedFrameRef.current
-      ) {
-        return
-      }
-
-      const image =
-        framesRef.current[
-          targetFrame
-        ]
-
-      if (!image) {
         /*
-         * Never synchronously decode here.
-         *
-         * The frame loader will render
-         * once the image becomes available.
+         * Do not break the entire cinematic
+         * if one frame fails.
          */
-        return
       }
-
-      drawFrame(targetFrame)
     }
 
-  const scheduleRender =
-    () => {
+    /*
+     * Load the first frame immediately.
+     */
+    loadFrame(0)
+
+    /*
+     * Load nearby frames first.
+     */
+    for (
+      let index = 1;
+      index < Math.min(24, FRAME_COUNT);
+      index++
+    ) {
+      loadFrame(index)
+    }
+
+    /*
+     * Continue loading the rest in small
+     * batches so the browser is not flooded
+     * with 240 simultaneous requests.
+     */
+    let nextIndex = 24
+
+    const batchTimer =
+      window.setInterval(() => {
+        if (cancelled) {
+          return
+        }
+
+        const batchEnd =
+          Math.min(
+            nextIndex + 12,
+            FRAME_COUNT
+          )
+
+        for (
+          let index = nextIndex;
+          index < batchEnd;
+          index++
+        ) {
+          loadFrame(index)
+        }
+
+        nextIndex = batchEnd
+
+        if (
+          nextIndex >= FRAME_COUNT
+        ) {
+          window.clearInterval(
+            batchTimer
+          )
+        }
+      }, 80)
+
+    return () => {
+      cancelled = true
+
+      window.clearInterval(
+        batchTimer
+      )
+    }
+  }, [])
+
+  /*
+   * Render loop.
+   *
+   * React is completely outside the
+   * scrolling and frame rendering loop.
+   */
+  useEffect(() => {
+    const render = () => {
+      const progress =
+        targetProgressRef.current
+
+      const rawFrame =
+        progress *
+        (FRAME_COUNT - 1)
+
+      const desiredFrame =
+        Math.round(rawFrame)
+
+      /*
+       * If the exact frame is not ready,
+       * find the closest already loaded frame.
+       *
+       * This prevents black flashes and
+       * avoids waiting for network requests.
+       */
+      let frameToDraw =
+        desiredFrame
+
       if (
-        animationFrameRef.current !==
-        null
+        !loadedRef.current[
+          frameToDraw
+        ]
       ) {
-        return
+        let found = -1
+
+        /*
+         * Search forward first because
+         * progressive loading normally means
+         * upcoming frames are available.
+         */
+        for (
+          let distance = 1;
+          distance < FRAME_COUNT;
+          distance++
+        ) {
+          const forward =
+            desiredFrame +
+            distance
+
+          if (
+            forward <
+              FRAME_COUNT &&
+            loadedRef.current[
+              forward
+            ]
+          ) {
+            found = forward
+            break
+          }
+
+          const backward =
+            desiredFrame -
+            distance
+
+          if (
+            backward >= 0 &&
+            loadedRef.current[
+              backward
+            ]
+          ) {
+            found = backward
+            break
+          }
+        }
+
+        if (found >= 0) {
+          frameToDraw = found
+        } else {
+          frameToDraw = 0
+        }
+      }
+
+      if (
+        loadedRef.current[
+          frameToDraw
+        ] &&
+        frameToDraw !==
+          renderedFrameRef.current
+      ) {
+        drawFrame(frameToDraw)
       }
 
       animationFrameRef.current =
@@ -356,305 +454,12 @@ export const AsciiArt = forwardRef<
         )
     }
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      setProgress(
-        progress: number
-      ) {
-        const clamped =
-          Math.max(
-            0,
-            Math.min(
-              1,
-              progress
-            )
-          )
-
-        /*
-         * Ignore microscopic scroll
-         * changes that map to the same
-         * cinematic frame.
-         */
-        if (
-          Math.abs(
-            clamped -
-              targetProgressRef.current
-          ) <
-          FRAME_EPSILON
-        ) {
-          return
-        }
-
-        targetProgressRef.current =
-          clamped
-
-        const frame =
-          Math.min(
-            FRAME_COUNT - 1,
-            Math.max(
-              0,
-              Math.round(
-                clamped *
-                  (FRAME_COUNT -
-                    1)
-              )
-            )
-          )
-
-        requestedFrameRef.current =
-          frame
-
-        /*
-         * Start preparing frames around
-         * the user's current position.
-         */
-        preloadAround(frame)
-
-        scheduleRender()
-      },
-    }),
-    []
-  )
-
-  useEffect(() => {
-    const canvas =
-      canvasRef.current
-
-    const container =
-      containerRef.current
-
-    if (
-      !canvas ||
-      !container
-    ) {
-      return
-    }
-
-    destroyedRef.current =
-      false
-
-    const ctx =
-      canvas.getContext("2d", {
-        alpha: false,
-        desynchronized: true,
-      })
-
-    if (!ctx) {
-      return
-    }
-
-    const resize =
-      () => {
-        resizeFrameRef.current =
-          null
-
-        const rect =
-          container.getBoundingClientRect()
-
-        const width =
-          Math.max(
-            1,
-            Math.round(
-              rect.width
-            )
-          )
-
-        const height =
-          Math.max(
-            1,
-            Math.round(
-              rect.height
-            )
-          )
-
-        const dpr =
-          Math.min(
-            window.devicePixelRatio ||
-              1,
-            MAX_DPR
-          )
-
-        canvasWidthRef.current =
-          width
-
-        canvasHeightRef.current =
-          height
-
-        canvas.width =
-          Math.round(
-            width * dpr
-          )
-
-        canvas.height =
-          Math.round(
-            height * dpr
-          )
-
-        canvas.style.width =
-          `${width}px`
-
-        canvas.style.height =
-          `${height}px`
-
-        /*
-         * We intentionally render at
-         * a maximum DPR of 1.
-         */
-        ctx.setTransform(
-          dpr,
-          0,
-          0,
-          dpr,
-          0,
-          0
-        )
-
-        /*
-         * Repaint the current frame
-         * after resize.
-         */
-        const current =
-          renderedFrameRef.current
-
-        if (
-          current >= 0 &&
-          framesRef.current[
-            current
-          ]
-        ) {
-          drawFrame(current)
-        }
-      }
-
-    const scheduleResize =
-      () => {
-        if (
-          resizeFrameRef.current !==
-          null
-        ) {
-          return
-        }
-
-        resizeFrameRef.current =
-          window.requestAnimationFrame(
-            resize
-          )
-      }
-
-    const resizeObserver =
-      new ResizeObserver(
-        scheduleResize
+    animationFrameRef.current =
+      window.requestAnimationFrame(
+        render
       )
-
-    resizeObserver.observe(
-      container
-    )
-
-    window.addEventListener(
-      "resize",
-      scheduleResize,
-      {
-        passive: true,
-      }
-    )
-
-    resize()
-
-    /*
-     * Load the first chunk immediately.
-     *
-     * This means the cinematic is
-     * already populated before the
-     * user starts interacting with it.
-     */
-    const initialCount =
-      Math.min(
-        INITIAL_PRELOAD,
-        FRAME_COUNT
-      )
-
-    for (
-      let index = 0;
-      index < initialCount;
-      index++
-    ) {
-      loadFrame(index)
-    }
-
-    /*
-     * Continue loading the remaining
-     * frames gradually.
-     *
-     * This avoids decoding 240 images
-     * in one giant blocking operation.
-     */
-    const preloadRemaining =
-      () => {
-        if (
-          destroyedRef.current
-        ) {
-          return
-        }
-
-        const batchSize = 8
-
-        const start =
-          preloadCursorRef.current
-
-        const end =
-          Math.min(
-            FRAME_COUNT,
-            start +
-              batchSize
-          )
-
-        for (
-          let index = start;
-          index < end;
-          index++
-        ) {
-          loadFrame(index)
-        }
-
-        preloadCursorRef.current =
-          end
-
-        if (
-          end < FRAME_COUNT
-        ) {
-          window.setTimeout(
-            preloadRemaining,
-            50
-          )
-        }
-      }
-
-    preloadCursorRef.current =
-      initialCount
-
-    window.setTimeout(
-      preloadRemaining,
-      100
-    )
-
-    readyRef.current =
-      true
 
     return () => {
-      destroyedRef.current =
-        true
-
-      readyRef.current =
-        false
-
-      resizeObserver.disconnect()
-
-      window.removeEventListener(
-        "resize",
-        scheduleResize
-      )
-
       if (
         animationFrameRef.current !==
         null
@@ -666,6 +471,57 @@ export const AsciiArt = forwardRef<
         animationFrameRef.current =
           null
       }
+    }
+  }, [])
+
+  /*
+   * Handle viewport changes without
+   * involving React state.
+   */
+  useEffect(() => {
+    const resize =
+      () => {
+        if (
+          resizeFrameRef.current !==
+          null
+        ) {
+          return
+        }
+
+        resizeFrameRef.current =
+          window.requestAnimationFrame(
+            () => {
+              resizeFrameRef.current =
+                null
+
+              const frame =
+                renderedFrameRef.current
+
+              if (
+                frame >= 0 &&
+                loadedRef.current[
+                  frame
+                ]
+              ) {
+                drawFrame(frame)
+              }
+            }
+          )
+      }
+
+    window.addEventListener(
+      "resize",
+      resize,
+      {
+        passive: true,
+      }
+    )
+
+    return () => {
+      window.removeEventListener(
+        "resize",
+        resize
+      )
 
       if (
         resizeFrameRef.current !==
@@ -674,36 +530,12 @@ export const AsciiArt = forwardRef<
         window.cancelAnimationFrame(
           resizeFrameRef.current
         )
-
-        resizeFrameRef.current =
-          null
       }
-
-      /*
-       * Release image references so
-       * the browser can reclaim memory
-       * when this component unmounts.
-       */
-      framesRef.current =
-        new Array(
-          FRAME_COUNT
-        ).fill(null)
-
-      loadedRef.current =
-        new Array(
-          FRAME_COUNT
-        ).fill(false)
-
-      loadingRef.current =
-        new Array(
-          FRAME_COUNT
-        ).fill(false)
     }
   }, [])
 
   return (
     <div
-      ref={containerRef}
       className={className}
       style={{
         position: "relative",
@@ -711,25 +543,112 @@ export const AsciiArt = forwardRef<
         height: "100%",
         overflow: "hidden",
         background: "#000",
-        contain:
-          "layout paint size",
-        transform:
-          "translateZ(0)",
       }}
     >
+      {/*
+       * Cinematic poster.
+       *
+       * This appears immediately while the
+       * real frame renderer is warming up.
+       *
+       * There is intentionally no text,
+       * spinner, loader, or UI.
+       */}
+      <img
+        src={POSTER_PATH}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          pointerEvents: "none",
+          userSelect: "none",
+
+          opacity:
+            cinematicReady
+              ? 0
+              : 1,
+
+          transform:
+            cinematicReady
+              ? "scale(1)"
+              : "scale(1.018)",
+
+          filter:
+            cinematicReady
+              ? "brightness(1) blur(0)"
+              : "brightness(.42) blur(2px)",
+
+          transition:
+            cinematicReady
+              ? "opacity 900ms ease, transform 1800ms ease, filter 1200ms ease"
+              : "opacity 0ms",
+
+          willChange:
+            "opacity, transform, filter",
+        }}
+      />
+
+      {/*
+       * Real frame renderer.
+       */}
       <canvas
         ref={canvasRef}
-        aria-label="Wizard cinematic world"
-        role="img"
+        aria-hidden="true"
         style={{
+          position: "absolute",
+          inset: 0,
           display: "block",
           width: "100%",
           height: "100%",
           pointerEvents: "none",
+          background: "#000",
+          opacity:
+            cinematicReady
+              ? 1
+              : 0,
+          transition:
+            "opacity 900ms ease",
           transform:
             "translateZ(0)",
           backfaceVisibility:
             "hidden",
+          willChange:
+            "opacity",
+        }}
+      />
+
+      {/*
+       * Extremely subtle atmospheric layer.
+       *
+       * It makes the transition feel like
+       * the image is developing rather than
+       * simply appearing.
+       */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          pointerEvents: "none",
+
+          background:
+            "radial-gradient(circle at 50% 45%, rgba(255,255,255,.055), transparent 48%)",
+
+          opacity:
+            cinematicReady
+              ? 0
+              : 1,
+
+          transition:
+            "opacity 1400ms ease",
+
+          mixBlendMode:
+            "screen",
         }}
       />
     </div>

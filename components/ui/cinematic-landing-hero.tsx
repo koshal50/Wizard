@@ -1,6 +1,11 @@
 "use client"
 
-import React, { useEffect, useMemo, useRef, useState } from "react"
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { cn } from "@/lib/utils"
 import { Browser } from "@/components/ui/browser"
 import {
@@ -20,6 +25,10 @@ interface GradientProps
   grainOverlay?: number
 }
 
+/* =========================================================
+   BACKGROUND
+========================================================= */
+
 export function SafeMeshGradient({
   className,
   ...props
@@ -38,7 +47,7 @@ export function SafeMeshGradient({
         style={{
           backgroundColor: "#123A6B",
           backgroundImage:
-            "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.215'/></svg>\"), radial-gradient(150% 48.4% at 41.58% 6%, rgba(234, 247, 251, 0.92) 0%, rgba(234, 247, 251, 0) 53%), radial-gradient(150% 48.4% at 42.42% 33%, rgba(127, 198, 230, 0.92) 0%, rgba(127, 198, 230, 0) 53%), radial-gradient(150% 48.4% at 51.19% 67%, rgba(46, 124, 192, 0.92) 0%, rgba(46, 124, 192, 0) 53%), radial-gradient(150% 48.4% at 53.67% 94%, rgba(18, 58, 107, 0.92) 0%, rgba(18, 58, 107, 0) 53%)",
+            "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.215'/></svg>\"), radial-gradient(150% 48.4% at 41.58% 6%, rgba(234,247,251,.92) 0%, rgba(234,247,251,0) 53%), radial-gradient(150% 48.4% at 42.42% 33%, rgba(127,198,230,.92) 0%, rgba(127,198,230,0) 53%), radial-gradient(150% 48.4% at 51.19% 67%, rgba(46,124,192,.92) 0%, rgba(46,124,192,0) 53%), radial-gradient(150% 48.4% at 53.67% 94%, rgba(18,58,107,.92) 0%, rgba(18,58,107,0) 53%)",
           backgroundSize:
             "120px 120px, auto, auto, auto, auto",
           backgroundBlendMode:
@@ -78,6 +87,10 @@ export function SafeMeshGradient({
   )
 }
 
+/* =========================================================
+   DATA
+========================================================= */
+
 const code = [
   'import { verify } from "@wizard/agent"',
   "",
@@ -105,98 +118,147 @@ const files = [
   "lib/utils.ts",
 ]
 
+/* =========================================================
+   UTILITIES
+========================================================= */
+
 function clamp(
   value: number,
   min = 0,
   max = 1
 ) {
-  return Math.min(max, Math.max(min, value))
+  return Math.min(
+    max,
+    Math.max(min, value)
+  )
 }
 
-function range(
+function progressBetween(
   value: number,
   start: number,
   end: number
 ) {
   return clamp(
-    (value - start) / Math.max(0.0001, end - start)
+    (value - start) /
+      Math.max(0.0001, end - start)
   )
 }
 
-function smooth(value: number) {
+function ease(value: number) {
   const x = clamp(value)
   return x * x * (3 - 2 * x)
 }
 
-function springValue(
-  value: number,
-  power = 0.82
-) {
-  return Math.pow(clamp(value), power)
+/*
+ * A slightly slower easing curve.
+ *
+ * The purpose is deliberate:
+ * the scene should feel like an investigation
+ * happening in time, not like UI elements responding
+ * immediately to the scrollbar.
+ */
+function slowEase(value: number) {
+  const x = clamp(value)
+  return x * x * x * (x * (x * 6 - 15) + 10)
 }
 
-function Bar({
-  children,
-  status = "LIVE",
+/* =========================================================
+   WINDOW FRAME
+========================================================= */
+
+function WindowBar({
+  title,
+  status,
 }: {
-  children: React.ReactNode
+  title: string
   status?: string
 }) {
   return (
-    <div className="window-bar">
-      <i />
-      <i />
-      <i />
+    <div className="wizard-window-bar">
+      <div className="wizard-window-lights">
+        <i />
+        <i />
+        <i />
+      </div>
 
-      <span>{children}</span>
+      <span className="wizard-window-title">
+        {title}
+      </span>
 
-      <b className="live-dot">{status}</b>
+      {status && (
+        <span className="wizard-window-status">
+          {status}
+        </span>
+      )}
     </div>
   )
 }
 
-function Workspace({
+/* =========================================================
+   VS CODE
+========================================================= */
+
+function WorkspaceWindow({
   progress,
 }: {
   progress: number
 }) {
-  const visibleLines = Math.max(
-    1,
-    Math.floor(
-      springValue(range(progress, 0.04, 0.28)) *
-        code.length
+  const reveal = slowEase(
+    progressBetween(
+      progress,
+      0.02,
+      0.22
     )
   )
 
-  const currentLine = Math.min(
-    code.length - 1,
-    Math.max(0, visibleLines - 1)
+  const visibleLines = Math.max(
+    1,
+    Math.min(
+      code.length,
+      Math.floor(
+        reveal * code.length
+      ) + 1
+    )
   )
 
   const selectedFile =
-    progress < 0.2
+    progress < 0.09
       ? "package.json"
-      : progress < 0.28
+      : progress < 0.16
         ? "README.md"
         : "app/page.tsx"
 
   return (
     <div
-      data-screen-panel
-      className="absolute inset-0 overflow-hidden bg-[#111827]"
+      className="wizard-window workspace-window"
+      style={{
+        opacity: 1,
+        transform: `
+          translate3d(
+            ${0}px,
+            ${(1 - reveal) * 14}px,
+            0
+          )
+          scale(${0.985 + reveal * 0.015})
+        `,
+      }}
     >
-      <Bar>wizard repo / investigation workspace</Bar>
+      <WindowBar
+        title="wizard repo / workspace"
+        status="INSPECTING"
+      />
 
-      <div className="ide-body">
-        <div className="file-tree">
+      <div className="workspace-body">
+        <div className="workspace-tree">
           <b>EXPLORER</b>
 
           <span>⌄ wizard repo</span>
 
           <em
             className={
-              selectedFile === "package.json"
-                ? "repo-selected"
+              selectedFile ===
+              "package.json"
+                ? "workspace-selected"
                 : ""
             }
           >
@@ -205,8 +267,9 @@ function Workspace({
 
           <em
             className={
-              selectedFile === "README.md"
-                ? "repo-selected"
+              selectedFile ===
+              "README.md"
+                ? "workspace-selected"
                 : ""
             }
           >
@@ -215,8 +278,9 @@ function Workspace({
 
           <em
             className={
-              selectedFile === "app/page.tsx"
-                ? "repo-selected"
+              selectedFile ===
+              "app/page.tsx"
+                ? "workspace-selected"
                 : ""
             }
           >
@@ -227,20 +291,23 @@ function Workspace({
           <em>◇ lib/</em>
         </div>
 
-        <pre className="code-stream">
+        <pre className="workspace-code">
           <code>
             {code
               .slice(0, visibleLines)
-              .map((text, index) => (
-                <React.Fragment key={index}>
+              .map((line, index) => (
+                <React.Fragment
+                  key={index}
+                >
                   <span
                     className={
-                      index === currentLine
-                        ? "code-current"
+                      index ===
+                      visibleLines - 1
+                        ? "workspace-current-line"
                         : ""
                     }
                   >
-                    {text || " "}
+                    {line || " "}
                   </span>
 
                   {index <
@@ -249,115 +316,107 @@ function Workspace({
                 </React.Fragment>
               ))}
 
-            <span className="typing-caret" />
+            <span className="wizard-caret" />
           </code>
         </pre>
       </div>
 
-      <div
-        className="absolute bottom-3 right-3 rounded border border-blue-300/20 bg-blue-500/10 px-2 py-1 text-[7px] text-blue-100"
-        style={{
-          transform: `translateY(${(1 - range(progress, 0.08, 0.22)) * 10}px)`,
-        }}
-      >
-        INVESTIGATION NODE · node_014
+      <div className="workspace-footer">
+        <span>
+          investigation node_014
+        </span>
+
+        <span>
+          manifest → source
+        </span>
       </div>
     </div>
   )
 }
 
-function Terminal({
+/* =========================================================
+   TERMINAL
+========================================================= */
+
+function TerminalWindow({
   progress,
 }: {
   progress: number
 }) {
-  const open = smooth(
-    range(progress, 0.255, 0.32)
+  const open = slowEase(
+    progressBetween(
+      progress,
+      0.18,
+      0.29
+    )
   )
 
-  const execute = smooth(
-    range(progress, 0.31, 0.43)
+  const execution = slowEase(
+    progressBetween(
+      progress,
+      0.27,
+      0.46
+    )
   )
 
-  const close = smooth(
-    range(progress, 0.43, 0.49)
+  const commandsVisible = Math.max(
+    0,
+    Math.min(
+      commands.length,
+      Math.floor(
+        execution *
+          commands.length
+      )
+    )
   )
-
-  const commandIndex = Math.min(
-    commands.length - 1,
-    Math.floor(execute * commands.length)
-  )
-
-  const terminalScale =
-    0.72 +
-    open * 0.28 -
-    close * 0.2
-
-  const terminalX =
-    18 -
-    close * 14
-
-  const terminalY =
-    24 -
-    close * 26
 
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-30"
+      className="wizard-window terminal-window"
       style={{
-        clipPath:
-          open <= 0
-            ? "inset(100% 0 0 0)"
-            : "inset(0 0 0 0)",
+        opacity: open,
+        transform: `
+          translate3d(
+            ${24 - open * 24}px,
+            ${18 - open * 18}px,
+            0
+          )
+          scale(${0.96 + open * 0.04})
+        `,
       }}
     >
-      <div
-        className="absolute left-[9%] top-[12%] h-[68%] w-[72%] overflow-hidden rounded-lg border border-white/15 bg-[#05080d] shadow-2xl"
-        style={{
-          transformOrigin: "bottom left",
-          transform: `translate3d(${terminalX}px, ${terminalY}px, 0) scale(${terminalScale})`,
-          opacity: 1,
-        }}
-      >
-        <div className="flex h-8 items-center border-b border-white/10 bg-[#0b1424] px-3 font-mono text-[7px] text-slate-400 sm:text-[9px]">
-          <div className="mr-3 flex gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-red-400" />
-            <span className="h-2 w-2 rounded-full bg-yellow-400" />
-            <span className="h-2 w-2 rounded-full bg-green-400" />
-          </div>
+      <WindowBar
+        title="terminal · wizard session"
+        status={
+          execution > 0.95
+            ? "EXIT 0"
+            : "RUNNING"
+        }
+      />
 
-          terminal · wizard runtime
+      <div className="terminal-body">
+        <div className="terminal-glow" />
 
-          <span className="ml-auto text-green-400">
-            EXECUTING
-          </span>
-        </div>
-
-        <div className="relative h-[calc(100%-2rem)] overflow-hidden p-5 font-mono text-[8px] leading-relaxed text-white sm:p-7 sm:text-[10px]">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.1),transparent_45%)]" />
-
-          <div className="relative z-10">
-            {commands
-              .slice(
-                0,
-                Math.max(
-                  1,
-                  commandIndex + 1
-                )
-              )
-              .map((command, index) => (
+        <div className="terminal-content">
+          {commands
+            .slice(0, commandsVisible)
+            .map(
+              (
+                command,
+                index
+              ) => (
                 <div
                   key={command}
-                  className="mb-4"
+                  className="terminal-command"
                 >
                   <div>
-                    <span className="text-cyan-400">
+                    <span className="terminal-user">
                       wizard@repo
                     </span>
 
-                    <span className="text-slate-500">
+                    <span className="terminal-path">
                       {" "}
-                      ~/wizard repo
+                      ~/wizard-repo
                     </span>
 
                     <span>
@@ -365,47 +424,45 @@ function Terminal({
                       $
                     </span>
 
-                    <span className="ml-2">
+                    <span className="terminal-command-text">
+                      {" "}
                       {command}
                     </span>
                   </div>
 
-                  {index <=
-                    Math.floor(
-                      execute * commands.length
-                    ) && (
-                    <div className="mt-1 text-green-400/80">
-                      ✓ completed ·{" "}
-                      {index === 0
-                        ? "structure mapped"
-                        : index === 1
-                          ? "manifest inspected"
-                          : index === 2
-                            ? "runtime verified"
-                            : "browser evidence captured"}
-                    </div>
-                  )}
+                  <div className="terminal-result">
+                    ✓{" "}
+                    {index === 0
+                      ? "repository structure mapped"
+                      : index === 1
+                        ? "source indexed"
+                        : index === 2
+                          ? "runtime verified"
+                          : "browser verification requested"}
+                  </div>
                 </div>
-              ))}
+              )
+            )}
 
-            <span className="text-cyan-400">
+          <div className="terminal-prompt">
+            <span className="terminal-user">
               wizard@repo
             </span>
 
-            <span className="text-slate-500">
+            <span className="terminal-path">
               {" "}
-              ~/wizard repo
+              ~/wizard-repo
             </span>
 
             <span> $</span>
 
-            <span className="ml-2 inline-block h-3 w-1.5 animate-pulse bg-white align-middle" />
+            <span className="wizard-caret terminal-caret" />
           </div>
         </div>
 
-        {execute > 0.68 && (
-          <div className="absolute bottom-3 right-3 rounded border border-green-400/20 bg-green-400/10 px-2 py-1 text-[7px] text-green-300">
-            EXIT CODE 0
+        {execution > 0.78 && (
+          <div className="terminal-exit">
+            process exited with code 0
           </div>
         )}
       </div>
@@ -413,343 +470,91 @@ function Terminal({
   )
 }
 
-function RepositoryInvestigation({
+/* =========================================================
+   REPOSITORY WINDOW
+========================================================= */
+
+function RepositoryWindow({
   progress,
 }: {
   progress: number
 }) {
-  const graphProgress = smooth(
-    range(progress, 0.45, 0.63)
+  const open = slowEase(
+    progressBetween(
+      progress,
+      0.38,
+      0.52
+    )
+  )
+
+  const fileIndex = Math.min(
+    files.length - 1,
+    Math.floor(
+      open * files.length
+    )
   )
 
   const activeFile =
-    files[
-      Math.min(
-        files.length - 1,
-        Math.floor(graphProgress * files.length)
-      )
-    ]
-
-  const nodeOne =
-    smooth(range(progress, 0.45, 0.5))
-
-  const nodeTwo =
-    smooth(range(progress, 0.5, 0.55))
-
-  const nodeThree =
-    smooth(range(progress, 0.55, 0.6))
+    files[fileIndex]
 
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-20"
+      className="wizard-window repository-window"
       style={{
-        transform: `scale(${0.96 + graphProgress * 0.04})`,
-        clipPath:
-          graphProgress <= 0
-            ? "inset(100% 0 0 0)"
-            : "inset(0 0 0 0)",
+        opacity: open,
+        transform: `
+          translate3d(
+            ${-18 + open * 18}px,
+            ${20 - open * 20}px,
+            0
+          )
+          scale(${0.96 + open * 0.04})
+        `,
       }}
     >
-      <div className="absolute inset-0 bg-[#07111f]/90 backdrop-blur-[1px]" />
-
-      <div className="absolute inset-[7%] overflow-hidden rounded-lg border border-white/10 bg-[#081321]/95">
-        <Bar>investigation graph / runtime verification</Bar>
-
-        <div className="relative h-[calc(100%-2rem)]">
-          <div className="absolute left-5 top-4 text-[7px] uppercase tracking-[0.25em] text-slate-500">
-            HOW WE GOT THERE
-          </div>
-
-          <div
-            className="absolute left-[10%] top-[28%] flex h-12 w-28 flex-col justify-center rounded border border-blue-300/20 bg-blue-500/10 px-3"
-            style={{
-              transform: `translateY(${(1 - nodeOne) * 24}px)`,
-            }}
-          >
-            <span className="text-[6px] text-blue-200">
-              INVESTIGATION NODE
-            </span>
-            <strong className="mt-1 text-[8px] text-white">
-              Read package.json
-            </strong>
-          </div>
-
-          <div
-            className="absolute left-[39%] top-[50%] flex h-12 w-28 flex-col justify-center rounded border border-amber-300/20 bg-amber-400/10 px-3"
-            style={{
-              transform: `translateY(${(1 - nodeTwo) * 24}px)`,
-            }}
-          >
-            <span className="text-[6px] text-amber-200">
-              OBSERVATION
-            </span>
-            <strong className="mt-1 text-[8px] text-white">
-              obs_031
-            </strong>
-          </div>
-
-          <div
-            className="absolute right-[10%] top-[28%] flex h-12 w-28 flex-col justify-center rounded border border-emerald-300/20 bg-emerald-400/10 px-3"
-            style={{
-              transform: `translateY(${(1 - nodeThree) * 24}px)`,
-            }}
-          >
-            <span className="text-[6px] text-emerald-200">
-              CLAIM
-            </span>
-            <strong className="mt-1 text-[8px] text-white">
-              Runtime = Node 18
-            </strong>
-          </div>
-
-          <svg
-            className="pointer-events-none absolute inset-0 h-full w-full"
-            viewBox="0 0 100 100"
-            preserveAspectRatio="none"
-          >
-            <path
-              d="M 24 36 C 31 36, 33 50, 39 56"
-              fill="none"
-              stroke="rgba(147,197,253,.5)"
-              strokeWidth="0.4"
-              strokeDasharray="100"
-              strokeDashoffset={100 - nodeTwo * 100}
-            />
-
-            <path
-              d="M 61 56 C 68 50, 70 36, 76 36"
-              fill="none"
-              stroke="rgba(110,231,183,.55)"
-              strokeWidth="0.4"
-              strokeDasharray="100"
-              strokeDashoffset={100 - nodeThree * 100}
-            />
-          </svg>
-
-          <div className="absolute bottom-4 left-5 right-5 flex items-center justify-between border-t border-white/10 pt-3">
-            <span className="text-[7px] text-slate-500">
-              AGENT READING
-            </span>
-
-            <strong className="text-[8px] text-blue-100">
-              {activeFile}
-            </strong>
-
-            <span className="text-[7px] text-emerald-400">
-              {Math.round(graphProgress * 42)} files mapped
-            </span>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function BrowserInvestigation({
-  progress,
-}: {
-  progress: number
-}) {
-  const browserProgress = smooth(
-    range(progress, 0.62, 0.81)
-  )
-
-  const browserOpen = smooth(
-    range(progress, 0.61, 0.68)
-  )
-
-  const browserClose = smooth(
-    range(progress, 0.79, 0.84)
-  )
-
-  const scale =
-    0.76 +
-    browserOpen * 0.24 -
-    browserClose * 0.16
-
-  const x =
-    36 -
-    browserClose * 30
-
-  const y =
-    28 -
-    browserClose * 20
-
-  return (
-    <div
-      className="pointer-events-none absolute inset-0 z-40"
-      style={{
-        clipPath:
-          browserOpen <= 0
-            ? "inset(100% 0 0 0)"
-            : "inset(0 0 0 0)",
-      }}
-    >
-      <div
-        className="absolute left-[7%] top-[7%] h-[82%] w-[86%] overflow-hidden rounded-xl border border-slate-300/30 bg-white shadow-2xl"
-        style={{
-          transformOrigin: "center center",
-          transform: `translate3d(${x}px, ${y}px, 0) scale(${scale})`,
-        }}
-      >
-        <Browser
-          initialUrl="https://wizardagents.vercel.app"
-          initialTabs={[
-            {
-              id: "wizard",
-              title: "wizardagents.vercel.app",
-              url: "https://wizardagents.vercel.app",
-            },
-          ]}
-          showWindowControls={false}
-          showBookmarksBar={false}
-          showStatusBar={false}
-          enableTabManagement
-          enableBookmarks
-          enableHistory
-          enableDownloads={false}
-          enableSettings={false}
-          className="h-full rounded-none border-0 shadow-none"
-        />
-
-        <div className="pointer-events-none absolute bottom-3 left-3 flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-2.5 py-1 text-[7px] text-slate-500 shadow-sm backdrop-blur">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-          agent verification
-        </div>
-
-        <div
-          className="pointer-events-none absolute left-[18%] top-[38%] h-8 w-8 rounded-full border border-blue-400/60"
-          style={{
-            transform: `translate(
-              ${Math.sin(browserProgress * Math.PI * 5) * 18}px,
-              ${Math.sin(browserProgress * Math.PI * 3) * 12}px
-            )`,
-          }}
-        />
-      </div>
-    </div>
-  )
-}
-
-function EvidenceLayer({
-  progress,
-}: {
-  progress: number
-}) {
-  const evidence = smooth(
-    range(progress, 0.78, 0.92)
-  )
-
-  const lineOne = smooth(
-    range(progress, 0.78, 0.84)
-  )
-
-  const lineTwo = smooth(
-    range(progress, 0.83, 0.88)
-  )
-
-  const lineThree = smooth(
-    range(progress, 0.87, 0.92)
-  )
-
-  if (evidence <= 0) {
-    return null
-  }
-
-  return (
-    <div className="pointer-events-none absolute inset-0 z-50">
-      <div className="absolute left-[6%] top-[7%] text-[7px] uppercase tracking-[0.25em] text-slate-400">
-        EVIDENCE RESOLUTION
-      </div>
-
-      <div
-        className="absolute left-[7%] top-[22%] w-[28%] rounded border border-amber-300/20 bg-[#101827]/95 p-3"
-        style={{
-          transform: `translateX(${(1 - lineOne) * -60}px)`,
-        }}
-      >
-        <span className="text-[6px] text-amber-300">
-          OBSERVATION
-        </span>
-        <p className="mt-1 text-[8px] text-white">
-          package.json declares Node.js 18
-        </p>
-        <small className="text-[6px] text-slate-500">
-          obs_031 · immutable
-        </small>
-      </div>
-
-      <div
-        className="absolute left-[36%] top-[44%] h-px w-[25%] origin-left bg-emerald-300/60"
-        style={{
-          transform: `scaleX(${lineTwo})`,
-        }}
+      <WindowBar
+        title="agent activity / repository"
+        status="READING"
       />
 
-      <div
-        className="absolute right-[7%] top-[29%] w-[28%] rounded border border-emerald-300/20 bg-[#101827]/95 p-3"
-        style={{
-          transform: `translateX(${(1 - lineTwo) * 60}px)`,
-        }}
-      >
-        <span className="text-[6px] text-emerald-300">
-          CLAIM
-        </span>
-        <p className="mt-1 text-[8px] text-white">
-          Runtime = Node.js 18
-        </p>
-        <small className="text-[6px] text-emerald-400">
-          TRUST · HIGH
-        </small>
-      </div>
+      <div className="repository-body">
+        <div className="repository-tree">
+          <span className="repository-heading">
+            REPOSITORY STRUCTURE
+          </span>
 
-      <div
-        className="absolute left-[7%] bottom-[14%] w-[28%] rounded border border-blue-300/20 bg-[#101827]/95 p-3"
-        style={{
-          transform: `translateY(${(1 - lineThree) * 45}px)`,
-        }}
-      >
-        <span className="text-[6px] text-blue-300">
-          OBSERVATION
-        </span>
-        <p className="mt-1 text-[8px] text-white">
-          npm install completed
-        </p>
-        <small className="text-[6px] text-slate-500">
-          obs_034 · exit code 0
-        </small>
-      </div>
+          <FileTree
+            data={
+              wizardFileStructure
+            }
+            className="repository-file-tree"
+          />
+        </div>
 
-      <div
-        className="absolute right-[7%] bottom-[12%] w-[28%] rounded border border-white/15 bg-[#101827]/95 p-3"
-        style={{
-          transform: `translateY(${(1 - evidence) * 40}px)`,
-        }}
-      >
-        <span className="text-[6px] text-slate-400">
-          EVIDENCE ENGINE
-        </span>
+        <div className="repository-inspector">
+          <span className="repository-label">
+            AGENT READING
+          </span>
 
-        <div className="mt-2 space-y-1.5">
-          <div className="flex justify-between text-[7px]">
-            <span>Runtime</span>
-            <span className="text-emerald-400">
-              VERIFIED
-            </span>
+          <strong>
+            {activeFile}
+          </strong>
+
+          <div className="repository-check">
+            ✓ scanning source symbols
           </div>
 
-          <div className="flex justify-between text-[7px]">
-            <span>Dependencies</span>
-            <span className="text-emerald-400">
-              VERIFIED
-            </span>
+          <div className="repository-check">
+            ✓ {14 + fileIndex} files mapped
           </div>
 
-          <div className="flex justify-between text-[7px]">
-            <span>Browser</span>
-            <span className="text-emerald-400">
-              VERIFIED
-            </span>
+          <div className="repository-check">
+            ✓ dependency relationship found
+          </div>
+
+          <div className="repository-trace">
+            trace → Investigation Node
+            → Observation
           </div>
         </div>
       </div>
@@ -757,278 +562,436 @@ function EvidenceLayer({
   )
 }
 
-function ReportLayer({
+/* =========================================================
+   KNOWLEDGE WINDOW
+========================================================= */
+
+function KnowledgeWindow({
   progress,
 }: {
   progress: number
 }) {
-  const report = smooth(
-    range(progress, 0.9, 1)
+  const open = slowEase(
+    progressBetween(
+      progress,
+      0.51,
+      0.65
+    )
   )
 
-  const graph = smooth(
-    range(progress, 0.9, 0.95)
-  )
+  const observation =
+    slowEase(
+      progressBetween(
+        progress,
+        0.53,
+        0.62
+      )
+    )
 
-  const checkpoint = smooth(
-    range(progress, 0.94, 0.98)
+  const claim =
+    slowEase(
+      progressBetween(
+        progress,
+        0.58,
+        0.68
+      )
+    )
+
+  return (
+    <div
+      className="wizard-window knowledge-window"
+      style={{
+        opacity: open,
+        transform: `
+          translate3d(
+            0,
+            ${20 - open * 20}px,
+            0
+          )
+          scale(${0.96 + open * 0.04})
+        `,
+      }}
+    >
+      <WindowBar
+        title="knowledge graph / evidence"
+        status="VALIDATING"
+      />
+
+      <div className="knowledge-body">
+        <div className="knowledge-title">
+          <span>
+            WHAT WE KNOW
+          </span>
+
+          <small>
+            runtime owned
+          </small>
+        </div>
+
+        <div className="knowledge-chain">
+          <div
+            className="knowledge-node observation"
+            style={{
+              opacity: observation,
+              transform: `
+                translateX(
+                  ${(1 - observation) *
+                  -18}px
+                )
+              `,
+            }}
+          >
+            <small>
+              OBSERVATION
+            </small>
+
+            <strong>
+              obs_031
+            </strong>
+
+            <p>
+              package.json declares
+              Node.js 18
+            </p>
+          </div>
+
+          <div
+            className="knowledge-connector"
+            style={{
+              transform: `scaleX(${observation})`,
+            }}
+          />
+
+          <div
+            className="knowledge-node claim"
+            style={{
+              opacity: claim,
+              transform: `
+                translateX(
+                  ${(1 - claim) *
+                  18}px
+                )
+              `,
+            }}
+          >
+            <small>
+              CLAIM
+            </small>
+
+            <strong>
+              Runtime = Node.js 18
+            </strong>
+
+            <p className="knowledge-high">
+              TRUST · HIGH
+            </p>
+          </div>
+        </div>
+
+        <div className="knowledge-bottom">
+          <span>
+            Evidence Engine
+          </span>
+
+          <span>
+            immutable observation
+          </span>
+
+          <span>
+            claim validated
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* =========================================================
+   BROWSER WINDOW
+========================================================= */
+
+function BrowserWindow({
+  progress,
+}: {
+  progress: number
+}) {
+  const open = slowEase(
+    progressBetween(
+      progress,
+      0.62,
+      0.76
+    )
   )
 
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-[60]"
+      className="wizard-window browser-window"
       style={{
-        clipPath:
-          report <= 0
-            ? "inset(100% 0 0 0)"
-            : "inset(0 0 0 0)",
+        opacity: open,
+        transform: `
+          translate3d(
+            ${24 - open * 24}px,
+            ${18 - open * 18}px,
+            0
+          )
+          scale(${0.97 + open * 0.03})
+        `,
       }}
     >
-      <div
-        className="absolute inset-[5%] overflow-hidden rounded-xl border border-white/15 bg-[#07111f]"
-        style={{
-          transform: `scale(${0.94 + report * 0.06})`,
-        }}
-      >
-        <Bar status="CONVERGED">
-          wizard / verification report
-        </Bar>
+      <Browser
+        initialUrl="https://wizardagents.vercel.app"
+        initialTabs={[
+          {
+            id: "wizard",
+            title:
+              "wizardagents.vercel.app",
+            url:
+              "https://wizardagents.vercel.app",
+          },
+        ]}
+        showWindowControls={false}
+        showBookmarksBar={false}
+        showStatusBar={false}
+        enableTabManagement
+        enableBookmarks
+        enableHistory
+        enableDownloads={false}
+        enableSettings={false}
+        className="h-full rounded-none border-0 shadow-none"
+      />
 
-        <div className="relative h-[calc(100%-2rem)] overflow-hidden p-5">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-[6px] uppercase tracking-[0.25em] text-slate-500">
-                VERIFICATION REPORT
-              </p>
+      <div className="browser-verification-badge">
+        <span />
+        Browser evidence captured
+      </div>
+    </div>
+  )
+}
 
-              <h3 className="mt-2 text-sm font-semibold text-white">
-                Repository verification
-              </h3>
+/* =========================================================
+   FINAL REPORT
+========================================================= */
 
-              <p className="mt-1 text-[7px] text-slate-500">
-                Evidence backed investigation · complete
-              </p>
+function ReportWindow({
+  progress,
+}: {
+  progress: number
+}) {
+  const open = slowEase(
+    progressBetween(
+      progress,
+      0.76,
+      0.94
+    )
+  )
+
+  const reportReady =
+    progress > 0.92
+
+  return (
+    <div
+      className="wizard-window report-window"
+      style={{
+        opacity: open,
+        transform: `
+          translate3d(
+            0,
+            ${26 - open * 26}px,
+            0
+          )
+          scale(${0.95 + open * 0.05})
+        `,
+      }}
+    >
+      <WindowBar
+        title="wizard / verification report"
+        status={
+          reportReady
+            ? "CONVERGED"
+            : "ASSEMBLING"
+        }
+      />
+
+      <div className="report-body">
+        <div className="report-heading">
+          <div>
+            <span>
+              VERIFICATION REPORT
+            </span>
+
+            <h3>
+              Repository verification
+            </h3>
+
+            <p>
+              Evidence backed investigation
+            </p>
+          </div>
+
+          <div className="report-pass">
+            ✓ VERIFIED
+          </div>
+        </div>
+
+        <div className="report-columns">
+          <div className="report-section">
+            <small>
+              VERIFIED CLAIMS
+            </small>
+
+            <div className="report-row">
+              <span>
+                Runtime
+              </span>
+
+              <strong>
+                Node.js 18
+              </strong>
+
+              <b>
+                HIGH
+              </b>
             </div>
 
-            <div className="rounded border border-emerald-300/20 bg-emerald-400/10 px-2 py-1 text-[7px] text-emerald-300">
-              VERIFIED
+            <div className="report-row">
+              <span>
+                Dependencies
+              </span>
+
+              <strong>
+                Installable
+              </strong>
+
+              <b>
+                HIGH
+              </b>
+            </div>
+
+            <div className="report-row">
+              <span>
+                Browser
+              </span>
+
+              <strong>
+                Evidence captured
+              </strong>
+
+              <b>
+                HIGH
+              </b>
             </div>
           </div>
 
-          <div className="relative mt-6 h-[55%]">
-            <svg
-              className="absolute inset-0 h-full w-full"
-              viewBox="0 0 100 60"
-              preserveAspectRatio="none"
-            >
-              <path
-                d="M 15 14 L 50 30 L 85 14"
-                fill="none"
-                stroke="rgba(147,197,253,.5)"
-                strokeWidth="0.35"
-                strokeDasharray="100"
-                strokeDashoffset={100 - graph * 100}
-              />
+          <div className="report-section">
+            <small>
+              EVIDENCE TRAIL
+            </small>
 
-              <path
-                d="M 50 30 L 50 50"
-                fill="none"
-                stroke="rgba(110,231,183,.5)"
-                strokeWidth="0.35"
-                strokeDasharray="100"
-                strokeDashoffset={100 - checkpoint * 100}
-              />
-            </svg>
-
-            <div className="absolute left-[5%] top-[8%] rounded border border-blue-300/20 bg-blue-400/10 px-3 py-2">
-              <span className="text-[6px] text-blue-200">
-                INVESTIGATION
+            <div className="report-event">
+              <span>
+                obs_031
               </span>
-              <p className="mt-1 text-[7px] text-white">
-                Read package.json
+
+              <p>
+                package.json declares
+                Node.js 18
               </p>
             </div>
 
-            <div className="absolute left-[40%] top-[40%] rounded border border-amber-300/20 bg-amber-400/10 px-3 py-2">
-              <span className="text-[6px] text-amber-200">
-                OBSERVATION
+            <div className="report-event">
+              <span>
+                obs_034
               </span>
-              <p className="mt-1 text-[7px] text-white">
-                exit code 0
+
+              <p>
+                npm install completed
+                with exit code 0
               </p>
             </div>
 
-            <div className="absolute right-[5%] top-[8%] rounded border border-emerald-300/20 bg-emerald-400/10 px-3 py-2">
-              <span className="text-[6px] text-emerald-200">
-                CLAIM
-              </span>
-              <p className="mt-1 text-[7px] text-white">
-                Dependencies installable
-              </p>
-            </div>
-
-            <div
-              className="absolute left-1/2 top-[78%] -translate-x-1/2 rounded border border-white/15 bg-white/5 px-4 py-2"
-              style={{
-                transform: `translateX(-50%) scale(${0.8 + checkpoint * 0.2})`,
-              }}
-            >
-              <span className="text-[6px] text-slate-400">
-                CHECKPOINT
+            <div className="report-event">
+              <span>
+                obs_041
               </span>
 
-              <p className="mt-1 text-[7px] text-white">
-                Runtime verification satisfied
-              </p>
-
-              <p className="mt-1 text-[6px] text-emerald-400">
-                ✓ convergence reached
+              <p>
+                Browser verification
+                captured evidence
               </p>
             </div>
           </div>
+        </div>
 
-          <div className="absolute bottom-4 left-5 right-5 flex items-center justify-between border-t border-white/10 pt-3">
-            <span className="text-[7px] text-slate-500">
-              CLAIMS
-            </span>
+        <div className="report-footer">
+          <span>
+            3 claims
+          </span>
 
-            <strong className="text-[8px] text-white">
-              3 verified
-            </strong>
+          <span>
+            9 observations
+          </span>
 
-            <span className="text-[7px] text-slate-500">
-              EVIDENCE
-            </span>
+          <span>
+            0 contradictions
+          </span>
 
-            <strong className="text-[8px] text-white">
-              9 observations
-            </strong>
-
-            <span className="text-[7px] text-slate-500">
-              TRUST
-            </span>
-
-            <strong className="text-[8px] text-emerald-400">
-              HIGH
-            </strong>
-          </div>
+          <span className="report-converged">
+            {reportReady
+              ? "CONVERGENCE REACHED"
+              : "EVALUATING CHECKPOINTS"}
+          </span>
         </div>
       </div>
     </div>
   )
 }
 
-function InvestigationTimeline({
+/* =========================================================
+   STORY STATE
+========================================================= */
+
+function InvestigationLabel({
   progress,
 }: {
   progress: number
 }) {
-  const events = [
-    ["01", "Investigation created", 0.04],
-    ["02", "Repository manifest", 0.13],
-    ["03", "Runtime observed", 0.25],
-    ["04", "Dependencies verified", 0.39],
-    ["05", "Investigation graph", 0.53],
-    ["06", "Browser evidence", 0.69],
-    ["07", "Claims validated", 0.83],
-    ["08", "Convergence", 0.97],
-  ]
+  const state =
+    progress < 0.2
+      ? "DISCOVERY"
+      : progress < 0.38
+        ? "EXECUTION"
+        : progress < 0.55
+          ? "REPOSITORY INVESTIGATION"
+          : progress < 0.7
+            ? "EVIDENCE VALIDATION"
+            : progress < 0.84
+              ? "BROWSER VERIFICATION"
+              : "CONVERGENCE"
 
   return (
-    <div className="pointer-events-none absolute bottom-6 left-1/2 z-[80] hidden w-[min(760px,72%)] -translate-x-1/2 lg:block">
-      <div className="relative h-px bg-white/10">
-        <div
-          className="absolute left-0 top-0 h-px bg-white/60"
-          style={{
-            width: `${progress * 100}%`,
-          }}
-        />
-
-        {events.map(
-          ([number, label, position]) => {
-            const p =
-              typeof position === "number"
-                ? position
-                : 0
-
-            const active =
-              progress >= p
-
-            return (
-              <div
-                key={String(number)}
-                className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2"
-                style={{
-                  left: `${p * 100}%`,
-                }}
-              >
-                <span
-                  className={cn(
-                    "block h-2 w-2 rounded-full border",
-                    active
-                      ? "border-white bg-white"
-                      : "border-white/25 bg-[#123A6B]"
-                  )}
-                />
-
-                {active && (
-                  <span className="absolute left-1/2 top-4 -translate-x-1/2 whitespace-nowrap text-[6px] text-white/70">
-                    {label}
-                  </span>
-                )}
-              </div>
-            )
-          }
-        )}
-      </div>
+    <div className="investigation-label">
+      <span className="investigation-pulse" />
+      <span>
+        {state}
+      </span>
     </div>
   )
 }
 
-function getStageLabel(
-  progress: number
-) {
-  if (progress < 0.28) {
-    return "DISCOVERY"
-  }
-
-  if (progress < 0.49) {
-    return "EXECUTION"
-  }
-
-  if (progress < 0.63) {
-    return "INVESTIGATION GRAPH"
-  }
-
-  if (progress < 0.81) {
-    return "BROWSER VERIFICATION"
-  }
-
-  if (progress < 0.92) {
-    return "EVIDENCE ENGINE"
-  }
-
-  return "CONVERGENCE"
-}
+/* =========================================================
+   HERO
+========================================================= */
 
 export function CinematicHero({
   className,
 }: {
   className?: string
 }) {
-  const root = useRef<HTMLElement>(null)
+  const root =
+    useRef<HTMLElement>(null)
 
   const [progress, setProgress] =
     useState(0)
-
-  const progressRef =
-    useRef(0)
-
-  const reducedMotion =
-    typeof window !== "undefined" &&
-    window.matchMedia(
-      "(prefers-reduced-motion: reduce)"
-    ).matches
 
   useEffect(() => {
     let frame = 0
@@ -1036,7 +999,8 @@ export function CinematicHero({
     const update = () => {
       frame = 0
 
-      const element = root.current
+      const element =
+        root.current
 
       if (!element) {
         return
@@ -1055,41 +1019,9 @@ export function CinematicHero({
         -rect.top / distance
       )
 
-      progressRef.current = next
-
-      element.style.setProperty(
-        "--scene-progress",
-        next.toFixed(4)
-      )
-
-      const intro =
-        smooth(range(next, 0, 0.12))
-
-      const outro =
-        smooth(range(next, 0.88, 1))
-
-      const scale =
-        0.9 +
-        intro * 0.1 -
-        outro * 0.025
-
-      const radius =
-        28 -
-        intro * 28 +
-        outro * 28
-
-      element.style.setProperty(
-        "--scene-scale",
-        scale.toFixed(4)
-      )
-
-      element.style.setProperty(
-        "--scene-radius",
-        `${radius.toFixed(2)}px`
-      )
-
       setProgress((current) =>
-        Math.abs(current - next) > 0.001
+        Math.abs(current - next) >
+        0.001
           ? next
           : current
       )
@@ -1101,7 +1033,9 @@ export function CinematicHero({
       }
 
       frame =
-        window.requestAnimationFrame(update)
+        window.requestAnimationFrame(
+          update
+        )
     }
 
     window.addEventListener(
@@ -1135,20 +1069,36 @@ export function CinematicHero({
     }
   }, [])
 
-  const investigationState =
-    useMemo(
-      () => getStageLabel(progress),
-      [progress]
-    )
+  const sceneScale =
+    0.92 +
+    slowEase(
+      progressBetween(
+        progress,
+        0,
+        0.12
+      )
+    ) *
+      0.08
 
-  const sceneProgress =
-    reducedMotion ? 1 : progress
+  const sceneRadius =
+    24 -
+    slowEase(
+      progressBetween(
+        progress,
+        0,
+        0.12
+      )
+    ) *
+      24
+
+  const storyComplete =
+    progress > 0.96
 
   return (
     <section
       ref={root}
       className={cn(
-        "relative min-h-[7600px] overflow-visible bg-transparent font-sans",
+        "relative min-h-[7200px] overflow-visible bg-transparent font-sans",
         className
       )}
     >
@@ -1156,27 +1106,13 @@ export function CinematicHero({
         <div
           className="scene-card relative flex min-h-screen w-full items-center justify-center overflow-hidden text-white"
           style={{
-            borderRadius:
-              "var(--scene-radius, 28px)",
-            transform:
-              "scale(var(--scene-scale, 0.9))",
-            willChange: "transform",
+            transform: `scale(${sceneScale})`,
+            borderRadius: `${sceneRadius}px`,
           }}
         >
           <SafeMeshGradient />
 
-          <div className="pointer-events-none absolute inset-0 z-10">
-            <div
-              className="absolute inset-0"
-              style={{
-                background:
-                  "radial-gradient(circle at 50% 45%, rgba(255,255,255,.08), transparent 45%)",
-                opacity:
-                  0.35 +
-                  sceneProgress * 0.2,
-              }}
-            />
-          </div>
+          <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(circle_at_55%_45%,rgba(255,255,255,.08),transparent_48%)]" />
 
           <div className="relative z-20 flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 py-12 lg:flex-row lg:gap-14 lg:px-10">
             <div className="w-full max-w-[350px] shrink-0">
@@ -1185,118 +1121,88 @@ export function CinematicHero({
               </p>
 
               <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
-                AI writes the code.
+                AI writes the
+                code.
                 <br />
                 Wizard checks the
                 reality.
               </h2>
 
-              <p className="mt-5 max-w-[330px] text-sm leading-relaxed text-blue-50/80">
+              <p className="mt-5 max-w-[320px] text-sm leading-relaxed text-blue-50/80">
                 Watch an autonomous
-                investigation turn
-                repository actions into
-                evidence backed knowledge.
+                investigation inspect,
+                execute, verify, and
+                build an evidence trail.
               </p>
 
-              <div className="mt-8">
-                <div className="mb-2 flex items-center justify-between font-mono text-[8px] uppercase tracking-[.2em] text-blue-100/50">
-                  <span>
-                    Investigation state
-                  </span>
+              <InvestigationLabel
+                progress={progress}
+              />
 
-                  <span className="text-blue-100/80">
-                    {investigationState}
-                  </span>
+              {storyComplete && (
+                <div className="mt-4 text-[9px] font-mono uppercase tracking-[.2em] text-emerald-200/70">
+                  Investigation converged
                 </div>
-
-                <div className="h-px w-full bg-white/10">
-                  <div
-                    className="h-px bg-white/70"
-                    style={{
-                      width: `${progress * 100}%`,
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="mt-5 grid grid-cols-2 gap-2 font-mono text-[7px] uppercase tracking-[.15em] text-blue-100/50">
-                <div className="rounded border border-white/10 bg-white/5 px-2 py-2">
-                  <span className="block">
-                    Evidence
-                  </span>
-
-                  <strong className="mt-1 block text-white/80">
-                    Immutable
-                  </strong>
-                </div>
-
-                <div className="rounded border border-white/10 bg-white/5 px-2 py-2">
-                  <span className="block">
-                    Truth
-                  </span>
-
-                  <strong className="mt-1 block text-white/80">
-                    Runtime owned
-                  </strong>
-                </div>
-              </div>
+              )}
             </div>
 
             <div className="scene-laptop relative w-full max-w-[1180px] lg:ml-4">
               <div className="relative aspect-[650/400] w-full">
                 <MacbookPro
                   className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
-                  aria-label="Wizard autonomous investigation workspace"
+                  aria-label="Wizard autonomous repository investigation"
                   role="img"
                 >
-                  <div className="screen relative h-full w-full overflow-hidden bg-[#07101f] font-mono text-[8px] sm:text-[11px] md:text-xs">
-                    <div className="absolute left-0 right-0 top-0 z-[100] flex items-center gap-3 overflow-hidden border-b border-white/10 bg-[#0b1424] px-3 py-2 text-[7px] text-slate-400 sm:text-[10px]">
-                      <span className="text-white">
+                  <div className="screen relative h-full w-full overflow-hidden bg-[#07101f] font-mono">
+                    <div className="absolute left-0 right-0 top-0 z-[200] flex h-7 items-center border-b border-white/10 bg-[#0b1424] px-3">
+                      <span className="text-[7px] font-medium tracking-[.16em] text-white/80 sm:text-[9px]">
                         WIZARD
                       </span>
 
-                      <span className="text-slate-600">
+                      <span className="mx-2 text-[7px] text-white/20">
                         /
                       </span>
 
-                      <span>
-                        investigation
+                      <span className="text-[7px] text-slate-500 sm:text-[9px]">
+                        autonomous investigation
                       </span>
 
-                      <span className="ml-auto whitespace-nowrap text-emerald-400">
-                        ● {investigationState}
-                      </span>
+                      <div className="ml-auto flex items-center gap-2 text-[6px] uppercase tracking-[.12em] sm:text-[8px]">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+
+                        <span className="text-emerald-300/80">
+                          {storyComplete
+                            ? "converged"
+                            : "investigating"}
+                        </span>
+                      </div>
                     </div>
 
-                    <div className="absolute inset-0 top-8 overflow-hidden">
-                      <Workspace
+                    <div className="absolute inset-x-0 bottom-0 top-7 overflow-hidden">
+                      <WorkspaceWindow
                         progress={progress}
                       />
 
-                      <Terminal
+                      <TerminalWindow
                         progress={progress}
                       />
 
-                      <RepositoryInvestigation
+                      <RepositoryWindow
                         progress={progress}
                       />
 
-                      <BrowserInvestigation
+                      <KnowledgeWindow
                         progress={progress}
                       />
 
-                      <EvidenceLayer
+                      <BrowserWindow
                         progress={progress}
                       />
 
-                      <ReportLayer
+                      <ReportWindow
                         progress={progress}
                       />
                     </div>
-
-                    <InvestigationTimeline
-                      progress={progress}
-                    />
                   </div>
                 </MacbookPro>
               </div>
@@ -1309,126 +1215,586 @@ export function CinematicHero({
         .scene-card {
           transform-origin: center center;
           transition:
-            transform 120ms linear,
-            border-radius 120ms linear;
+            transform 180ms linear,
+            border-radius 180ms linear;
         }
 
-        .window-bar {
-          height: 32px;
+        .wizard-window {
+          position: absolute;
+          overflow: hidden;
+          border: 1px solid rgba(255,255,255,.11);
+          border-radius: 8px;
+          background: #0b1424;
+          box-shadow:
+            0 20px 45px rgba(0,0,0,.25),
+            0 4px 14px rgba(0,0,0,.16);
+          will-change: transform, opacity;
+        }
+
+        .wizard-window-bar {
+          height: 28px;
           display: flex;
           align-items: center;
-          gap: 6px;
-          padding: 0 10px;
+          gap: 5px;
+          padding: 0 9px;
           background: #0b1424;
           border-bottom: 1px solid rgba(255,255,255,.08);
           color: rgba(203,213,225,.72);
           font-size: 7px;
-          letter-spacing: .02em;
+          white-space: nowrap;
         }
 
-        .window-bar i {
-          width: 7px;
-          height: 7px;
-          border-radius: 999px;
-          background: rgba(255,255,255,.22);
-          flex: 0 0 auto;
+        .wizard-window-lights {
+          display: flex;
+          gap: 4px;
+          flex-shrink: 0;
         }
 
-        .window-bar i:first-child {
+        .wizard-window-lights i {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: rgba(255,255,255,.2);
+        }
+
+        .wizard-window-lights i:first-child {
           background: #fb7185;
         }
 
-        .window-bar i:nth-child(2) {
+        .wizard-window-lights i:nth-child(2) {
           background: #facc15;
         }
 
-        .window-bar i:nth-child(3) {
+        .wizard-window-lights i:nth-child(3) {
           background: #4ade80;
         }
 
-        .window-bar span {
-          margin-left: 4px;
-          white-space: nowrap;
+        .wizard-window-title {
           overflow: hidden;
           text-overflow: ellipsis;
         }
 
-        .live-dot {
+        .wizard-window-status {
           margin-left: auto;
           color: #4ade80;
-          font-size: 6px;
-          font-weight: 500;
+          font-size: 5px;
           letter-spacing: .12em;
         }
 
-        .ide-body {
+        /* ---------------------------------------------
+           WINDOW POSITIONS
+           --------------------------------------------- */
+
+        .workspace-window {
+          left: 4%;
+          top: 7%;
+          width: 54%;
+          height: 54%;
+          z-index: 10;
+        }
+
+        .terminal-window {
+          left: 43%;
+          top: 11%;
+          width: 51%;
+          height: 45%;
+          z-index: 20;
+        }
+
+        .repository-window {
+          left: 4%;
+          top: 49%;
+          width: 48%;
+          height: 43%;
+          z-index: 30;
+        }
+
+        .knowledge-window {
+          right: 4%;
+          top: 52%;
+          width: 49%;
+          height: 38%;
+          z-index: 40;
+        }
+
+        .browser-window {
+          left: 23%;
+          top: 17%;
+          width: 70%;
+          height: 70%;
+          z-index: 50;
+        }
+
+        .report-window {
+          left: 12%;
+          top: 8%;
+          width: 76%;
+          height: 82%;
+          z-index: 70;
+        }
+
+        /* ---------------------------------------------
+           WORKSPACE
+           --------------------------------------------- */
+
+        .workspace-body {
           display: grid;
-          grid-template-columns: 27% 73%;
-          height: calc(100% - 32px);
+          grid-template-columns: 25% 75%;
+          height: calc(100% - 28px);
           background: #111827;
         }
 
-        .file-tree {
+        .workspace-tree {
           display: flex;
           flex-direction: column;
-          gap: 8px;
-          padding: 16px 10px;
-          border-right: 1px solid rgba(255,255,255,.06);
-          color: rgba(148,163,184,.75);
-          font-size: 7px;
+          gap: 6px;
+          padding: 11px 8px;
           overflow: hidden;
-        }
-
-        .file-tree b {
-          color: rgba(226,232,240,.7);
+          border-right: 1px solid rgba(255,255,255,.06);
+          color: rgba(148,163,184,.72);
           font-size: 6px;
-          letter-spacing: .18em;
-          margin-bottom: 4px;
         }
 
-        .file-tree em {
+        .workspace-tree b {
+          color: rgba(226,232,240,.62);
+          font-size: 5px;
+          letter-spacing: .18em;
+        }
+
+        .workspace-tree em {
+          padding: 3px 4px;
+          border-radius: 3px;
           font-style: normal;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
-          padding: 3px 5px;
-          border-radius: 3px;
         }
 
-        .file-tree .repo-selected {
-          color: #dbeafe;
+        .workspace-selected {
+          color: #dbeafe !important;
           background: rgba(59,130,246,.13);
-          box-shadow: inset 2px 0 0 rgba(147,197,253,.8);
-        }
-
-        .code-stream {
-          margin: 0;
-          padding: 20px;
-          overflow: hidden;
-          color: rgba(226,232,240,.78);
-          font-size: 8px;
-          line-height: 1.8;
-        }
-
-        .code-current {
-          display: inline-block;
-          min-width: 100%;
-          color: white;
-          background: rgba(59,130,246,.12);
           box-shadow: inset 2px 0 0 rgba(96,165,250,.8);
         }
 
-        .typing-caret {
+        .workspace-code {
+          margin: 0;
+          overflow: hidden;
+          padding: 15px;
+          color: rgba(226,232,240,.76);
+          font-size: 7px;
+          line-height: 1.8;
+        }
+
+        .workspace-current-line {
           display: inline-block;
-          width: 5px;
-          height: 10px;
+          min-width: 100%;
+          background: rgba(59,130,246,.1);
+          color: white;
+          box-shadow: inset 2px 0 0 rgba(96,165,250,.7);
+        }
+
+        .workspace-footer {
+          position: absolute;
+          bottom: 5px;
+          left: 25%;
+          right: 0;
+          display: flex;
+          justify-content: space-between;
+          padding: 0 9px;
+          color: rgba(148,163,184,.45);
+          font-size: 5px;
+        }
+
+        /* ---------------------------------------------
+           TERMINAL
+           --------------------------------------------- */
+
+        .terminal-body {
+          position: relative;
+          height: calc(100% - 28px);
+          overflow: hidden;
+          background: #05080d;
+        }
+
+        .terminal-glow {
+          position: absolute;
+          inset: 0;
+          background:
+            radial-gradient(
+              circle at 15% 0%,
+              rgba(37,99,235,.1),
+              transparent 45%
+            );
+        }
+
+        .terminal-content {
+          position: relative;
+          padding: 14px;
+          color: #f8fafc;
+          font-size: 6px;
+          line-height: 1.65;
+        }
+
+        .terminal-command {
+          margin-bottom: 8px;
+        }
+
+        .terminal-user {
+          color: #22d3ee;
+        }
+
+        .terminal-path {
+          color: #64748b;
+        }
+
+        .terminal-command-text {
+          color: white;
+        }
+
+        .terminal-result {
+          margin-top: 2px;
+          color: rgba(74,222,128,.75);
+        }
+
+        .terminal-caret {
+          margin-left: 4px;
+          height: 7px;
+          width: 3px;
+        }
+
+        .terminal-exit {
+          position: absolute;
+          bottom: 7px;
+          right: 8px;
+          padding: 3px 5px;
+          border: 1px solid rgba(74,222,128,.2);
+          border-radius: 3px;
+          background: rgba(74,222,128,.06);
+          color: rgba(74,222,128,.7);
+          font-size: 5px;
+        }
+
+        /* ---------------------------------------------
+           REPOSITORY
+           --------------------------------------------- */
+
+        .repository-body {
+          display: grid;
+          grid-template-columns: 55% 45%;
+          height: calc(100% - 28px);
+          background: #081321;
+        }
+
+        .repository-tree {
+          overflow: hidden;
+          border-right: 1px solid rgba(255,255,255,.07);
+          padding: 10px;
+        }
+
+        .repository-heading {
+          display: block;
+          margin-bottom: 7px;
+          color: rgba(148,163,184,.6);
+          font-size: 5px;
+          letter-spacing: .18em;
+        }
+
+        .repository-file-tree {
+          max-height: calc(100% - 15px);
+          overflow: hidden;
+          font-size: 6px;
+        }
+
+        .repository-inspector {
+          padding: 12px 10px;
+        }
+
+        .repository-label {
+          display: block;
+          color: rgba(148,163,184,.55);
+          font-size: 5px;
+          letter-spacing: .15em;
+        }
+
+        .repository-inspector strong {
+          display: block;
+          margin-top: 5px;
+          color: #dbeafe;
+          font-size: 7px;
+        }
+
+        .repository-check {
+          margin-top: 8px;
+          color: rgba(110,231,183,.75);
+          font-size: 6px;
+        }
+
+        .repository-trace {
+          margin-top: 12px;
+          color: rgba(148,163,184,.45);
+          font-size: 5px;
+          line-height: 1.6;
+        }
+
+        /* ---------------------------------------------
+           KNOWLEDGE
+           --------------------------------------------- */
+
+        .knowledge-body {
+          height: calc(100% - 28px);
+          padding: 11px;
+          background: #091523;
+        }
+
+        .knowledge-title {
+          display: flex;
+          justify-content: space-between;
+          color: rgba(226,232,240,.7);
+          font-size: 6px;
+          letter-spacing: .15em;
+        }
+
+        .knowledge-title small {
+          color: rgba(110,231,183,.65);
+          font-size: 5px;
+        }
+
+        .knowledge-chain {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-top: 18px;
+        }
+
+        .knowledge-node {
+          flex: 1;
+          min-width: 0;
+          padding: 8px;
+          border-radius: 5px;
+          border: 1px solid rgba(255,255,255,.1);
+          background: rgba(255,255,255,.025);
+        }
+
+        .knowledge-node small {
+          display: block;
+          font-size: 5px;
+          color: rgba(148,163,184,.65);
+        }
+
+        .knowledge-node strong {
+          display: block;
+          margin-top: 4px;
+          color: white;
+          font-size: 6px;
+        }
+
+        .knowledge-node p {
+          margin: 4px 0 0;
+          color: rgba(148,163,184,.65);
+          font-size: 5px;
+          line-height: 1.5;
+        }
+
+        .knowledge-node.observation {
+          border-color: rgba(251,191,36,.2);
+        }
+
+        .knowledge-node.claim {
+          border-color: rgba(110,231,183,.2);
+        }
+
+        .knowledge-high {
+          color: rgba(110,231,183,.8) !important;
+        }
+
+        .knowledge-connector {
+          flex: 0 0 18px;
+          height: 1px;
+          transform-origin: left center;
+          background: rgba(110,231,183,.5);
+        }
+
+        .knowledge-bottom {
+          position: absolute;
+          bottom: 7px;
+          left: 11px;
+          right: 11px;
+          display: flex;
+          justify-content: space-between;
+          border-top: 1px solid rgba(255,255,255,.06);
+          padding-top: 6px;
+          color: rgba(148,163,184,.45);
+          font-size: 5px;
+        }
+
+        /* ---------------------------------------------
+           BROWSER
+           --------------------------------------------- */
+
+        .browser-window {
+          overflow: hidden;
+          background: white;
+        }
+
+        .browser-verification-badge {
+          position: absolute;
+          bottom: 7px;
+          left: 8px;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 4px 6px;
+          border: 1px solid rgba(15,23,42,.08);
+          border-radius: 999px;
+          background: rgba(255,255,255,.92);
+          color: rgba(71,85,105,.8);
+          font-size: 5px;
+          box-shadow: 0 2px 8px rgba(15,23,42,.08);
+          backdrop-filter: blur(6px);
+        }
+
+        .browser-verification-badge span {
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: #22c55e;
+        }
+
+        /* ---------------------------------------------
+           REPORT
+           --------------------------------------------- */
+
+        .report-body {
+          height: calc(100% - 28px);
+          padding: 15px;
+          background: #081321;
+        }
+
+        .report-heading {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+        }
+
+        .report-heading span {
+          color: rgba(148,163,184,.55);
+          font-size: 5px;
+          letter-spacing: .18em;
+        }
+
+        .report-heading h3 {
+          margin: 5px 0 0;
+          color: white;
+          font-size: 10px;
+        }
+
+        .report-heading p {
+          margin: 3px 0 0;
+          color: rgba(148,163,184,.55);
+          font-size: 5px;
+        }
+
+        .report-pass {
+          padding: 4px 6px;
+          border: 1px solid rgba(110,231,183,.2);
+          border-radius: 4px;
+          background: rgba(110,231,183,.06);
+          color: rgba(110,231,183,.85);
+          font-size: 5px;
+        }
+
+        .report-columns {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 15px;
+        }
+
+        .report-section {
+          min-width: 0;
+          padding: 8px;
+          border: 1px solid rgba(255,255,255,.07);
+          border-radius: 5px;
+          background: rgba(255,255,255,.02);
+        }
+
+        .report-section > small {
+          color: rgba(148,163,184,.5);
+          font-size: 5px;
+          letter-spacing: .14em;
+        }
+
+        .report-row {
+          display: grid;
+          grid-template-columns: .7fr 1fr auto;
+          align-items: center;
+          gap: 5px;
+          margin-top: 8px;
+          color: rgba(203,213,225,.7);
+          font-size: 5px;
+        }
+
+        .report-row strong {
+          color: white;
+          font-weight: 500;
+        }
+
+        .report-row b {
+          color: rgba(110,231,183,.8);
+          font-size: 4px;
+        }
+
+        .report-event {
+          margin-top: 8px;
+          padding-left: 6px;
+          border-left: 1px solid rgba(96,165,250,.3);
+        }
+
+        .report-event span {
+          color: rgba(96,165,250,.75);
+          font-size: 5px;
+        }
+
+        .report-event p {
+          margin: 2px 0 0;
+          color: rgba(203,213,225,.65);
+          font-size: 5px;
+        }
+
+        .report-footer {
+          position: absolute;
+          bottom: 8px;
+          left: 15px;
+          right: 15px;
+          display: flex;
+          gap: 14px;
+          align-items: center;
+          border-top: 1px solid rgba(255,255,255,.07);
+          padding-top: 7px;
+          color: rgba(148,163,184,.5);
+          font-size: 5px;
+        }
+
+        .report-converged {
+          margin-left: auto;
+          color: rgba(110,231,183,.8);
+        }
+
+        /* ---------------------------------------------
+           CURSOR
+           --------------------------------------------- */
+
+        .wizard-caret {
+          display: inline-block;
+          width: 3px;
+          height: 8px;
           margin-left: 2px;
           vertical-align: middle;
           background: #93c5fd;
-          animation: wizard-caret 900ms steps(2,end) infinite;
+          animation: wizard-blink 900ms steps(2,end) infinite;
         }
 
-        @keyframes wizard-caret {
+        @keyframes wizard-blink {
           0%, 45% {
             opacity: 1;
           }
@@ -1438,28 +1804,163 @@ export function CinematicHero({
           }
         }
 
-        @media (max-width: 1024px) {
+        /* ---------------------------------------------
+           SIDE LABEL
+           --------------------------------------------- */
+
+        .investigation-label {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          margin-top: 25px;
+          color: rgba(219,234,254,.65);
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: 7px;
+          letter-spacing: .16em;
+          text-transform: uppercase;
+        }
+
+        .investigation-pulse {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: #86efac;
+          box-shadow: 0 0 10px rgba(134,239,172,.6);
+        }
+
+        /* ---------------------------------------------
+           RESPONSIVE
+           --------------------------------------------- */
+
+        @media (max-width: 1100px) {
+          .workspace-window {
+            left: 3%;
+            width: 56%;
+          }
+
+          .terminal-window {
+            left: 40%;
+            width: 57%;
+          }
+
+          .browser-window {
+            left: 15%;
+            width: 82%;
+          }
+
+          .report-window {
+            left: 8%;
+            width: 84%;
+          }
+        }
+
+        @media (max-width: 900px) {
           .scene-card {
             transform: none !important;
             border-radius: 0 !important;
           }
 
-          .window-bar {
-            height: 28px;
+          .workspace-window {
+            left: 3%;
+            top: 5%;
+            width: 58%;
+            height: 52%;
           }
 
-          .ide-body {
-            height: calc(100% - 28px);
+          .terminal-window {
+            left: 39%;
+            top: 9%;
+            width: 58%;
+            height: 43%;
           }
 
-          .file-tree {
-            padding: 10px 7px;
-            gap: 5px;
+          .repository-window {
+            left: 3%;
+            top: 54%;
+            width: 54%;
+            height: 39%;
           }
 
-          .code-stream {
-            padding: 12px;
-            font-size: 7px;
+          .knowledge-window {
+            right: 3%;
+            top: 57%;
+            width: 53%;
+            height: 35%;
+          }
+
+          .browser-window {
+            left: 10%;
+            top: 15%;
+            width: 87%;
+            height: 73%;
+          }
+
+          .report-window {
+            left: 5%;
+            top: 6%;
+            width: 90%;
+            height: 84%;
+          }
+
+          .investigation-label {
+            margin-top: 18px;
+          }
+        }
+
+        @media (max-width: 700px) {
+          .scene-card {
+            min-height: 100vh;
+          }
+
+          .workspace-window {
+            left: 3%;
+            top: 5%;
+            width: 94%;
+            height: 38%;
+          }
+
+          .terminal-window {
+            left: 6%;
+            top: 28%;
+            width: 88%;
+            height: 31%;
+          }
+
+          .repository-window {
+            left: 3%;
+            top: 56%;
+            width: 94%;
+            height: 34%;
+          }
+
+          .knowledge-window {
+            display: none;
+          }
+
+          .browser-window {
+            left: 4%;
+            top: 12%;
+            width: 92%;
+            height: 76%;
+          }
+
+          .report-window {
+            left: 3%;
+            top: 5%;
+            width: 94%;
+            height: 86%;
+          }
+
+          .report-columns {
+            grid-template-columns: 1fr;
+          }
+
+          .report-footer {
+            gap: 7px;
+          }
+
+          .report-converged {
+            display: none;
           }
         }
 
@@ -1468,7 +1969,11 @@ export function CinematicHero({
             transition: none;
           }
 
-          .typing-caret {
+          .wizard-window {
+            transition: none;
+          }
+
+          .wizard-caret {
             animation: none;
             opacity: 1;
           }

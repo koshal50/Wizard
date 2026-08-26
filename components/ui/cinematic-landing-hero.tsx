@@ -352,6 +352,7 @@ function VSCodeSurface() {
                   >
                     {text || " "}
                   </span>
+
                   {index <
                     visible.length - 1 &&
                     "\n"}
@@ -800,25 +801,6 @@ export function CinematicHero({
   /*
    * ========================================================
    * ONE OUTER CINEMATIC OBJECT
-   *
-   * Oceanic background + text + MacBook
-   *
-   * ALL THREE ARE CHILDREN OF THIS SAME OBJECT.
-   *
-   * Therefore when this object expands:
-   *
-   * background expands
-   * text expands
-   * MacBook expands
-   *
-   * When it contracts:
-   *
-   * background contracts
-   * text contracts
-   * MacBook contracts
-   *
-   * There are no independent transforms on the
-   * text or MacBook.
    * ========================================================
    */
 
@@ -1009,16 +991,32 @@ export function CinematicHero({
           {/* ===================================================
               SCENE CONTENT
 
-              NO INDIVIDUAL TRANSFORMS.
+              Responsive composition only.
              =================================================== */}
 
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="flex w-full max-w-[1540px] felx-col items-center gap-8 px-4 sm:flex-row lg:gap-14 lg:px-10">
+            <div
+              className="
+                flex
+                w-full
+                max-w-[1540px]
+                flex-col
+                items-center
+                gap-8
+                px-4
+                sm:gap-10
+                md:gap-12
+                lg:flex-row
+                lg:gap-14
+                lg:px-10
+              "
+            >
 
-              {/* STATIC RELATIVE CONTENT.
-                  It moves only because the entire scene moves. */}
+              {/* =================================================
+                  TEXT
+                 ================================================= */}
 
-              <div className="w-full max-w-[340px] shrink-0">
+              <div className="w-full max-w-[340px] shrink-0 lg:w-[340px]">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
                   Wizard investigation
                 </p>
@@ -1041,11 +1039,21 @@ export function CinematicHero({
                 </p>
               </div>
 
-              {/* STATIC RELATIVE MACBOOK.
-                  It moves only because its parent scene moves. */}
+              {/* =================================================
+                  MACBOOK
+                 ================================================= */}
 
-              <div className="relative w-full max-w-[1180px]">
-
+              <div
+                className="
+                  relative
+                  w-full
+                  max-w-[1180px]
+                  shrink-0
+                  sm:w-[92vw]
+                  md:w-[88vw]
+                  lg:w-full
+                "
+              >
                 <div className="relative aspect-[650/400] w-full">
 
                   <MacbookPro

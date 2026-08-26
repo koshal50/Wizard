@@ -2,7 +2,6 @@
 
 import React, {
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "react"
@@ -34,49 +33,26 @@ type AppId =
   | "browser"
   | "report"
 
-interface AppDefinition {
-  id: AppId
-  name: string
-  icon: string
-}
-
-const apps: AppDefinition[] = [
-  {
-    id: "finder",
-    name: "Finder",
-    icon:
-      "https://cdn.jim-nielsen.com/macos/1024/finder-2021-09-10.png?rf=1024",
-  },
-  {
-    id: "vscode",
-    name: "VS Code",
-    icon: "",
-  },
-  {
-    id: "terminal",
-    name: "Terminal",
-    icon:
-      "https://cdn.jim-nielsen.com/macos/1024/terminal-2021-06-03.png?rf=1024",
-  },
-  {
-    id: "wizard",
-    name: "Wizard",
-    icon:
-      "https://cdn.jim-nielsen.com/macos/1024/terminal-2021-06-03.png?rf=1024",
-  },
-  {
-    id: "browser",
-    name: "Browser",
-    icon:
-      "https://cdn.jim-nielsen.com/macos/1024/safari-2021-06-02.png?rf=1024",
-  },
-  {
-    id: "report",
-    name: "Report",
-    icon:
-      "https://cdn.jim-nielsen.com/macos/1024/notes-2021-05-25.png?rf=1024",
-  },
+const applications: AppId[] = [
+  "finder",
+  "vscode",
+  "terminal",
+  "wizard",
+  "browser",
+  "report",
 ]
+
+const applicationNames: Record<
+  AppId,
+  string
+> = {
+  finder: "Finder",
+  vscode: "VS Code",
+  terminal: "Terminal",
+  wizard: "Wizard",
+  browser: "Browser",
+  report: "Verification Report",
+}
 
 const code = [
   'import { verify } from "@wizard/agent"',
@@ -117,22 +93,27 @@ function clamp(
   )
 }
 
-function smoothstep(value: number) {
+function smoothstep(
+  value: number
+) {
   const x = clamp(value)
+
   return x * x * (3 - 2 * x)
 }
 
-function range(
+function phase(
   value: number,
   start: number,
   end: number
 ) {
-  if (value <= start) return 0
-  if (value >= end) return 1
-
   return smoothstep(
-    (value - start) /
-      Math.max(0.0001, end - start)
+    clamp(
+      (value - start) /
+        Math.max(
+          0.0001,
+          end - start
+        )
+    )
   )
 }
 
@@ -170,7 +151,7 @@ export function SafeMeshGradient({
           mixBlendMode: "overlay",
         }}
       >
-        <filter id="wizard-oceanic-grain">
+        <filter id="wizard-grain">
           <feTurbulence
             type="fractalNoise"
             baseFrequency="0.8"
@@ -187,67 +168,10 @@ export function SafeMeshGradient({
         <rect
           width="100%"
           height="100%"
-          filter="url(#wizard-oceanic-grain)"
+          filter="url(#wizard-grain)"
         />
       </svg>
     </div>
-  )
-}
-
-function VSCodeIcon({
-  size = 32,
-}: {
-  size?: number
-}) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      aria-hidden="true"
-    >
-      <rect
-        width="32"
-        height="32"
-        rx="7"
-        fill="#007ACC"
-      />
-
-      <path
-        d="M22.4 5.5 16.8 9.9 12.5 6.7 7.2 10.8v10.4l5.3 4.1 4.3-3.2 5.6 4.4 4.3-2.7V8.2l-4.3-2.7Z"
-        fill="white"
-        opacity=".96"
-      />
-
-      <path
-        d="m16.8 9.9-4.3 3.3-2.4-1.9-1.5 1.2 3.9 3.1-3.9 3.1 1.5 1.2 2.4-1.9 4.3 3.3 5.6 4.4V5.5l-5.6 4.4Zm2.5 2.2v7.8l-4.8-3.9 4.8-3.9Z"
-        fill="#007ACC"
-      />
-    </svg>
-  )
-}
-
-function DockIcon({
-  app,
-  size = 34,
-}: {
-  app: AppDefinition
-  size?: number
-}) {
-  if (app.id === "vscode") {
-    return <VSCodeIcon size={size} />
-  }
-
-  return (
-    <img
-      src={app.icon}
-      alt=""
-      width={size}
-      height={size}
-      draggable={false}
-      className="h-full w-full object-contain"
-    />
   )
 }
 
@@ -279,7 +203,7 @@ function WindowBar({
   )
 }
 
-function RepositorySurface() {
+function FinderSurface() {
   const [active, setActive] =
     useState(0)
 
@@ -291,7 +215,7 @@ function RepositorySurface() {
             (value + 1) %
             repositoryFiles.length
         )
-      }, 1700)
+      }, 1900)
 
     return () =>
       window.clearInterval(timer)
@@ -300,18 +224,18 @@ function RepositorySurface() {
   return (
     <div className="absolute inset-0 overflow-hidden">
       <WindowBar
-        title="wizard-repo / Finder"
+        title="wizard repo / Finder"
         status="repository"
       />
 
-      <div className="grid h-[calc(100%-32px)] grid-cols-[31%_69%] bg-[#111827]">
+      <div className="grid h-[calc(100%-32px)] grid-cols-[30%_70%] bg-[#111827]">
         <div className="overflow-hidden border-r border-white/5 p-4 font-mono text-[7px] text-slate-500 sm:p-6 sm:text-[8px]">
-          <div className="mb-4 text-[6px] tracking-[.2em] text-slate-400 sm:text-[7px]">
-            REPOSITORY
+          <div className="mb-4 text-[6px] uppercase tracking-[.2em] text-slate-400 sm:text-[7px]">
+            Repository
           </div>
 
           <div className="mb-2 text-slate-300">
-            ⌄ wizard-repo
+            ⌄ wizard repo
           </div>
 
           <FileTree
@@ -322,7 +246,7 @@ function RepositorySurface() {
 
         <div className="p-5 sm:p-8">
           <div className="font-mono text-[6px] uppercase tracking-[.2em] text-slate-600 sm:text-[7px]">
-            Repository manifest
+            Repository Manifest
           </div>
 
           <h3 className="mt-3 text-lg font-medium text-white sm:text-2xl">
@@ -330,24 +254,24 @@ function RepositorySurface() {
           </h3>
 
           <p className="mt-3 max-w-md text-[8px] leading-relaxed text-slate-500 sm:text-[9px]">
-            Wizard starts with metadata.
+            Wizard begins with metadata.
             File names, directories,
             extensions and sizes are
             available before source
             contents are requested.
           </p>
 
-          <div className="mt-7 max-w-lg rounded-lg border border-white/10 bg-white/[0.025] p-4 sm:mt-10">
+          <div className="mt-8 max-w-lg rounded-lg border border-white/10 bg-white/[0.025] p-4 sm:mt-10">
             <div className="font-mono text-[6px] uppercase tracking-[.18em] text-slate-600">
-              Current target
+              Reading
             </div>
 
             <div className="mt-2 font-mono text-xs text-white sm:text-sm">
               {repositoryFiles[active]}
             </div>
 
-            <div className="mt-4 flex gap-2 font-mono text-[6px] text-blue-300/70 sm:text-[7px]">
-              <span>source</span>
+            <div className="mt-4 flex gap-3 font-mono text-[6px] text-blue-300/70 sm:text-[7px]">
+              <span>metadata</span>
               <span>indexed</span>
               <span>available</span>
             </div>
@@ -370,7 +294,7 @@ function VSCodeSurface() {
             (value + 1) %
             (code.length + 1)
         )
-      }, 1350)
+      }, 1450)
 
     return () =>
       window.clearInterval(timer)
@@ -385,18 +309,18 @@ function VSCodeSurface() {
   return (
     <div className="absolute inset-0 overflow-hidden">
       <WindowBar
-        title="wizard-repo / VS Code"
+        title="wizard repo / VS Code"
         status="workspace"
       />
 
       <div className="grid h-[calc(100%-32px)] grid-cols-[22%_78%] bg-[#111827]">
         <div className="border-r border-white/5 p-3 font-mono text-[6px] text-slate-500 sm:p-5 sm:text-[7px]">
-          <div className="mb-4 text-[6px] tracking-[.2em] text-slate-400">
-            EXPLORER
+          <div className="mb-4 text-[6px] uppercase tracking-[.2em] text-slate-400">
+            Explorer
           </div>
 
           <div className="mb-2 text-slate-300">
-            ⌄ wizard-repo
+            ⌄ wizard repo
           </div>
 
           <div className="rounded bg-blue-500/10 px-2 py-1.5 text-blue-200">
@@ -461,7 +385,7 @@ function TerminalSurface() {
             (value + 1) %
             (commands.length + 1)
         )
-      }, 1750)
+      }, 1850)
 
     return () =>
       window.clearInterval(timer)
@@ -496,7 +420,7 @@ function TerminalSurface() {
 
                     <span className="text-slate-500">
                       {" "}
-                      ~/wizard-repo $
+                      ~/wizard repo $
                     </span>
 
                     <span className="ml-2 text-white">
@@ -515,7 +439,7 @@ function TerminalSurface() {
                       "dependencies installed"}
 
                     {index === 3 &&
-                      "server listening on port 3000"}
+                      "runtime listening on port 3000"}
                   </div>
                 </div>
               )
@@ -528,7 +452,7 @@ function TerminalSurface() {
 
             <span className="text-slate-500">
               {" "}
-              ~/wizard-repo $
+              ~/wizard repo $
             </span>
 
             <span className="ml-2 inline-block h-3 w-[2px] animate-pulse bg-white align-middle" />
@@ -539,29 +463,18 @@ function TerminalSurface() {
   )
 }
 
-function WizardSurface({
-  progress,
-}: {
-  progress: number
-}) {
-  const investigationPhase =
-    progress < 0.45
-      ? "planning"
-      : progress < 0.7
-        ? "executing"
-        : "evaluating"
-
+function WizardSurface() {
   return (
     <div className="absolute inset-0 overflow-hidden">
       <WindowBar
-        title="wizard / investigation"
-        status={investigationPhase}
+        title="wizard / autonomous investigation"
+        status="runtime"
       />
 
       <div className="h-[calc(100%-32px)] overflow-hidden bg-[#081321] p-5 font-mono sm:p-8">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between">
           <div>
-            <div className="text-[6px] uppercase tracking-[.2em] text-slate-600 sm:text-[7px]">
+            <div className="text-[6px] uppercase tracking-[.2em] text-slate-600">
               Investigation
             </div>
 
@@ -579,7 +492,7 @@ function WizardSurface({
           </div>
         </div>
 
-        <div className="mt-7 grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:mt-10 sm:gap-4">
+        <div className="mt-8 grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:mt-11 sm:gap-4">
           <div className="rounded-lg border border-blue-300/15 bg-blue-300/[0.035] p-3 sm:p-4">
             <div className="text-[5px] uppercase tracking-[.18em] text-slate-600 sm:text-[6px]">
               Investigation Node
@@ -604,7 +517,7 @@ function WizardSurface({
             </div>
 
             <div className="mt-2 text-[10px] text-white sm:text-sm">
-              execute_command
+              execute command
             </div>
 
             <div className="mt-2 text-[6px] text-amber-300/70 sm:text-[7px]">
@@ -692,83 +605,53 @@ function ReportSurface() {
   )
 }
 
-function AppSurface({
+function Surface({
   app,
-  progress,
 }: {
   app: AppId
-  progress: number
 }) {
-  switch (app) {
-    case "finder":
-      return <RepositorySurface />
+  if (app === "finder")
+    return <FinderSurface />
 
-    case "vscode":
-      return <VSCodeSurface />
+  if (app === "vscode")
+    return <VSCodeSurface />
 
-    case "terminal":
-      return <TerminalSurface />
+  if (app === "terminal")
+    return <TerminalSurface />
 
-    case "wizard":
-      return (
-        <WizardSurface
-          progress={progress}
-        />
-      )
+  if (app === "wizard")
+    return <WizardSurface />
 
-    case "browser":
-      return <BrowserSurface />
+  if (app === "browser")
+    return <BrowserSurface />
 
-    case "report":
-      return <ReportSurface />
-
-    default:
-      return null
-  }
+  return <ReportSurface />
 }
 
-function stageForProgress(
+function stageAt(
   progress: number
 ) {
-  const stageCount = apps.length
-
-  const raw =
-    progress *
-    stageCount
+  const count =
+    applications.length
 
   return Math.min(
-    stageCount - 1,
-    Math.floor(raw)
+    count - 1,
+    Math.floor(
+      progress * count
+    )
   )
 }
 
-function transitionForProgress(
+function localStageProgress(
   progress: number
 ) {
-  const stageCount = apps.length
+  const count =
+    applications.length
+
   const raw =
-    progress *
-    stageCount
+    progress * count
 
-  const local =
-    raw - Math.floor(raw)
-
-  return local
-}
-
-function previousApp(
-  stage: number
-): AppId | null {
-  if (stage <= 0)
-    return null
-
-  return apps[stage - 1].id
-}
-
-function currentApp(
-  stage: number
-): AppId {
-  return apps[stage].id
+  return raw - Math.floor(raw)
 }
 
 export function CinematicHero({
@@ -779,7 +662,7 @@ export function CinematicHero({
   const root =
     useRef<HTMLElement>(null)
 
-  const [progress, setProgress] =
+  const [scrollProgress, setScrollProgress] =
     useState(0)
 
   useEffect(() => {
@@ -797,25 +680,25 @@ export function CinematicHero({
       const rect =
         element.getBoundingClientRect()
 
-      const distance =
+      const totalDistance =
         Math.max(
           1,
           element.offsetHeight -
             window.innerHeight
         )
 
-      const next =
+      const value =
         clamp(
           -rect.top /
-            distance
+            totalDistance
         )
 
-      setProgress(
+      setScrollProgress(
         current =>
           Math.abs(
-            current - next
-          ) > 0.0005
-            ? next
+            current - value
+          ) > 0.0003
+            ? value
             : current
       )
     }
@@ -855,206 +738,329 @@ export function CinematicHero({
         onScroll
       )
 
-      if (frame) {
+      if (frame)
         window.cancelAnimationFrame(
           frame
         )
-      }
     }
   }, [])
 
-  const stage =
-    stageForProgress(progress)
+  /*
+   * ------------------------------------------------
+   * MACBOOK LEVEL CHOREOGRAPHY
+   * ------------------------------------------------
+   *
+   * The entire laptop is independent from the
+   * applications inside it.
+   *
+   * This restores the original cinematic behavior:
+   *
+   * entering:
+   * small rounded card
+   *
+   * middle:
+   * almost full viewport
+   *
+   * exiting:
+   * small rounded card again
+   */
 
-  const localProgress =
-    transitionForProgress(
-      progress
+  const entry =
+    phase(
+      scrollProgress,
+      0,
+      0.12
+    )
+
+  const exit =
+    phase(
+      scrollProgress,
+      0.88,
+      1
+    )
+
+  const laptopScale =
+    0.78 +
+    entry * 0.22 -
+    exit * 0.22
+
+  const laptopRadius =
+    34 -
+    entry * 34 +
+    exit * 34
+
+  const laptopY =
+    7 -
+    entry * 7 +
+    exit * 7
+
+  const laptopOpacity =
+    0.65 +
+    entry * 0.35 -
+    exit * 0.08
+
+  /*
+   * The side copy subtly gets out of the way once
+   * the MacBook becomes the primary visual.
+   *
+   * This is not a fade in or fade out animation.
+   * It is simply spatial prioritization.
+   */
+
+  const copyScale =
+    1 -
+    phase(
+      scrollProgress,
+      0.08,
+      0.28
+    ) *
+      0.08
+
+  const copyX =
+    -phase(
+      scrollProgress,
+      0.08,
+      0.28
+    ) *
+    18
+
+  /*
+   * ------------------------------------------------
+   * APPLICATION CHOREOGRAPHY
+   * ------------------------------------------------
+   */
+
+  const stage =
+    stageAt(scrollProgress)
+
+  const local =
+    localStageProgress(
+      scrollProgress
     )
 
   const current =
-    currentApp(stage)
+    applications[stage]
 
   const previous =
-    previousApp(stage)
+    stage > 0
+      ? applications[stage - 1]
+      : null
 
   /*
-   * The first 55% of each stage is deliberately
-   * stable. The remaining 45% is the transition.
+   * Each application has a long resting period.
    *
-   * This makes each application feel like a
-   * destination rather than a frame in a slideshow.
+   * 0 to 58 percent
+   * current application owns the screen
+   *
+   * 58 to 66 percent
+   * current application shrinks
+   *
+   * 66 to 72 percent
+   * desktop becomes visible
+   *
+   * 72 to 79 percent
+   * Dock appears
+   *
+   * 79 to 84 percent
+   * agent cursor travels
+   *
+   * 84 to 88 percent
+   * click
+   *
+   * 88 to 100 percent
+   * new application expands
    */
-  const stable =
-    range(
-      localProgress,
-      0,
-      0.55
+
+  const shrink =
+    phase(
+      local,
+      0.58,
+      0.66
     )
 
-  const transition =
-    range(
-      localProgress,
-      0.55,
+  const desktop =
+    phase(
+      local,
+      0.65,
+      0.72
+    )
+
+  const dock =
+    phase(
+      local,
+      0.72,
+      0.79
+    ) *
+    (1 -
+      phase(
+        local,
+        0.84,
+        0.9
+      ))
+
+  const pointerTravel =
+    phase(
+      local,
+      0.77,
+      0.84
+    )
+
+  const click =
+    phase(
+      local,
+      0.84,
+      0.87
+    )
+
+  const opening =
+    phase(
+      local,
+      0.87,
       1
     )
 
   /*
-   * Dock exists only during the handoff.
+   * Previous application.
    */
-  const dockVisibility =
-    range(
-      localProgress,
-      0.58,
-      0.72
-    ) *
-    (1 -
-      range(
-        localProgress,
-        0.86,
-        0.98
-      ))
 
-  /*
-   * Previous application physically
-   * retreats into the desktop.
-   */
   const previousScale =
     1 -
-    transition * 0.72
+    shrink * 0.58
 
   const previousX =
-    -transition * 34
+    shrink * -18
 
   const previousY =
-    -transition * 12
+    shrink * -13
 
   const previousRotate =
-    -transition * 1.5
+    shrink * -1.4
 
   const previousOpacity =
     1 -
-    transition * 0.25
+    desktop * 0.48
 
   /*
-   * Current application enters from the
-   * Dock and grows into the screen.
+   * New application.
+   *
+   * It does NOT exist as a visible window
+   * until after the Dock interaction.
+   *
+   * This is the important fix.
    */
-  const currentEntrance =
-    range(
-      localProgress,
-      0.78,
-      1
-    )
 
-  const currentScale =
+  const newAppScale =
     stage === 0
       ? 1
-      : 0.58 +
-        currentEntrance *
-          0.42
+      : 0.42 +
+        opening * 0.58
 
-  const currentY =
+  const newAppY =
     stage === 0
       ? 0
-      : 18 -
-        currentEntrance * 18
+      : 10 -
+        opening * 10
 
-  const currentOpacity =
+  const newAppOpacity =
     stage === 0
       ? 1
-      : 0.72 +
-        currentEntrance * 0.28
+      : opening
 
   /*
-   * The wallpaper is visible between
-   * applications.
+   * Desktop wallpaper.
    */
+
   const desktopOpacity =
     stage === 0
       ? 0
-      : transition *
-        0.92
+      : desktop
 
   /*
-   * Synthetic agent pointer. This is local
-   * to the MacBook, not the user's real cursor.
+   * Dock.
+   *
+   * It cannot appear at the same time as the
+   * new application.
    */
-  const cursorStartX =
-    stage === 0
-      ? 50
-      : 50 -
-        transition * 22
 
-  const cursorStartY =
+  const dockOpacity =
     stage === 0
-      ? 50
-      : 52 +
-        transition * 8
+      ? 0
+      : dock
+
+  /*
+   * Agent cursor.
+   *
+   * It begins away from the Dock, travels toward
+   * the correct icon, then presses and disappears.
+   */
+
+  const iconIndex =
+    applications.indexOf(
+      current
+    )
+
+  const iconFraction =
+    applications.length <= 1
+      ? 0.5
+      : iconIndex /
+        (applications.length - 1)
+
+  const cursorStartX =
+    42 +
+    (stage % 2) * 15
 
   const cursorTargetX =
-    50 +
-    (stage % 2 === 0
-      ? 15
-      : -15)
+    25 +
+    iconFraction * 50
+
+  const cursorStartY =
+    58
 
   const cursorTargetY =
-    84
-
-  const cursorProgress =
-    range(
-      localProgress,
-      0.63,
-      0.82
-    )
+    87
 
   const cursorX =
     cursorStartX +
     (cursorTargetX -
       cursorStartX) *
-      cursorProgress
+      pointerTravel
 
   const cursorY =
     cursorStartY +
     (cursorTargetY -
       cursorStartY) *
-      cursorProgress
+      pointerTravel
 
   const cursorScale =
-    range(
-      localProgress,
-      0.8,
-      0.83
-    )
+    click > 0
+      ? 0.82
+      : 1
 
-  const cursorVisible =
-    stage > 0 &&
-    localProgress > 0.61 &&
-    localProgress < 0.89
+  const cursorOpacity =
+    stage === 0 ||
+    pointerTravel === 0 ||
+    opening > 0
+      ? 0
+      : 1
 
-  const dockApps =
-    apps.map(app => ({
-      ...app,
-    }))
+  /*
+   * The current app is completely hidden until
+   * the Dock interaction has finished.
+   *
+   * This removes the small new window overlapping
+   * the old window.
+   */
 
-  const openApps =
-    apps
-      .slice(
-        0,
-        stage + 1
-      )
-      .map(app => app.id)
-
-  const handleDockClick = (
-    appId: string
-  ) => {
-    void appId
-  }
+  const currentVisibility =
+    stage === 0
+      ? 1
+      : opening
 
   return (
     <section
       ref={root}
       className={cn(
-        "relative min-h-[10800px] overflow-visible bg-transparent font-sans",
+        "relative min-h-[11800px] overflow-visible bg-transparent font-sans",
         className
       )}
     >
@@ -1062,10 +1068,16 @@ export function CinematicHero({
         <div className="relative flex min-h-screen w-full items-center justify-center">
           <SafeMeshGradient />
 
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.07),transparent_50%)]" />
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
 
           <div className="relative z-20 flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 py-12 lg:flex-row lg:gap-14 lg:px-10">
-            <div className="w-full max-w-[340px] shrink-0">
+            <div
+              className="w-full max-w-[340px] shrink-0"
+              style={{
+                transform:
+                  `translate3d(${copyX}px,0,0) scale(${copyScale})`,
+              }}
+            >
               <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
                 Wizard investigation
               </p>
@@ -1085,236 +1097,236 @@ export function CinematicHero({
               </p>
 
               <p className="mt-8 font-mono text-[7px] uppercase tracking-[.24em] text-blue-100/35">
-                {current === "finder" &&
-                  "Inspecting repository"}
-
-                {current === "vscode" &&
-                  "Reading source"}
-
-                {current === "terminal" &&
-                  "Executing runtime"}
-
-                {current === "wizard" &&
-                  "Building evidence"}
-
-                {current === "browser" &&
-                  "Verifying behavior"}
-
-                {current === "report" &&
-                  "Tracing conclusions"}
+                {applicationNames[current]}
               </p>
             </div>
 
             <div className="relative w-full max-w-[1180px] lg:ml-4">
-              <div className="relative mx-auto aspect-[650/400] w-full">
-                <MacbookPro
-                  className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
-                  aria-label="Wizard autonomous investigation"
-                  role="img"
+              <div
+                className="relative mx-auto aspect-[650/400] w-full"
+                style={{
+                  transform:
+                    `translate3d(0,${laptopY}%,0) scale(${laptopScale})`,
+                  opacity:
+                    laptopOpacity,
+                  borderRadius:
+                    `${laptopRadius}px`,
+                  transformOrigin:
+                    "center center",
+                  willChange:
+                    "transform, opacity",
+                }}
+              >
+                <div
+                  className="absolute inset-0 overflow-hidden"
+                  style={{
+                    borderRadius:
+                      `${laptopRadius}px`,
+                  }}
                 >
-                  <div className="screen relative h-full w-full overflow-hidden bg-[#111827]">
-                    {/*
-                     * Actual Mac desktop wallpaper.
-                     * This becomes visible during every
-                     * application handoff.
-                     */}
-                    <div
-                      className="absolute inset-0"
-                      style={{
-                        opacity:
-                          stage === 0
-                            ? 0
-                            : desktopOpacity,
-                        background:
-                          "radial-gradient(circle at 50% 28%, rgba(110,160,255,.35), transparent 30%), radial-gradient(circle at 25% 70%, rgba(50,100,180,.25), transparent 34%), linear-gradient(145deg,#182b4a 0%,#0b1528 48%,#050a13 100%)",
-                      }}
-                    />
+                  <MacbookPro
+                    className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
+                    aria-label="Wizard autonomous investigation"
+                    role="img"
+                  >
+                    <div className="screen relative h-full w-full overflow-hidden bg-[#111827]">
+                      {/*
+                       * Desktop.
+                       *
+                       * It is behind every application.
+                       * Nothing is rendered above it until
+                       * the previous window has moved away.
+                       */}
 
-                    {/*
-                     * Previous application.
-                     * It is visible only while it
-                     * retreats into the desktop.
-                     */}
-                    {previous && (
                       <div
-                        className="absolute inset-[5%] z-20 overflow-hidden rounded-[10px] shadow-2xl"
+                        className="absolute inset-0"
+                        style={{
+                          opacity:
+                            desktopOpacity,
+                          background:
+                            "radial-gradient(circle at 50% 25%,rgba(104,154,255,.4),transparent 32%),radial-gradient(circle at 20% 72%,rgba(48,94,170,.32),transparent 35%),linear-gradient(145deg,#1b3154 0%,#0d1b32 48%,#050b15 100%)",
+                        }}
+                      />
+
+                      {/*
+                       * PREVIOUS WINDOW
+                       *
+                       * This is the only application
+                       * visible before the Dock.
+                       */}
+
+                      {previous && (
+                        <div
+                          className="absolute inset-[4%] z-20 overflow-hidden rounded-[10px] shadow-2xl"
+                          style={{
+                            transform:
+                              `translate3d(${previousX}%,${previousY}%,0) scale(${previousScale}) rotate(${previousRotate}deg)`,
+                            opacity:
+                              previousOpacity,
+                            transformOrigin:
+                              "center center",
+                            pointerEvents:
+                              "none",
+                            willChange:
+                              "transform, opacity",
+                          }}
+                        >
+                          <Surface
+                            app={
+                              previous
+                            }
+                          />
+                        </div>
+                      )}
+
+                      {/*
+                       * CURRENT WINDOW
+                       *
+                       * Completely absent during the
+                       * Dock phase.
+                       *
+                       * It is created visually only after
+                       * the click has completed.
+                       */}
+
+                      <div
+                        className="absolute inset-0 z-40 overflow-hidden"
                         style={{
                           transform:
-                            `translate3d(${previousX}%,${previousY}%,0) scale(${previousScale}) rotate(${previousRotate}deg)`,
+                            `translate3d(0,${newAppY}%,0) scale(${newAppScale})`,
                           opacity:
-                            previousOpacity *
-                            (1 -
-                              currentEntrance),
+                            currentVisibility,
                           transformOrigin:
-                            "center center",
+                            "center bottom",
                           pointerEvents:
-                            "none",
+                            opening >
+                            0.95
+                              ? "auto"
+                              : "none",
                           willChange:
                             "transform, opacity",
                         }}
                       >
-                        <AppSurface
+                        <Surface
                           app={
-                            previous
-                          }
-                          progress={
-                            progress
+                            current
                           }
                         />
                       </div>
-                    )}
 
-                    {/*
-                     * Current application.
-                     *
-                     * Before the transition it
-                     * owns the whole screen.
-                     *
-                     * During the transition it
-                     * returns from the Dock.
-                     */}
-                    <div
-                      className="absolute inset-0 z-30 overflow-hidden"
-                      style={{
-                        transform:
-                          `translate3d(0,${currentY}%,0) scale(${currentScale})`,
-                        opacity:
-                          currentOpacity,
-                        transformOrigin:
-                          "center center",
-                        pointerEvents:
-                          transition >
-                          0.84
-                            ? "auto"
-                            : "none",
-                        willChange:
-                          "transform, opacity",
-                      }}
-                    >
-                      <AppSurface
-                        app={current}
-                        progress={
-                          progress
-                        }
-                      />
-                    </div>
+                      {/*
+                       * Dock
+                       *
+                       * It exists in the desktop
+                       * layer, never above an opening
+                       * application.
+                       */}
 
-                    {/*
-                     * Dock is deliberately outside
-                     * the application layer.
-                     *
-                     * It appears only during the
-                     * handoff.
-                     */}
-                    <div
-                      className="absolute bottom-[5%] left-1/2 z-[100] -translate-x-1/2"
-                      style={{
-                        opacity:
-                          dockVisibility,
-                        transform:
-                          `translate3d(-50%,${(1 - dockVisibility) * 22}px,0) scale(${0.86 + dockVisibility * 0.14})`,
-                        pointerEvents:
-                          dockVisibility >
-                          0.8
-                            ? "auto"
-                            : "none",
-                        transition:
-                          "none",
-                      }}
-                    >
-                      <MacOSDock
-                        apps={
-                          dockApps
-                        }
-                        onAppClick={
-                          handleDockClick
-                        }
-                        openApps={
-                          openApps
-                        }
-                        className="scale-[.62] sm:scale-[.7] md:scale-[.78]"
-                      />
-                    </div>
-
-                    {/*
-                     * Agent cursor.
-                     *
-                     * This is NOT the global
-                     * SmoothCursor.
-                     *
-                     * It represents Wizard moving
-                     * the pointer to the next app.
-                     */}
-                    {cursorVisible && (
                       <div
-                        className="pointer-events-none absolute z-[150] hidden md:block"
+                        className="absolute bottom-[5%] left-1/2 z-[100]"
                         style={{
-                          left:
-                            `${cursorX}%`,
-                          top:
-                            `${cursorY}%`,
+                          opacity:
+                            dockOpacity,
                           transform:
-                            `translate(-7px,-5px) scale(${1 - cursorScale * 0.12})`,
-                          transition:
-                            "none",
-                          filter:
-                            "drop-shadow(0 2px 3px rgba(0,0,0,.45))",
+                            `translate3d(-50%,${(1 - dockOpacity) * 20}px,0) scale(${0.68 + dockOpacity * 0.12})`,
+                          pointerEvents:
+                            dockOpacity >
+                            0.9
+                              ? "auto"
+                              : "none",
                         }}
                       >
-                        <svg
-                          width="18"
-                          height="22"
-                          viewBox="0 0 22 25"
-                          fill="none"
-                        >
-                          <path
-                            d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
-                            fill="#111827"
-                            stroke="white"
-                            strokeWidth="1.4"
-                          />
-                        </svg>
-
-                        {cursorScale >
-                          0.92 && (
-                          <span className="absolute -right-1 -bottom-1 h-3 w-3 rounded-full border border-blue-300/80 bg-blue-400/20" />
-                        )}
+                        <MacOSDock
+                          apps={[
+                            {
+                              id: "finder",
+                              name: "Finder",
+                              icon:
+                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232A80FF'/%3E%3Cpath d='M8 11.5C8 9.57 9.57 8 11.5 8h9C22.43 8 24 9.57 24 11.5v9c0 1.93-1.57 3.5-3.5 3.5h-9C9.57 24 8 22.43 8 20.5v-9Z' fill='white' fill-opacity='.92'/%3E%3Ccircle cx='13' cy='15' r='1.5' fill='%232A80FF'/%3E%3Ccircle cx='19' cy='15' r='1.5' fill='%232A80FF'/%3E%3Cpath d='M12 19c2.5 1.8 5.5 1.8 8 0' stroke='%232A80FF' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
+                            },
+                            {
+                              id: "vscode",
+                              name: "VS Code",
+                              icon: "",
+                            },
+                            {
+                              id: "terminal",
+                              name: "Terminal",
+                              icon:
+                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231B1B1B'/%3E%3Cpath d='m9 11 5 5-5 5' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M16 21h7' stroke='%2394A3B8' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E",
+                            },
+                            {
+                              id: "wizard",
+                              name: "Wizard",
+                              icon:
+                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230B1424'/%3E%3Cpath d='M16 6 18.7 13.3 26 16l-7.3 2.7L16 26l-2.7-7.3L6 16l7.3-2.7L16 6Z' fill='%2360A5FA'/%3E%3Ccircle cx='16' cy='16' r='3' fill='white' fill-opacity='.9'/%3E%3C/svg%3E",
+                            },
+                            {
+                              id: "browser",
+                              name: "Browser",
+                              icon:
+                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23F8FAFC'/%3E%3Ccircle cx='16' cy='16' r='9' fill='none' stroke='%232563EB' stroke-width='2'/%3E%3Cpath d='M7 16h18M16 7c3 3 4.5 6 4.5 9s-1.5 6-4.5 9M16 7c-3 3-4.5 6-4.5 9s1.5 6 4.5 9' stroke='%232563EB' stroke-width='1.2'/%3E%3C/svg%3E",
+                            },
+                            {
+                              id: "report",
+                              name: "Verification Report",
+                              icon:
+                                "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E5E7EB'/%3E%3Cpath d='M10 7h9l4 4v14H10V7Z' fill='white' stroke='%239CA3AF'/%3E%3Cpath d='M19 7v5h4M13 16h7M13 20h7' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
+                            },
+                          ]}
+                          onAppClick={() => {}}
+                          openApps={[current]}
+                          className="scale-[.72] sm:scale-[.78] md:scale-[.84]"
+                        />
                       </div>
-                    )}
 
-                    {/*
-                     * Tiny stage context.
-                     *
-                     * This is intentionally not a
-                     * progress indicator.
-                     */}
-                    <div className="pointer-events-none absolute bottom-2 left-3 z-[200] font-mono text-[5px] uppercase tracking-[.18em] text-white/25 sm:text-[6px]">
-                      {current ===
-                        "finder" &&
-                        "repository"}
+                      {/*
+                       * Wizard pointer.
+                       *
+                       * It appears only after the
+                       * previous window has moved away.
+                       */}
 
-                      {current ===
-                        "vscode" &&
-                        "source"}
+                      {cursorOpacity >
+                        0 && (
+                        <div
+                          className="pointer-events-none absolute z-[150] hidden md:block"
+                          style={{
+                            left:
+                              `${cursorX}%`,
+                            top:
+                              `${cursorY}%`,
+                            opacity:
+                              cursorOpacity,
+                            transform:
+                              `translate(-6px,-5px) scale(${cursorScale})`,
+                            filter:
+                              "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
+                          }}
+                        >
+                          <svg
+                            width="18"
+                            height="22"
+                            viewBox="0 0 22 25"
+                            fill="none"
+                          >
+                            <path
+                              d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
+                              fill="#111827"
+                              stroke="white"
+                              strokeWidth="1.4"
+                            />
+                          </svg>
 
-                      {current ===
-                        "terminal" &&
-                        "execution"}
-
-                      {current ===
-                        "wizard" &&
-                        "investigation"}
-
-                      {current ===
-                        "browser" &&
-                        "browser evidence"}
-
-                      {current ===
-                        "report" &&
-                        "verification"}
+                          {click >
+                            0 && (
+                            <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
+                          )}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                </MacbookPro>
+                  </MacbookPro>
+                </div>
               </div>
             </div>
           </div>

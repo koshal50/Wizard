@@ -4,21 +4,21 @@ import { useEffect, useState } from "react"
 import { motion } from "framer-motion"
 
 const messages = [
-  'Received: "Summarize Q3 performance for stakeholder report..."',
-  "Chunking input → 847 tokens → 6 embeddings generated",
-  "Vector search complete: 5 chunks, avg cosine sim 0.89",
-  "Injecting context into prompt template (1,204 tokens)",
-  "LLM inference: 3 tool calls dispatched in parallel",
-  "Tool: send_email → draft created, pending approval",
-  "Tool: update_crm → record Q3_2024 flagged as reviewed",
-  "Tool: generate_report → PDF queued for dispatch",
-  "Workflow complete. 3 actions dispatched in 342ms.",
+  'Task received: "Validate the latest Wizard change"',
+  "Repository mapped → 42 files discovered → 8 relevant files selected",
+  "Evidence gathered from app/page.tsx, hero.tsx, globals.css",
+  "Browser check complete → wizardagents.vercel.app loaded successfully",
+  "Agent replayed the path: inspect → execute → verify",
+  "Finding: laptop scene and report render without blocking errors",
+  "Finding: responsive layout verified at desktop and mobile widths",
+  "Recommendation: ship the verified change with the captured evidence",
+  "Verification complete. 8 checks passed · 0 blockers.",
 ]
 
 const nodes = [
-  ["TRIGGER", "User Query", "node-01"],
-  ["VECTOR DB", "Semantic Search", "pinecone"],
-  ["LLM AGENT", "Processing", "claude"],
+  ["SCOPE", "Inspect", "8 files"],
+  ["ACTION", "Execute", "3 checks"],
+  ["RESULT", "Verify", "0 blockers"],
 ]
 
 export default function AIAgentPipeline() {

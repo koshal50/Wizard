@@ -42,12 +42,9 @@ export const AsciiArt =
     const readyRef =
       useRef(false)
 
-    /*
-     * The parent communicates with the
-     * video imperatively.
-     *
-     * This does NOT trigger React renders.
-     */
+    const durationRef =
+      useRef(0)
+
     useImperativeHandle(
       ref,
       () => ({
@@ -67,9 +64,6 @@ export const AsciiArt =
       []
     )
 
-    /*
-     * Prepare the video once.
-     */
     useEffect(() => {
       const video =
         videoRef.current
@@ -79,44 +73,78 @@ export const AsciiArt =
       }
 
       video.pause()
-      video.currentTime = 0
 
       const handleMetadata =
         () => {
+          if (
+            !Number.isFinite(
+              video.duration
+            ) ||
+            video.duration <= 0
+          ) {
+            return
+          }
+
+          durationRef.current =
+            video.duration
+
           readyRef.current =
             true
 
-          currentTime.current =
+          video.currentTime =
             0
 
-          video.currentTime = 0
+          currentTime.current =
+            0
         }
+
+      const handleCanPlay =
+        () => {
+          if (
+            Number.isFinite(
+              video.duration
+            ) &&
+            video.duration > 0
+          ) {
+            durationRef.current =
+              video.duration
+
+            readyRef.current =
+              true
+          }
+        }
+
+      video.addEventListener(
+        "loadedmetadata",
+        handleMetadata
+      )
+
+      video.addEventListener(
+        "canplay",
+        handleCanPlay
+      )
 
       if (
         video.readyState >= 1
       ) {
         handleMetadata()
-      } else {
-        video.addEventListener(
-          "loadedmetadata",
-          handleMetadata
-        )
       }
+
+      video.load()
 
       return () => {
         video.removeEventListener(
           "loadedmetadata",
           handleMetadata
         )
+
+        video.removeEventListener(
+          "canplay",
+          handleCanPlay
+        )
       }
     }, [])
 
-    /*
-     * There is exactly ONE animation
-     * loop responsible for scrubbing.
-     *
-     * React never participates in this loop.
-     */
     useEffect(() => {
       const update =
         () => {
@@ -126,27 +154,32 @@ export const AsciiArt =
           if (
             video &&
             readyRef.current &&
-            Number.isFinite(
-              video.duration
-            ) &&
-            video.duration > 0
+            durationRef.current > 0
           ) {
             const target =
               targetProgress.current
 
             const nextTime =
               target *
-              video.duration
+              durationRef.current
 
             /*
-             * Do not seek repeatedly to
-             * effectively identical frames.
+             * Roughly one frame at
+             * 30fps.
+             *
+             * This prevents tiny scroll
+             * movements from triggering
+             * unnecessary seeks.
              */
+            const threshold =
+              1 / 30
+
             if (
               Math.abs(
                 nextTime -
                   currentTime.current
-              ) > 0.035
+              ) >=
+              threshold
             ) {
               video.currentTime =
                 nextTime
@@ -186,7 +219,7 @@ export const AsciiArt =
       <video
         ref={videoRef}
         className={className}
-        src="/cinematic/wizard-world.mp4"
+        src="/cinematic/wizard-world-scrub.mp4"
         muted
         playsInline
         preload="auto"
@@ -199,6 +232,10 @@ export const AsciiArt =
           height: "100%",
           objectFit: "cover",
           pointerEvents: "none",
+          transform:
+            "translateZ(0)",
+          backfaceVisibility:
+            "hidden",
         }}
       />
     )

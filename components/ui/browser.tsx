@@ -4,6 +4,7 @@ import React, {
   FormEvent,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react"
 import {
@@ -23,6 +24,7 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { SmoothCursor } from "@/components/ui/smooth-cursor"
 
 interface Tab {
   id: string
@@ -121,6 +123,9 @@ export function Browser({
   simulateLoading = true,
   loadingDuration = 900,
 }: BrowserProps) {
+  const viewportRef =
+    useRef<HTMLDivElement>(null)
+
   const [tabs, setTabs] = useState<Tab[]>(() => {
     if (initialTabs?.length) {
       return initialTabs.map((tab, index) => ({
@@ -192,10 +197,7 @@ export function Browser({
       ).matches)
 
   useEffect(() => {
-    setInputUrl(
-      activeTab?.url || ""
-    )
-
+    setInputUrl(activeTab?.url || "")
     setIframeLoaded(false)
     setAgentActivity("connecting")
   }, [
@@ -204,15 +206,18 @@ export function Browser({
   ])
 
   useEffect(() => {
-    if (iframeLoaded) {
-      setAgentActivity("observing")
+    if (!iframeLoaded) {
+      return
+    }
 
-      const id = window.setTimeout(() => {
-        setAgentActivity("ready")
-      }, 700)
+    setAgentActivity("observing")
 
-      return () =>
-        window.clearTimeout(id)
+    const id = window.setTimeout(() => {
+      setAgentActivity("ready")
+    }, 700)
+
+    return () => {
+      window.clearTimeout(id)
     }
   }, [iframeLoaded])
 
@@ -261,10 +266,7 @@ export function Browser({
       )
     )
 
-    onNavigate?.(
-      url,
-      tabId
-    )
+    onNavigate?.(url, tabId)
 
     if (simulateLoading) {
       window.setTimeout(() => {
@@ -342,11 +344,9 @@ export function Browser({
         remaining.length - 1
       )
 
-      remaining.forEach(
-        (tab) => {
-          tab.isActive = false
-        }
-      )
+      remaining.forEach((tab) => {
+        tab.isActive = false
+      })
 
       remaining[nextIndex].isActive = true
 
@@ -359,7 +359,6 @@ export function Browser({
     }
 
     setTabs(remaining)
-
     onTabClose?.(tabId)
   }
 
@@ -453,12 +452,12 @@ export function Browser({
   const currentUrl =
     activeTab?.url || initialUrl
 
+  const currentHost =
+    hostname(currentUrl)
+
   const isBlank =
     currentUrl === "about:blank" ||
     currentUrl === ""
-
-  const currentHost =
-    hostname(currentUrl)
 
   return (
     <div
@@ -753,6 +752,7 @@ export function Browser({
         )}
 
       <div
+        ref={viewportRef}
         data-wizard-browser-viewport="true"
         data-wizard-browser-content="true"
         className="relative min-h-0 flex-1 overflow-hidden bg-white"
@@ -778,8 +778,6 @@ export function Browser({
                 <div className="flex flex-col items-center gap-3">
                   <div className="relative">
                     <div className="h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600" />
-
-                    <div className="absolute inset-1 rounded-full bg-white" />
                   </div>
 
                   <div className="text-center">
@@ -811,20 +809,28 @@ export function Browser({
                 setIframeLoaded(true)
 
                 setTabs((current) =>
-                  current.map(
-                    (tab) =>
-                      tab.isActive
-                        ? {
-                            ...tab,
-                            isLoading: false,
-                          }
-                        : tab
+                  current.map((tab) =>
+                    tab.isActive
+                      ? {
+                          ...tab,
+                          isLoading: false,
+                        }
+                      : tab
                   )
                 )
               }}
               allow="fullscreen"
               loading="eager"
             />
+
+            {iframeLoaded && (
+              <SmoothCursor
+                containerRef={
+                  viewportRef
+                }
+                active={true}
+              />
+            )}
 
             {iframeLoaded && (
               <div
@@ -853,7 +859,6 @@ export function Browser({
         <div className="flex h-6 shrink-0 items-center justify-between border-t border-slate-300 bg-slate-100 px-3 text-[7px] text-slate-400">
           <span className="flex items-center gap-1">
             <Lock className="h-2.5 w-2.5 text-emerald-500" />
-
             Secure
           </span>
 

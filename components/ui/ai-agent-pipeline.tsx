@@ -34,7 +34,7 @@ const events: InvestigationEvent[] = [
     type: "MANIFEST",
     id: "manifest_001",
     text: "Repository manifest generated",
-    detail: "42 files · 3 technologies identified",
+    detail: "42 files · 3 technologies",
   },
   {
     type: "PLAN",
@@ -46,13 +46,13 @@ const events: InvestigationEvent[] = [
     type: "NODE",
     id: "node_014",
     text: "Read package.json",
-    detail: "hypothesis: repository declares Node.js runtime",
+    detail: "hypothesis: Node.js runtime",
   },
   {
     type: "OBSERVATION",
     id: "obs_031",
     text: "Node.js 18 declared",
-    detail: "source: package.json · line 12",
+    detail: "source: package.json:12",
     parent: "node_014",
   },
   {
@@ -73,7 +73,7 @@ const events: InvestigationEvent[] = [
     type: "NODE",
     id: "node_019",
     text: "Execute npm install",
-    detail: "hypothesis: dependencies are installable",
+    detail: "hypothesis: dependencies install",
   },
   {
     type: "OBSERVATION",
@@ -100,7 +100,7 @@ const events: InvestigationEvent[] = [
     type: "NODE",
     id: "node_027",
     text: "Start application",
-    detail: "hypothesis: application executes successfully",
+    detail: "hypothesis: application executes",
   },
   {
     type: "OBSERVATION",
@@ -149,35 +149,31 @@ const nodes = [
   ["KNOWLEDGE", "Knowledge Graph", "claim_007"],
 ]
 
-const getStats = (index: number) => {
-  const currentEvents = events.slice(0, index + 1)
+function getStats(index: number) {
+  const visible = events.slice(0, index + 1)
 
   return {
-    nodes: currentEvents.filter(
+    nodes: visible.filter(
       (event) => event.type === "NODE"
     ).length,
 
-    observations: currentEvents.filter(
+    observations: visible.filter(
       (event) => event.type === "OBSERVATION"
     ).length,
 
-    claims: currentEvents.filter(
+    claims: visible.filter(
       (event) => event.type === "CLAIM"
     ).length,
 
-    trusts: currentEvents.filter(
+    trusts: visible.filter(
       (event) => event.type === "TRUST"
     ).length,
 
-    checkpoints: currentEvents.filter(
-      (event) => event.type === "CHECKPOINT"
-    ).length,
-
-    converged: currentEvents.some(
+    converged: visible.some(
       (event) => event.type === "CONVERGENCE"
     ),
 
-    reportGenerated: currentEvents.some(
+    reportGenerated: visible.some(
       (event) => event.type === "REPORT"
     ),
   }
@@ -203,13 +199,15 @@ export default function AIAgentPipeline() {
   const currentEvent = events[eventIndex]
   const stats = getStats(eventIndex)
 
-  const trustStatus =
-    stats.trusts > 0 ? "HIGH" : "CALCULATING"
+  const trust =
+    stats.trusts > 0
+      ? "HIGH"
+      : "CALCULATING"
 
   const reportStatus = stats.reportGenerated
     ? "GENERATED"
     : stats.converged
-      ? "CONVERGING"
+      ? "CONVERGED"
       : "INVESTIGATING"
 
   return (
@@ -259,37 +257,16 @@ export default function AIAgentPipeline() {
             </div>
           )
         )}
-
-        <div className="pipeline-outputs">
-          <span>
-            Runtime <b>VERIFIED</b>
-          </span>
-
-          <span>
-            Dependencies <b>VERIFIED</b>
-          </span>
-
-          <span>
-            Execution{" "}
-            <b>
-              {stats.claims >= 3
-                ? "VERIFIED"
-                : "PENDING"}
-            </b>
-          </span>
-        </div>
       </div>
 
       <motion.div
         className="pipeline-message"
         key={currentEvent.id}
         initial={{
-          opacity: 0,
-          y: 4,
+          opacity: 0.25,
         }}
         animate={{
           opacity: 1,
-          y: 0,
         }}
         transition={{
           duration: 0.25,
@@ -298,17 +275,23 @@ export default function AIAgentPipeline() {
         <span>›</span>
 
         <div className="pipeline-event">
-          <div className="pipeline-event-main">
-            <small>
-              {currentEvent.type} · {currentEvent.id}
-            </small>
+          <p>
+            <strong>
+              {currentEvent.type}
+            </strong>
 
-            <p>{currentEvent.text}</p>
-          </div>
+            {" · "}
 
-          <span className="pipeline-event-detail">
-            {currentEvent.detail}
-          </span>
+            {currentEvent.text}
+          </p>
+
+          <small>
+            {currentEvent.id}
+
+            {currentEvent.parent
+              ? ` · ← ${currentEvent.parent}`
+              : ` · ${currentEvent.detail}`}
+          </small>
         </div>
       </motion.div>
 
@@ -329,53 +312,11 @@ export default function AIAgentPipeline() {
         </span>
 
         <span className="pipeline-stack">
-          <small>TRUST</small>
-          <b>{trustStatus}</b>
-        </span>
-      </div>
+          <small>TRUST · REPORT</small>
 
-      <div className="pipeline-trace">
-        <span>
-          <small>TRACE</small>
-        </span>
-
-        <span>
-          Investigation
-          <b>→</b>
-          Observation
-          <b>→</b>
-          Claim
-          <b>→</b>
-          Trust
-        </span>
-
-        {currentEvent.parent && (
-          <span className="pipeline-trace-parent">
-            ↳ {currentEvent.parent}
-          </span>
-        )}
-      </div>
-
-      <div className="pipeline-status">
-        <span>
-          <small>CHECKPOINTS</small>
           <b>
-            {stats.checkpoints}
+            {trust} · {reportStatus}
           </b>
-        </span>
-
-        <span>
-          <small>CONVERGENCE</small>
-          <b>
-            {stats.converged
-              ? "REACHED"
-              : "PENDING"}
-          </b>
-        </span>
-
-        <span>
-          <small>REPORT</small>
-          <b>{reportStatus}</b>
         </span>
       </div>
     </div>

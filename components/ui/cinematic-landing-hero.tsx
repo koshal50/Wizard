@@ -400,71 +400,39 @@ export function CinematicHero({
   const [active, setActive] = useState(0)
 
   useEffect(() => {
+    let frame = 0
+
     const onScroll = () => {
-      const el = root.current
+      if (frame) return
 
-      if (!el) {
-        return
-      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+        const el = root.current
+        if (!el) return
 
-      const rect =
-        el.getBoundingClientRect()
+        const rect = el.getBoundingClientRect()
+        const scrollableDistance = Math.max(1, el.offsetHeight - window.innerHeight)
+        const progress = Math.min(1, Math.max(0, -rect.top / scrollableDistance))
 
-      const scrollableDistance = Math.max(
-        1,
-        el.offsetHeight -
-        window.innerHeight
-      )
-
-      /*
-       * Because the section moves upward
-       * relative to the viewport as the
-       * user scrolls, its top becomes
-       * increasingly negative.
-       *
-       * Example:
-       *
-       * section top = 0
-       * progress = 0
-       *
-       * section top = -3100
-       * progress ≈ 0.5
-       *
-       * section top = -6200
-       * progress ≈ 1
-       */
-      const progress = Math.min(
-        0.999,
-        Math.max(
-          0,
-          -rect.top /
-          scrollableDistance
-        )
-      )
-
-      const nextStage =
-        getStageFromProgress(progress)
-
-      setActive((current) =>
-        current === nextStage
-          ? current
-          : nextStage
-      )
+        // Keep the expensive visual choreography on the compositor. React only switches the active workspace.
+        const introScale = progress < 0.2 ? 0.86 + progress * 0.7 : 1
+        const outroScale = progress > 0.8 ? 1 - (progress - 0.8) * 0.7 : 1
+        const scale = Math.min(introScale, outroScale)
+        const radius = progress < 0.2 ? 30 - progress * 150 : progress > 0.8 ? (progress - 0.8) * 150 : 0
+        el.style.setProperty("--scene-progress", progress.toFixed(4))
+        el.style.setProperty("--scene-scale", scale.toFixed(4))
+        el.style.setProperty("--scene-radius", `${radius.toFixed(2)}px`)
+        const nextStage = getStageFromProgress(progress)
+        setActive((current) => (current === nextStage ? current : nextStage))
+      })
     }
 
-    window.addEventListener(
-      "scroll",
-      onScroll,
-      { passive: true }
-    )
-
+    window.addEventListener("scroll", onScroll, { passive: true })
     onScroll()
 
     return () => {
-      window.removeEventListener(
-        "scroll",
-        onScroll
-      )
+      window.removeEventListener("scroll", onScroll)
+      if (frame) window.cancelAnimationFrame(frame)
     }
   }, [])
 
@@ -499,7 +467,7 @@ export function CinematicHero({
               </p>
             </div>
 
-            <div className="relative w-full max-w-[1180px] lg:ml-4">
+            <div className="scene-laptop relative w-full max-w-[1180px] lg:ml-4">
               <div className="relative aspect-[650/400] w-full">
                 <MacbookPro className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl" aria-label="Wizard agent workspace" role="img">
                   <div className="screen relative h-full w-full overflow-hidden bg-[#07101f] font-mono text-[8px] sm:text-[11px] md:text-xs">

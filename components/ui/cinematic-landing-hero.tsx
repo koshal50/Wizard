@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { Browser } from "@/components/ui/browser"
 import { FileTree, wizardFileStructure } from "@/components/ui/file-tree"
 import { MacbookPro } from "@/components/ui/macbook-pro"
+import AIAgentPipeline from "@/components/ui/ai-agent-pipeline"
 
 interface GradientProps extends React.HTMLAttributes<HTMLDivElement> {
   speed?: number
@@ -323,47 +324,9 @@ function BrowserPanel() {
 
 function Report() {
   return (
-    <div
-      data-screen-panel
-      className="screen-panel"
-    >
+    <div data-screen-panel className="screen-panel report-panel">
       <Bar>wizard / live verification report</Bar>
-
-      <div className="report-copy">
-        <div className="report-mark">
-          ✓
-        </div>
-
-        <div>
-          <span className="muted">
-            LIVE TRACE
-          </span>
-
-          <h3>
-            Tracing the evidence.
-          </h3>
-
-          <p>
-            Re-opening relevant files,
-            executing checks, and verifying
-            the browser path.
-          </p>
-        </div>
-      </div>
-
-      <div className="report-timeline">
-        <span>
-          ✓ app/page.tsx reopened
-        </span>
-
-        <span>
-          ✓ wizard test --browser executed
-        </span>
-
-        <span className="report-pulse">
-          ● browser evidence captured
-        </span>
-      </div>
+      <AIAgentPipeline />
     </div>
   )
 }

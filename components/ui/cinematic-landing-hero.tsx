@@ -628,21 +628,30 @@ function Surface({
   return <ReportSurface />
 }
 
-function getStageState(progress: number) {
-  const count = applications.length
-  const raw = clamp(progress) * count
+function stageAt(
+  progress: number
+) {
+  const count =
+    applications.length
 
-  const stage = Math.min(
+  return Math.min(
     count - 1,
-    Math.floor(raw)
+    Math.floor(
+      progress * count
+    )
   )
+}
 
-  const local = raw - Math.floor(raw)
+function localStageProgress(
+  progress: number
+) {
+  const count =
+    applications.length
 
-  return {
-    stage,
-    local,
-  }
+  const raw =
+    progress * count
+
+  return raw - Math.floor(raw)
 }
 
 export function CinematicHero({
@@ -738,208 +747,256 @@ export function CinematicHero({
 
   /*
    * ------------------------------------------------
-   * SCENE CHOREOGRAPHY
+   * MACBOOK LEVEL CHOREOGRAPHY
    * ------------------------------------------------
    *
-   * The MacBook is a physical object in the scene.
-   * It never scales during application choreography.
+   * The entire laptop is independent from the
+   * applications inside it.
    *
-   * Only the Oceanic background scales.
+   * This restores the original cinematic behavior:
    *
-   * Every application gets a complete cycle:
+   * entering:
+   * small rounded card
    *
-   * 0.00 to 0.58  application owns the screen
-   * 0.58 to 0.69  application minimizes
-   * 0.69 to 0.77  desktop is exposed
-   * 0.77 to 0.86  Dock appears
-   * 0.86 to 0.91  agent cursor moves and clicks
-   * 0.91 to 1.00  next application opens
+   * middle:
+   * almost full viewport
    *
-   * At the next stage boundary the newly opened
-   * application is already full size and stays there.
+   * exiting:
+   * small rounded card again
    */
 
-  const sceneEntry = phase(
-    scrollProgress,
-    0,
-    0.11
-  )
+  const entry =
+    phase(
+      scrollProgress,
+      0,
+      0.12
+    )
 
-  const sceneExit = phase(
-    scrollProgress,
-    0.89,
-    1
-  )
+  const exit =
+    phase(
+      scrollProgress,
+      0.88,
+      1
+    )
+
+  const laptopScale =
+    0.78 +
+    entry * 0.22 -
+    exit * 0.22
+
+  const laptopRadius =
+    34 -
+    entry * 34 +
+    exit * 34
+
+  const laptopY =
+    7 -
+    entry * 7 +
+    exit * 7
+
+  const laptopOpacity =
+    0.65 +
+    entry * 0.35 -
+    exit * 0.08
 
   /*
-   * This transform belongs ONLY to the Oceanic
-   * background. It is deliberately outside the
-   * MacBook transform hierarchy.
+   * The side copy subtly gets out of the way once
+   * the MacBook becomes the primary visual.
+   *
+   * This is not a fade in or fade out animation.
+   * It is simply spatial prioritization.
    */
-  const oceanScale =
-    0.76 +
-    sceneEntry * 0.24 -
-    sceneExit * 0.24
-
-  const oceanRadius =
-    34 -
-    sceneEntry * 34 +
-    sceneExit * 34
-
-  const copyProgress = phase(
-    scrollProgress,
-    0.08,
-    0.28
-  )
-
-  const copyX =
-    -copyProgress * 18
 
   const copyScale =
     1 -
-    copyProgress * 0.06
+    phase(
+      scrollProgress,
+      0.08,
+      0.28
+    ) *
+      0.08
+
+  const copyX =
+    -phase(
+      scrollProgress,
+      0.08,
+      0.28
+    ) *
+    18
 
   /*
    * ------------------------------------------------
-   * APPLICATION TIMELINE
+   * APPLICATION CHOREOGRAPHY
    * ------------------------------------------------
    */
 
-  const {
-    stage,
-    local,
-  } = getStageState(scrollProgress)
+  const stage =
+    stageAt(scrollProgress)
+
+  const local =
+    localStageProgress(
+      scrollProgress
+    )
 
   const current =
     applications[stage]
 
-  const next =
-    stage < applications.length - 1
-      ? applications[stage + 1]
+  const previous =
+    stage > 0
+      ? applications[stage - 1]
       : null
 
-  const outgoing = phase(
-    local,
-    0.58,
-    0.69
-  )
+  /*
+   * Each application has a long resting period.
+   *
+   * 0 to 58 percent
+   * current application owns the screen
+   *
+   * 58 to 66 percent
+   * current application shrinks
+   *
+   * 66 to 72 percent
+   * desktop becomes visible
+   *
+   * 72 to 79 percent
+   * Dock appears
+   *
+   * 79 to 84 percent
+   * agent cursor travels
+   *
+   * 84 to 88 percent
+   * click
+   *
+   * 88 to 100 percent
+   * new application expands
+   */
 
-  const desktop = phase(
-    local,
-    0.68,
-    0.77
-  )
+  const shrink =
+    phase(
+      local,
+      0.58,
+      0.66
+    )
 
-  const dockIn = phase(
-    local,
-    0.76,
-    0.82
-  )
+  const desktop =
+    phase(
+      local,
+      0.65,
+      0.72
+    )
 
-  const dockOut = phase(
-    local,
-    0.88,
-    0.93
-  )
+  const dock =
+    phase(
+      local,
+      0.72,
+      0.79
+    ) *
+    (1 -
+      phase(
+        local,
+        0.84,
+        0.9
+      ))
 
-  const dockVisibility =
-    next
-      ? dockIn * (1 - dockOut)
-      : 0
+  const pointerTravel =
+    phase(
+      local,
+      0.77,
+      0.84
+    )
 
-  const pointerTravel = phase(
-    local,
-    0.80,
-    0.88
-  )
+  const click =
+    phase(
+      local,
+      0.84,
+      0.87
+    )
 
-  const click = phase(
-    local,
-    0.88,
-    0.91
-  )
-
-  const opening = phase(
-    local,
-    0.91,
-    1
-  )
+  const opening =
+    phase(
+      local,
+      0.87,
+      1
+    )
 
   /*
-   * ------------------------------------------------
-   * OUTGOING APPLICATION
-   * ------------------------------------------------
-   *
-   * It starts at exactly 1:1 and only minimizes
-   * near the end of its own stage.
+   * Previous application.
    */
-  const outgoingScale =
+
+  const previousScale =
     1 -
-    outgoing * 0.62
+    shrink * 0.58
 
-  const outgoingX =
-    -outgoing * 22
+  const previousX =
+    shrink * -18
 
-  const outgoingY =
-    -outgoing * 16
+  const previousY =
+    shrink * -13
 
-  const outgoingRotate =
-    -outgoing * 1.5
+  const previousRotate =
+    shrink * -1.4
 
-  const outgoingOpacity =
+  const previousOpacity =
     1 -
-    desktop * 0.72
+    desktop * 0.48
 
   /*
-   * ------------------------------------------------
-   * INCOMING APPLICATION
-   * ------------------------------------------------
+   * New application.
    *
-   * It does not exist during the desktop or Dock
-   * phases. It opens only after the click.
+   * It does NOT exist as a visible window
+   * until after the Dock interaction.
    *
-   * Its final state is exactly 1:1.
+   * This is the important fix.
    */
-  const incomingScale =
+
+  const newAppScale =
     stage === 0
       ? 1
-      : 0.88 +
-        opening * 0.12
+      : 0.42 +
+        opening * 0.58
 
-  const incomingY =
+  const newAppY =
     stage === 0
       ? 0
-      : 5 -
-        opening * 5
+      : 10 -
+        opening * 10
 
-  const incomingOpacity =
+  const newAppOpacity =
     stage === 0
       ? 1
       : opening
 
-  const incomingVisibility =
-    stage === 0
-      ? 0
-      : opening
-
   /*
-   * ------------------------------------------------
-   * DESKTOP
-   * ------------------------------------------------
+   * Desktop wallpaper.
    */
+
   const desktopOpacity =
     stage === 0
       ? 0
       : desktop
 
   /*
-   * ------------------------------------------------
-   * CURSOR
-   * ------------------------------------------------
+   * Dock.
+   *
+   * It cannot appear at the same time as the
+   * new application.
    */
+
+  const dockOpacity =
+    stage === 0
+      ? 0
+      : dock
+
+  /*
+   * Agent cursor.
+   *
+   * It begins away from the Dock, travels toward
+   * the correct icon, then presses and disappears.
+   */
+
   const iconIndex =
     applications.indexOf(
-      next || current
+      current
     )
 
   const iconFraction =
@@ -949,15 +1006,18 @@ export function CinematicHero({
         (applications.length - 1)
 
   const cursorStartX =
-    43 +
-    (stage % 2) * 12
+    42 +
+    (stage % 2) * 15
 
   const cursorTargetX =
     25 +
     iconFraction * 50
 
-  const cursorStartY = 55
-  const cursorTargetY = 87
+  const cursorStartY =
+    58
+
+  const cursorTargetY =
+    87
 
   const cursorX =
     cursorStartX +
@@ -972,25 +1032,42 @@ export function CinematicHero({
       pointerTravel
 
   const cursorScale =
-    click > 0 ? 0.82 : 1
+    click > 0
+      ? 0.82
+      : 1
 
   const cursorOpacity =
-    next &&
-    pointerTravel > 0 &&
-    opening === 0
+    stage === 0 ||
+    pointerTravel === 0 ||
+    opening > 0
+      ? 0
+      : 1
+
+  /*
+   * The current app is completely hidden until
+   * the Dock interaction has finished.
+   *
+   * This removes the small new window overlapping
+   * the old window.
+   */
+
+  const currentVisibility =
+    stage === 0
       ? 1
-      : 0
+      : opening
 
   return (
     <section
       ref={root}
       className={cn(
-        "relative min-h-[15000px] overflow-visible bg-transparent font-sans",
+        "relative min-h-[11800px] overflow-visible bg-transparent font-sans",
         className
       )}
     >
       <div className="sticky top-0 flex min-h-screen w-full items-center justify-center overflow-hidden">
         <div className="relative flex min-h-screen w-full items-center justify-center">
+          <SafeMeshGradient />
+
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
 
           <div className="relative z-20 flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 py-12 lg:flex-row lg:gap-14 lg:px-10">
@@ -1025,26 +1102,28 @@ export function CinematicHero({
             </div>
 
             <div className="relative w-full max-w-[1180px] lg:ml-4">
-              <div className="relative mx-auto aspect-[650/400] w-full">
+              <div
+                className="relative mx-auto aspect-[650/400] w-full"
+                style={{
+                  transform:
+                    `translate3d(0,${laptopY}%,0) scale(${laptopScale})`,
+                  opacity:
+                    laptopOpacity,
+                  borderRadius:
+                    `${laptopRadius}px`,
+                  transformOrigin:
+                    "center center",
+                  willChange:
+                    "transform, opacity",
+                }}
+              >
                 <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute z-0 overflow-hidden"
+                  className="absolute inset-0 overflow-hidden"
                   style={{
-                    inset: "-18%",
                     borderRadius:
-                      `${oceanRadius}px`,
-                    transform:
-                      `scale(${oceanScale})`,
-                    transformOrigin:
-                      "center center",
-                    willChange:
-                      "transform, border-radius",
+                      `${laptopRadius}px`,
                   }}
                 >
-                  <SafeMeshGradient className="absolute inset-0" />
-                </div>
-
-                <div className="absolute inset-0 z-10 overflow-hidden">
                   <MacbookPro
                     className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
                     aria-label="Wizard autonomous investigation"
@@ -1070,66 +1149,70 @@ export function CinematicHero({
                       />
 
                       {/*
-                       * CURRENT / OUTGOING WINDOW
+                       * PREVIOUS WINDOW
                        *
-                       * This application owns the entire
-                       * screen for the whole stage.
-                       *
-                       * It starts at 1:1. It only becomes
-                       * smaller during its own minimize
-                       * choreography near the end.
+                       * This is the only application
+                       * visible before the Dock.
                        */}
-                      <div
-                        className="absolute inset-0 z-40 overflow-hidden"
-                        style={{
-                          transform:
-                            `translate3d(${outgoingX}%,${outgoingY}%,0) scale(${outgoingScale}) rotate(${outgoingRotate}deg)`,
-                          opacity:
-                            outgoingOpacity,
-                          transformOrigin:
-                            "center center",
-                          pointerEvents:
-                            "none",
-                          willChange:
-                            "transform, opacity",
-                        }}
-                      >
-                        <Surface
-                          app={current}
-                        />
-                      </div>
 
-                      {/*
-                       * NEXT WINDOW
-                       *
-                       * Completely absent until after the
-                       * Dock interaction. Once opened it
-                       * settles at the full MacBook screen.
-                       */}
-                      {next && (
+                      {previous && (
                         <div
-                          className="absolute inset-0 z-50 overflow-hidden"
+                          className="absolute inset-[4%] z-20 overflow-hidden rounded-[10px] shadow-2xl"
                           style={{
                             transform:
-                              `translate3d(0,${incomingY}%,0) scale(${incomingScale})`,
+                              `translate3d(${previousX}%,${previousY}%,0) scale(${previousScale}) rotate(${previousRotate}deg)`,
                             opacity:
-                              incomingVisibility *
-                              incomingOpacity,
+                              previousOpacity,
                             transformOrigin:
-                              "center bottom",
+                              "center center",
                             pointerEvents:
-                              opening > 0.96
-                                ? "auto"
-                                : "none",
+                              "none",
                             willChange:
                               "transform, opacity",
                           }}
                         >
                           <Surface
-                            app={next}
+                            app={
+                              previous
+                            }
                           />
                         </div>
                       )}
+
+                      {/*
+                       * CURRENT WINDOW
+                       *
+                       * Completely absent during the
+                       * Dock phase.
+                       *
+                       * It is created visually only after
+                       * the click has completed.
+                       */}
+
+                      <div
+                        className="absolute inset-0 z-40 overflow-hidden"
+                        style={{
+                          transform:
+                            `translate3d(0,${newAppY}%,0) scale(${newAppScale})`,
+                          opacity:
+                            currentVisibility,
+                          transformOrigin:
+                            "center bottom",
+                          pointerEvents:
+                            opening >
+                            0.95
+                              ? "auto"
+                              : "none",
+                          willChange:
+                            "transform, opacity",
+                        }}
+                      >
+                        <Surface
+                          app={
+                            current
+                          }
+                        />
+                      </div>
 
                       {/*
                        * Dock
@@ -1145,7 +1228,7 @@ export function CinematicHero({
                           opacity:
                             dockOpacity,
                           transform:
-                            `translate3d(-50%,${(1 - dockOpacity) * 14}px,0) scale(.78)`,
+                            `translate3d(-50%,${(1 - dockOpacity) * 20}px,0) scale(${0.68 + dockOpacity * 0.12})`,
                           pointerEvents:
                             dockOpacity >
                             0.9
@@ -1192,15 +1275,55 @@ export function CinematicHero({
                             },
                           ]}
                           onAppClick={() => {}}
-                          openApps={
-                            next
-                              ? [next]
-                              : [current]
-                          }
+                          openApps={[current]}
                           className="scale-[.72] sm:scale-[.78] md:scale-[.84]"
                         />
                       </div>
 
+                      {/*
+                       * Wizard pointer.
+                       *
+                       * It appears only after the
+                       * previous window has moved away.
+                       */}
+
+                      {cursorOpacity >
+                        0 && (
+                        <div
+                          className="pointer-events-none absolute z-[150] hidden md:block"
+                          style={{
+                            left:
+                              `${cursorX}%`,
+                            top:
+                              `${cursorY}%`,
+                            opacity:
+                              cursorOpacity,
+                            transform:
+                              `translate(-6px,-5px) scale(${cursorScale})`,
+                            filter:
+                              "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
+                          }}
+                        >
+                          <svg
+                            width="18"
+                            height="22"
+                            viewBox="0 0 22 25"
+                            fill="none"
+                          >
+                            <path
+                              d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
+                              fill="#111827"
+                              stroke="white"
+                              strokeWidth="1.4"
+                            />
+                          </svg>
+
+                          {click >
+                            0 && (
+                            <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
+                          )}
+                        </div>
+                      )}
                     </div>
                   </MacbookPro>
                 </div>

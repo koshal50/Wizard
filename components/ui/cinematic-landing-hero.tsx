@@ -24,8 +24,114 @@ interface GradientProps
   grainOverlay?: number
 }
 
+type WorkspaceTab =
+  | "vscode"
+  | "terminal"
+  | "wizard"
+  | "browser"
+  | "report"
+
+type InvestigationPhase =
+  | "workspace"
+  | "inspect"
+  | "plan"
+  | "execute"
+  | "observe"
+  | "reason"
+  | "verify"
+  | "converge"
+
+const TABS: {
+  id: WorkspaceTab
+  label: string
+  title: string
+}[] = [
+  {
+    id: "vscode",
+    label: "VS Code",
+    title: "wizard repo / VS Code",
+  },
+  {
+    id: "terminal",
+    label: "Terminal",
+    title: "terminal / wizard session",
+  },
+  {
+    id: "wizard",
+    label: "Wizard",
+    title: "wizard / investigation",
+  },
+  {
+    id: "browser",
+    label: "Browser",
+    title: "wizardagents.vercel.app",
+  },
+  {
+    id: "report",
+    label: "Report",
+    title: "wizard / verification report",
+  },
+]
+
+const code = [
+  'import { verify } from "@wizard/agent"',
+  "",
+  "export async function run() {",
+  "  const evidence = await verify({",
+  '    target: "localhost:3000",',
+  '    mode: "deep"',
+  "  })",
+  "  return evidence",
+  "}",
+]
+
+const commands = [
+  "wizard verify runtime",
+  "wizard inspect .",
+  "npm install",
+  "npm start",
+]
+
+const files = [
+  "package.json",
+  "README.md",
+  "app/page.tsx",
+  "components/hero.tsx",
+  "lib/utils.ts",
+  "Dockerfile",
+]
+
+function clamp(
+  value: number,
+  min = 0,
+  max = 1
+) {
+  return Math.min(
+    max,
+    Math.max(min, value)
+  )
+}
+
+function smooth(value: number) {
+  const x = clamp(value)
+  return x * x * (3 - 2 * x)
+}
+
+function windowProgress(
+  progress: number,
+  start: number,
+  end: number
+) {
+  return smooth(
+    clamp(
+      (progress - start) /
+        Math.max(0.001, end - start)
+    )
+  )
+}
+
 /* =========================================================
-   BACKGROUND
+   OCEANIC BACKGROUND
 ========================================================= */
 
 export function SafeMeshGradient({
@@ -87,53 +193,6 @@ export function SafeMeshGradient({
 }
 
 /* =========================================================
-   DATA
-========================================================= */
-
-const code = [
-  'import { verify } from "@wizard/agent"',
-  "",
-  "export async function run() {",
-  "  const evidence = await verify({",
-  '    target: "localhost:3000",',
-  '    mode: "deep"',
-  "  })",
-  "  return evidence",
-  "}",
-]
-
-const commands = [
-  "wizard inspect .",
-  "wizard read package.json",
-  "wizard verify runtime",
-  "wizard test --browser",
-]
-
-const files = [
-  "package.json",
-  "README.md",
-  "app/page.tsx",
-  "components/hero.tsx",
-  "lib/utils.ts",
-]
-
-function clamp(
-  value: number,
-  min = 0,
-  max = 1
-) {
-  return Math.min(
-    max,
-    Math.max(min, value)
-  )
-}
-
-function smooth(value: number) {
-  const x = clamp(value)
-  return x * x * (3 - 2 * x)
-}
-
-/* =========================================================
    WINDOW BAR
 ========================================================= */
 
@@ -145,21 +204,19 @@ function WindowBar({
   status?: string
 }) {
   return (
-    <div
-      className="flex h-7 shrink-0 items-center gap-1.5 border-b border-white/10 bg-[#0b1424] px-2.5 font-mono"
-    >
+    <div className="flex h-7 shrink-0 items-center border-b border-white/10 bg-[#0b1424] px-2.5 font-mono">
       <div className="flex gap-1">
         <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
         <span className="h-1.5 w-1.5 rounded-full bg-yellow-300" />
         <span className="h-1.5 w-1.5 rounded-full bg-green-400" />
       </div>
 
-      <span className="ml-1 truncate text-[6px] text-slate-300 sm:text-[7px]">
+      <span className="ml-2 truncate text-[6px] text-slate-300 sm:text-[7px]">
         {title}
       </span>
 
       {status && (
-        <span className="ml-auto shrink-0 text-[5px] uppercase tracking-[.15em] text-emerald-400">
+        <span className="ml-auto text-[5px] uppercase tracking-[.14em] text-slate-500 sm:text-[6px]">
           {status}
         </span>
       )}
@@ -168,22 +225,22 @@ function WindowBar({
 }
 
 /* =========================================================
-   BASE WINDOW
+   MACOS WINDOW
 ========================================================= */
 
-function Window({
+function WorkspaceWindow({
   children,
-  style,
   className,
+  style,
 }: {
   children: React.ReactNode
-  style?: React.CSSProperties
   className?: string
+  style?: React.CSSProperties
 }) {
   return (
     <div
       className={cn(
-        "absolute overflow-hidden rounded-md border border-white/10 bg-[#0b1424] shadow-[0_18px_40px_rgba(0,0,0,.3)]",
+        "absolute overflow-hidden rounded-lg border border-white/10 bg-[#0b1424] shadow-[0_22px_55px_rgba(0,0,0,.34)]",
         className
       )}
       style={{
@@ -201,105 +258,130 @@ function Window({
    VS CODE
 ========================================================= */
 
-function WorkspaceWindow({
+function VSCodeSurface({
   progress,
+  focus,
 }: {
   progress: number
+  focus: number
 }) {
-  const amount = smooth(
-    clamp(progress / 0.22)
+  const reveal = windowProgress(
+    progress,
+    0,
+    0.2
   )
 
-  const lines = Math.max(
+  const codeAmount = windowProgress(
+    progress,
+    0.03,
+    0.22
+  )
+
+  const visibleLines = Math.max(
     1,
     Math.min(
       code.length,
       Math.floor(
-        amount * code.length
+        codeAmount * code.length
       ) + 1
     )
   )
 
   return (
-    <Window
-      className="left-[3%] top-[7%] z-10 h-[51%] w-[56%]"
+    <WorkspaceWindow
+      className="left-[3%] top-[8%] z-20 h-[64%] w-[60%]"
       style={{
-        opacity: 0.98,
+        opacity:
+          progress < 0.01
+            ? 0.96
+            : 0.9 +
+              reveal * 0.1,
         transform: `
           translate3d(
-            0,
-            ${(1 - amount) * 12}px,
+            ${(1 - reveal) * -12}px,
+            ${(1 - reveal) * 7}px,
             0
           )
-          scale(${0.98 + amount * 0.02})
+          scale(${0.985 + reveal * 0.015})
         `,
+        filter:
+          focus < 0.35
+            ? "brightness(.68) saturate(.8)"
+            : "brightness(1)",
       }}
     >
       <WindowBar
-        title="wizard repo / VS Code"
-        status="INSPECTING"
+        title="wizard-repo / VS Code"
+        status="workspace"
       />
 
-      <div className="grid h-[calc(100%-28px)] grid-cols-[25%_75%] bg-[#111827]">
-        <div className="flex flex-col gap-1.5 overflow-hidden border-r border-white/5 p-2 font-mono text-[5px] text-slate-500 sm:text-[6px]">
-          <b className="mb-1 text-[5px] tracking-[.15em] text-slate-400">
+      <div className="grid h-[calc(100%-28px)] grid-cols-[24%_76%] bg-[#111827]">
+        <div className="overflow-hidden border-r border-white/5 p-2 font-mono text-[5px] text-slate-500 sm:text-[6px]">
+          <div className="mb-2 text-[5px] tracking-[.14em] text-slate-400">
             EXPLORER
-          </b>
+          </div>
 
-          <span className="text-slate-400">
+          <div className="mb-2 text-slate-400">
             ⌄ wizard repo
-          </span>
+          </div>
 
-          <span className="rounded bg-blue-500/10 px-1.5 py-1 text-blue-200">
+          <div className="rounded bg-blue-500/10 px-1.5 py-1 text-blue-200">
             ◇ package.json
-          </span>
+          </div>
 
-          <span>
+          <div className="py-1">
             ◇ README.md
-          </span>
+          </div>
 
-          <span>
+          <div className="py-1">
             ◇ app/
-          </span>
+          </div>
 
-          <span>
+          <div className="py-1">
             ◇ components/
-          </span>
+          </div>
 
-          <span>
+          <div className="py-1">
             ◇ lib/
-          </span>
+          </div>
+
+          <div className="py-1">
+            ◇ Dockerfile
+          </div>
         </div>
 
         <pre className="m-0 overflow-hidden p-3 font-mono text-[6px] leading-[1.8] text-slate-300 sm:text-[7px]">
           <code>
             {code
-              .slice(0, lines)
-              .map((line, index) => (
-                <React.Fragment
-                  key={index}
-                >
-                  <span
-                    className={
-                      index === lines - 1
-                        ? "bg-blue-500/10 text-white"
-                        : ""
-                    }
+              .slice(0, visibleLines)
+              .map(
+                (line, index) => (
+                  <React.Fragment
+                    key={index}
                   >
-                    {line || " "}
-                  </span>
+                    <span
+                      className={
+                        index ===
+                        visibleLines - 1
+                          ? "rounded bg-blue-500/10 text-white"
+                          : ""
+                      }
+                    >
+                      {line || " "}
+                    </span>
 
-                  {index <
-                    lines - 1 &&
-                    "\n"}
-                </React.Fragment>
-              ))}
+                    {index <
+                      visibleLines - 1 &&
+                      "\n"}
+                  </React.Fragment>
+                )
+              )}
 
             <span className="ml-1 inline-block h-2 w-[2px] animate-pulse bg-blue-300" />
           </code>
         </pre>
       </div>
-    </Window>
+    </WorkspaceWindow>
   )
 }
 
@@ -307,63 +389,67 @@ function WorkspaceWindow({
    TERMINAL
 ========================================================= */
 
-function TerminalWindow({
+function TerminalSurface({
   progress,
+  focus,
 }: {
   progress: number
+  focus: number
 }) {
-  const amount = smooth(
-    clamp(
-      (progress - 0.13) /
-        0.27
-    )
+  const reveal = windowProgress(
+    progress,
+    0.12,
+    0.38
   )
 
-  const visible = Math.max(
-    0,
+  const commandAmount = windowProgress(
+    progress,
+    0.15,
+    0.46
+  )
+
+  const visibleCommands =
     Math.min(
       commands.length,
       Math.floor(
-        amount *
+        commandAmount *
           commands.length
       )
     )
-  )
 
   return (
-    <Window
-      className="right-[3%] top-[10%] z-20 h-[45%] w-[54%]"
+    <WorkspaceWindow
+      className="right-[3%] top-[13%] z-30 h-[52%] w-[57%]"
       style={{
         opacity:
           progress < 0.12
             ? 0
-            : amount,
+            : reveal,
         transform: `
           translate3d(
-            ${(1 - amount) * 20}px,
-            ${(1 - amount) * 14}px,
+            ${(1 - reveal) * 25}px,
+            ${(1 - reveal) * 15}px,
             0
           )
-          scale(${0.97 + amount * 0.03})
+          scale(${0.97 + reveal * 0.03})
         `,
+        filter:
+          focus < 0.35
+            ? "brightness(.62) saturate(.75)"
+            : "brightness(1)",
       }}
     >
       <WindowBar
         title="terminal / wizard session"
-        status={
-          visible >=
-          commands.length
-            ? "EXIT 0"
-            : "RUNNING"
-        }
+        status="active"
       />
 
-      <div className="relative h-[calc(100%-28px)] overflow-hidden bg-[#05080d] p-3 font-mono text-[6px] leading-[1.6] sm:p-4 sm:text-[7px]">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.09),transparent_45%)]" />
+      <div className="relative h-[calc(100%-28px)] overflow-hidden bg-[#05080d] p-3 font-mono text-[6px] leading-[1.7] sm:p-4 sm:text-[7px]">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.1),transparent_48%)]" />
 
         <div className="relative">
           {commands
-            .slice(0, visible)
+            .slice(0, visibleCommands)
             .map(
               (
                 command,
@@ -389,21 +475,24 @@ function TerminalWindow({
                     </span>
                   </div>
 
-                  <div className="mt-1 text-green-400/80">
-                    ✓{" "}
-                    {index === 0
-                      ? "repository structure mapped"
-                      : index === 1
-                        ? "source indexed"
-                        : index === 2
-                          ? "runtime verified"
-                          : "browser verification requested"}
+                  <div className="mt-1 text-emerald-400/75">
+                    {index === 0 &&
+                      "investigation request created"}
+
+                    {index === 1 &&
+                      "repository manifest available"}
+
+                    {index === 2 &&
+                      "dependencies installed"}
+
+                    {index === 3 &&
+                      "server listening on port 3000"}
                   </div>
                 </div>
               )
             )}
 
-          <div>
+          <div className="mt-2">
             <span className="text-cyan-400">
               wizard@repo
             </span>
@@ -417,237 +506,328 @@ function TerminalWindow({
           </div>
         </div>
       </div>
-    </Window>
+    </WorkspaceWindow>
   )
 }
 
 /* =========================================================
-   REPOSITORY
+   WIZARD INVESTIGATION SURFACE
 ========================================================= */
 
-function RepositoryWindow({
+function WizardSurface({
   progress,
+  focus,
 }: {
   progress: number
+  focus: number
 }) {
-  const amount = smooth(
-    clamp(
-      (progress - 0.31) /
-        0.24
-    )
+  const reveal = windowProgress(
+    progress,
+    0.2,
+    0.52
   )
 
-  const activeFile =
-    files[
-      Math.min(
-        files.length - 1,
-        Math.floor(
-          amount * files.length
-        )
-      )
-    ]
+  const planning = windowProgress(
+    progress,
+    0.24,
+    0.47
+  )
+
+  const execution = windowProgress(
+    progress,
+    0.42,
+    0.64
+  )
+
+  const observation = windowProgress(
+    progress,
+    0.56,
+    0.76
+  )
+
+  const trust = windowProgress(
+    progress,
+    0.7,
+    0.9
+  )
+
+  const branch = windowProgress(
+    progress,
+    0.48,
+    0.72
+  )
 
   return (
-    <Window
-      className="bottom-[4%] left-[3%] z-30 h-[42%] w-[53%]"
+    <WorkspaceWindow
+      className="left-[9%] top-[8%] z-50 h-[82%] w-[82%]"
       style={{
         opacity:
-          progress < 0.3
+          progress < 0.2
             ? 0
-            : amount,
+            : reveal,
         transform: `
           translate3d(
-            ${(1 - amount) * -18}px,
-            ${(1 - amount) * 18}px,
+            0,
+            ${(1 - reveal) * 24}px,
             0
           )
-          scale(${0.97 + amount * 0.03})
+          scale(${0.965 + reveal * 0.035})
         `,
+        filter:
+          focus < 0.45
+            ? "brightness(.7)"
+            : "brightness(1)",
       }}
     >
       <WindowBar
-        title="agent activity / repository map"
-        status="READING"
+        title="wizard / investigation"
+        status={
+          progress > 0.88
+            ? "converging"
+            : "investigating"
+        }
       />
 
-      <div className="grid h-[calc(100%-28px)] grid-cols-[55%_45%] bg-[#081321]">
-        <div className="overflow-hidden border-r border-white/5 p-2">
-          <div className="mb-2 font-mono text-[5px] tracking-[.15em] text-slate-500">
-            REPOSITORY STRUCTURE
-          </div>
+      <div className="relative h-[calc(100%-28px)] overflow-hidden bg-[#081321]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_52%_40%,rgba(59,130,246,.08),transparent_46%)]" />
 
-          <FileTree
-            data={wizardFileStructure}
-            className="max-h-[90%] overflow-hidden text-[6px]"
-          />
-        </div>
-
-        <div className="p-3 font-mono">
-          <div className="text-[5px] tracking-[.15em] text-slate-500">
-            AGENT READING
-          </div>
-
-          <strong className="mt-2 block text-[7px] text-blue-100">
-            {activeFile}
-          </strong>
-
-          <div className="mt-3 space-y-1.5 text-[5px] text-emerald-400/75">
+        <div className="relative z-10 flex h-full flex-col p-4 font-mono">
+          <div className="flex items-start justify-between">
             <div>
-              ✓ scanning source symbols
+              <div className="text-[5px] uppercase tracking-[.2em] text-slate-500">
+                Investigation
+              </div>
+
+              <div className="mt-1 text-[10px] text-white sm:text-[12px]">
+                verify runtime
+              </div>
+
+              <div className="mt-1 text-[5px] text-slate-600">
+                inv_7f31
+              </div>
             </div>
 
-            <div>
-              ✓ 18 files mapped
-            </div>
-
-            <div>
-              ✓ dependency relationship found
+            <div className="rounded-full border border-blue-300/15 bg-blue-300/[0.04] px-2 py-1 text-[5px] text-blue-200/70">
+              Runtime Engine
             </div>
           </div>
 
-          <div className="mt-4 text-[5px] leading-relaxed text-slate-600">
-            trace → investigation
-            node → observation
+          <div className="relative mt-5 flex-1">
+            <div
+              className="absolute left-[9%] top-[17%] h-px origin-left bg-blue-300/30"
+              style={{
+                width: `${30 + planning * 20}%`,
+                transform:
+                  "rotate(7deg)",
+              }}
+            />
+
+            <div
+              className="absolute left-[38%] top-[27%] h-px origin-left bg-emerald-300/30"
+              style={{
+                width: `${20 + execution * 15}%`,
+                transform:
+                  "rotate(-4deg)",
+              }}
+            />
+
+            <div
+              className="absolute left-[38%] top-[27%] h-px origin-left bg-amber-300/25"
+              style={{
+                width: `${18 + branch * 16}%`,
+                transform:
+                  "rotate(25deg)",
+              }}
+            />
+
+            <div
+              className="absolute left-[9%] top-[17%] rounded-md border border-blue-300/20 bg-blue-300/[0.035] p-2"
+              style={{
+                transform: `scale(${0.96 + planning * 0.04})`,
+              }}
+            >
+              <div className="text-[5px] text-slate-500">
+                INVESTIGATION NODE
+              </div>
+
+              <div className="mt-1 text-[6px] text-white">
+                inspect runtime
+              </div>
+
+              <div className="mt-1 text-[5px] text-blue-300/70">
+                hypothesis attached
+              </div>
+            </div>
+
+            <div
+              className="absolute left-[37%] top-[19%] rounded-md border border-amber-300/20 bg-amber-300/[0.035] p-2"
+              style={{
+                opacity:
+                  0.55 +
+                  execution * 0.45,
+                transform: `scale(${0.96 + execution * 0.04})`,
+              }}
+            >
+              <div className="text-[5px] text-slate-500">
+                TOOL REQUEST
+              </div>
+
+              <div className="mt-1 text-[6px] text-white">
+                execute_command
+              </div>
+
+              <div className="mt-1 text-[5px] text-amber-300/70">
+                npm start
+              </div>
+            </div>
+
+            <div
+              className="absolute left-[62%] top-[8%] rounded-md border border-emerald-300/20 bg-emerald-300/[0.035] p-2"
+              style={{
+                opacity:
+                  0.25 +
+                  observation * 0.75,
+                transform: `scale(${0.94 + observation * 0.06})`,
+              }}
+            >
+              <div className="text-[5px] text-slate-500">
+                OBSERVATION
+              </div>
+
+              <div className="mt-1 text-[6px] text-white">
+                obs_034
+              </div>
+
+              <div className="mt-1 text-[5px] text-emerald-300/75">
+                exit code 0
+              </div>
+            </div>
+
+            <div
+              className="absolute left-[59%] top-[48%] rounded-md border border-blue-300/20 bg-blue-300/[0.035] p-2"
+              style={{
+                opacity:
+                  0.15 +
+                  trust * 0.85,
+                transform: `scale(${0.94 + trust * 0.06})`,
+              }}
+            >
+              <div className="text-[5px] text-slate-500">
+                CLAIM
+              </div>
+
+              <div className="mt-1 text-[6px] text-white">
+                runtime starts
+              </div>
+
+              <div className="mt-1 text-[5px] text-emerald-300">
+                trust · high
+              </div>
+            </div>
+
+            <div
+              className="absolute left-[28%] top-[62%] rounded-md border border-violet-300/15 bg-violet-300/[0.025] p-2"
+              style={{
+                opacity:
+                  0.1 +
+                  branch * 0.9,
+                transform: `
+                  translate3d(
+                    ${branch * 4}px,
+                    ${branch * -2}px,
+                    0
+                  )
+                `,
+              }}
+            >
+              <div className="text-[5px] text-slate-500">
+                NEW PATH
+              </div>
+
+              <div className="mt-1 text-[6px] text-white">
+                browser verification
+              </div>
+
+              <div className="mt-1 text-[5px] text-violet-300/70">
+                evidence required
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2 border-t border-white/5 pt-3">
+            <div>
+              <div className="text-[4px] uppercase tracking-[.15em] text-slate-600">
+                Context
+              </div>
+
+              <div className="mt-1 text-[5px] text-slate-400">
+                targeted files
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[4px] uppercase tracking-[.15em] text-slate-600">
+                Evidence
+              </div>
+
+              <div className="mt-1 text-[5px] text-slate-400">
+                immutable observations
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[4px] uppercase tracking-[.15em] text-slate-600">
+                Truth
+              </div>
+
+              <div className="mt-1 text-[5px] text-emerald-400/75">
+                Runtime owned
+              </div>
+            </div>
           </div>
         </div>
       </div>
-    </Window>
+    </WorkspaceWindow>
   )
 }
 
 /* =========================================================
-   KNOWLEDGE GRAPH
+   BROWSER SURFACE
 ========================================================= */
 
-function KnowledgeWindow({
+function BrowserSurface({
   progress,
+  focus,
 }: {
   progress: number
+  focus: number
 }) {
-  const amount = smooth(
-    clamp(
-      (progress - 0.43) /
-        0.2
-    )
+  const reveal = windowProgress(
+    progress,
+    0.54,
+    0.76
   )
 
   return (
-    <Window
-      className="bottom-[5%] right-[3%] z-40 h-[35%] w-[48%]"
+    <WorkspaceWindow
+      className="right-[3%] top-[8%] z-60 h-[79%] w-[84%]"
       style={{
         opacity:
-          progress < 0.42
+          progress < 0.54
             ? 0
-            : amount,
+            : reveal,
         transform: `
           translate3d(
-            ${(1 - amount) * 18}px,
-            ${(1 - amount) * 16}px,
+            ${(1 - reveal) * 24}px,
+            ${(1 - reveal) * -8}px,
             0
           )
-          scale(${0.97 + amount * 0.03})
+          scale(${0.965 + reveal * 0.035})
         `,
-      }}
-    >
-      <WindowBar
-        title="knowledge graph / evidence"
-        status="VALIDATING"
-      />
-
-      <div className="h-[calc(100%-28px)] bg-[#091523] p-3 font-mono">
-        <div className="flex justify-between text-[5px] tracking-[.15em]">
-          <span className="text-slate-400">
-            WHAT WE KNOW
-          </span>
-
-          <span className="text-emerald-400">
-            RUNTIME OWNED
-          </span>
-        </div>
-
-        <div className="mt-5 flex items-center gap-2">
-          <div className="min-w-0 flex-1 rounded border border-amber-300/15 bg-amber-300/[0.03] p-2">
-            <small className="block text-[4px] text-slate-500">
-              OBSERVATION
-            </small>
-
-            <strong className="mt-1 block text-[6px] text-white">
-              obs_031
-            </strong>
-
-            <p className="mt-1 text-[5px] leading-relaxed text-slate-500">
-              package.json declares
-              Node.js 18
-            </p>
-          </div>
-
-          <div className="h-px w-4 bg-emerald-400/50" />
-
-          <div className="min-w-0 flex-1 rounded border border-emerald-300/15 bg-emerald-300/[0.03] p-2">
-            <small className="block text-[4px] text-slate-500">
-              CLAIM
-            </small>
-
-            <strong className="mt-1 block text-[6px] text-white">
-              Runtime = Node.js 18
-            </strong>
-
-            <p className="mt-1 text-[5px] text-emerald-400">
-              TRUST · HIGH
-            </p>
-          </div>
-        </div>
-
-        <div className="absolute bottom-2 left-3 right-3 flex justify-between border-t border-white/5 pt-1.5 text-[4px] text-slate-600">
-          <span>
-            immutable observation
-          </span>
-
-          <span>
-            evidence engine
-          </span>
-
-          <span>
-            claim validated
-          </span>
-        </div>
-      </div>
-    </Window>
-  )
-}
-
-/* =========================================================
-   BROWSER
-========================================================= */
-
-function BrowserWindow({
-  progress,
-}: {
-  progress: number
-}) {
-  const amount = smooth(
-    clamp(
-      (progress - 0.59) /
-        0.22
-    )
-  )
-
-  return (
-    <Window
-      className="left-[18%] top-[14%] z-50 h-[70%] w-[78%] bg-white"
-      style={{
-        opacity:
-          progress < 0.58
-            ? 0
-            : amount,
-        transform: `
-          translate3d(
-            ${(1 - amount) * 24}px,
-            ${(1 - amount) * -10}px,
-            0
-          )
-          scale(${0.96 + amount * 0.04})
-        `,
+        filter:
+          focus < 0.45
+            ? "brightness(.68)"
+            : "brightness(1)",
       }}
     >
       <Browser
@@ -672,120 +852,267 @@ function BrowserWindow({
         className="h-full rounded-none border-0 shadow-none"
       />
 
-      <div className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-slate-200 bg-white/90 px-2 py-1 font-mono text-[5px] text-slate-500 shadow-sm backdrop-blur">
-        <span className="h-1 w-1 rounded-full bg-emerald-500" />
-        browser evidence captured
+      <div className="pointer-events-none absolute bottom-2 left-2 rounded-full border border-slate-200 bg-white/90 px-2 py-1 font-mono text-[5px] text-slate-500 shadow-sm backdrop-blur">
+        browser tool
       </div>
-    </Window>
+    </WorkspaceWindow>
   )
 }
 
 /* =========================================================
-   REPORT
+   REPOSITORY SURFACE
 ========================================================= */
 
-function ReportWindow({
+function RepositorySurface({
   progress,
+  focus,
 }: {
   progress: number
+  focus: number
 }) {
-  const amount = smooth(
-    clamp(
-      (progress - 0.73) /
-        0.24
-    )
+  const reveal = windowProgress(
+    progress,
+    0.28,
+    0.52
   )
 
-  const ready =
-    progress > 0.94
+  const index =
+    Math.min(
+      files.length - 1,
+      Math.floor(
+        reveal * files.length
+      )
+    )
 
   return (
-    <Window
-      className="left-[8%] top-[6%] z-[100] h-[84%] w-[86%]"
+    <WorkspaceWindow
+      className="left-[3%] bottom-[5%] z-10 h-[39%] w-[49%]"
       style={{
         opacity:
-          progress < 0.72
+          progress < 0.28
             ? 0
-            : amount,
+            : 0.8 +
+              reveal * 0.2,
+        transform: `
+          translate3d(
+            ${(1 - reveal) * -15}px,
+            ${(1 - reveal) * 12}px,
+            0
+          )
+          scale(${0.98 + reveal * 0.02})
+        `,
+        filter:
+          focus < 0.3
+            ? "brightness(.6)"
+            : "brightness(.95)",
+      }}
+    >
+      <WindowBar
+        title="repository map"
+        status="reading"
+      />
+
+      <div className="grid h-[calc(100%-28px)] grid-cols-[56%_44%] bg-[#081321]">
+        <div className="overflow-hidden border-r border-white/5 p-2">
+          <div className="mb-2 font-mono text-[5px] tracking-[.15em] text-slate-500">
+            REPOSITORY
+          </div>
+
+          <FileTree
+            data={wizardFileStructure}
+            className="max-h-[90%] overflow-hidden text-[6px]"
+          />
+        </div>
+
+        <div className="p-3 font-mono">
+          <div className="text-[5px] tracking-[.15em] text-slate-600">
+            CURRENT FILE
+          </div>
+
+          <div className="mt-2 text-[6px] text-white">
+            {files[index]}
+          </div>
+
+          <div className="mt-3 space-y-1.5 text-[5px] text-slate-500">
+            <div>
+              source available
+            </div>
+
+            <div>
+              symbols indexed
+            </div>
+
+            <div>
+              dependency relation found
+            </div>
+          </div>
+        </div>
+      </div>
+    </WorkspaceWindow>
+  )
+}
+
+/* =========================================================
+   REPORT SURFACE
+========================================================= */
+
+function ReportSurface({
+  progress,
+  focus,
+}: {
+  progress: number
+  focus: number
+}) {
+  const reveal = windowProgress(
+    progress,
+    0.74,
+    1
+  )
+
+  return (
+    <WorkspaceWindow
+      className="left-[7%] top-[7%] z-[100] h-[84%] w-[86%]"
+      style={{
+        opacity:
+          progress < 0.74
+            ? 0
+            : reveal,
         transform: `
           translate3d(
             0,
-            ${(1 - amount) * 22}px,
+            ${(1 - reveal) * 20}px,
             0
           )
-          scale(${0.95 + amount * 0.05})
+          scale(${0.97 + reveal * 0.03})
         `,
+        filter:
+          focus < 0.45
+            ? "brightness(.7)"
+            : "brightness(1)",
       }}
     >
       <WindowBar
         title="wizard / verification report"
         status={
-          ready
-            ? "CONVERGED"
-            : "ASSEMBLING"
+          progress > 0.94
+            ? "available"
+            : "assembling"
         }
       />
 
-      <div className="relative h-[calc(100%-28px)] overflow-hidden bg-[#081321]">
+      <div className="h-[calc(100%-28px)] overflow-hidden bg-[#081321]">
         <AIAgentPipeline />
-
-        <div className="pointer-events-none absolute bottom-2 left-3 right-3 flex justify-between border-t border-white/5 pt-1.5 font-mono text-[4px] text-slate-600">
-          <span>
-            3 claims
-          </span>
-
-          <span>
-            9 observations
-          </span>
-
-          <span>
-            0 contradictions
-          </span>
-
-          <span className="text-emerald-400/70">
-            {ready
-              ? "CONVERGENCE REACHED"
-              : "EVALUATING"}
-          </span>
-        </div>
       </div>
-    </Window>
+    </WorkspaceWindow>
   )
 }
 
 /* =========================================================
-   STAGE LABEL
+   TAB STRIP
 ========================================================= */
 
-function StageLabel({
+function WorkspaceTabs({
+  activeTab,
   progress,
 }: {
+  activeTab: WorkspaceTab
   progress: number
 }) {
-  let label = "DISCOVERY"
-
-  if (progress >= 0.18)
-    label = "EXECUTION"
-
-  if (progress >= 0.36)
-    label = "INVESTIGATION"
-
-  if (progress >= 0.54)
-    label = "EVIDENCE"
-
-  if (progress >= 0.7)
-    label = "VERIFICATION"
-
-  if (progress >= 0.9)
-    label = "CONVERGENCE"
-
   return (
-    <div className="mt-7 flex items-center gap-2 font-mono text-[7px] uppercase tracking-[.2em] text-blue-100/60">
-      <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_10px_rgba(110,231,183,.7)]" />
+    <div className="absolute bottom-2 left-1/2 z-[400] flex -translate-x-1/2 items-end gap-1.5 rounded-xl border border-white/10 bg-black/25 px-2 py-1.5 shadow-xl backdrop-blur-md">
+      {TABS.map((tab) => {
+        const active =
+          tab.id === activeTab
 
-      {label}
+        const contextual =
+          tab.id === "wizard"
+
+        return (
+          <div
+            key={tab.id}
+            className={cn(
+              "relative flex items-center rounded-md px-2 py-1.5 font-mono transition-all duration-700",
+              active
+                ? "bg-white/[0.11] text-white shadow-[0_4px_16px_rgba(0,0,0,.18)]"
+                : "text-slate-500",
+              contextual &&
+                !active &&
+                "text-blue-200/55"
+            )}
+          >
+            <span className="text-[5px] sm:text-[6px]">
+              {tab.label}
+            </span>
+
+            {active && (
+              <span className="ml-1.5 h-1 w-1 rounded-full bg-blue-300 shadow-[0_0_7px_rgba(147,197,253,.8)]" />
+            )}
+          </div>
+        )
+      })}
+
+      <div className="ml-1 border-l border-white/10 pl-2 font-mono text-[5px] text-slate-600">
+        {progress > 0.9
+          ? "investigation retained"
+          : "workspace"}
+      </div>
     </div>
   )
+}
+
+/* =========================================================
+   ACTIVE SURFACE LOGIC
+========================================================= */
+
+function getActiveSurface(
+  progress: number
+): WorkspaceTab {
+  if (progress < 0.11)
+    return "vscode"
+
+  if (progress < 0.22)
+    return "terminal"
+
+  if (progress < 0.43)
+    return "wizard"
+
+  if (progress < 0.54)
+    return "vscode"
+
+  if (progress < 0.72)
+    return "browser"
+
+  if (progress < 0.84)
+    return "wizard"
+
+  return "report"
+}
+
+function getPhase(
+  progress: number
+): InvestigationPhase {
+  if (progress < 0.11)
+    return "workspace"
+
+  if (progress < 0.22)
+    return "inspect"
+
+  if (progress < 0.36)
+    return "plan"
+
+  if (progress < 0.52)
+    return "execute"
+
+  if (progress < 0.66)
+    return "observe"
+
+  if (progress < 0.78)
+    return "reason"
+
+  if (progress < 0.92)
+    return "verify"
+
+  return "converge"
 }
 
 /* =========================================================
@@ -803,6 +1130,12 @@ export function CinematicHero({
   const [progress, setProgress] =
     useState(0)
 
+  const activeTab =
+    getActiveSurface(progress)
+
+  const phase =
+    getPhase(progress)
+
   useEffect(() => {
     let frame = 0
 
@@ -818,17 +1151,26 @@ export function CinematicHero({
       const rect =
         element.getBoundingClientRect()
 
-      const distance = Math.max(
-        1,
-        element.offsetHeight -
-          window.innerHeight
-      )
+      const distance =
+        Math.max(
+          1,
+          element.offsetHeight -
+            window.innerHeight
+        )
 
-      const value = clamp(
-        -rect.top / distance
-      )
+      const next =
+        clamp(
+          -rect.top / distance
+        )
 
-      setProgress(value)
+      setProgress(
+        (current) =>
+          Math.abs(
+            current - next
+          ) > 0.001
+            ? next
+            : current
+      )
     }
 
     const onScroll = () => {
@@ -873,22 +1215,62 @@ export function CinematicHero({
     }
   }, [])
 
+  const focusMap: Record<
+    WorkspaceTab,
+    number
+  > = {
+    vscode:
+      activeTab === "vscode"
+        ? 1
+        : 0.45,
+    terminal:
+      activeTab === "terminal"
+        ? 1
+        : 0.4,
+    wizard:
+      activeTab === "wizard"
+        ? 1
+        : 0.42,
+    browser:
+      activeTab === "browser"
+        ? 1
+        : 0.38,
+    report:
+      activeTab === "report"
+        ? 1
+        : 0.4,
+  }
+
   const intro =
     smooth(
-      clamp(progress / 0.12)
+      clamp(
+        progress / 0.1
+      )
     )
 
-  const scale =
-    0.94 + intro * 0.06
+  const outro =
+    smooth(
+      clamp(
+        (progress - 0.92) /
+          0.08
+      )
+    )
 
-  const radius =
-    20 - intro * 20
+  const sceneScale =
+    0.94 +
+    intro * 0.06 -
+    outro * 0.035
+
+  const sceneRadius =
+    20 -
+    intro * 20 +
+    outro * 20
 
   return (
     <section
       ref={root}
       className={cn(
-        "relative min-h-[7200px] overflow-visible bg-transparent font-sans",
+        "relative min-h-[7600px] overflow-visible bg-transparent font-sans",
         className
       )}
     >
@@ -896,15 +1278,15 @@ export function CinematicHero({
         <div
           className="scene-card relative flex min-h-screen w-full items-center justify-center overflow-hidden text-white"
           style={{
-            transform: `scale(${scale})`,
-            borderRadius: `${radius}px`,
+            transform: `scale(${sceneScale})`,
+            borderRadius: `${sceneRadius}px`,
             transformOrigin:
               "center center",
           }}
         >
           <SafeMeshGradient />
 
-          <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(circle_at_60%_45%,rgba(255,255,255,.08),transparent_45%)]" />
+          <div className="pointer-events-none absolute inset-0 z-10 bg-[radial-gradient(circle_at_58%_45%,rgba(255,255,255,.075),transparent_48%)]" />
 
           <div className="relative z-20 flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 py-12 lg:flex-row lg:gap-14 lg:px-10">
             <div className="w-full max-w-[350px] shrink-0">
@@ -921,27 +1303,56 @@ export function CinematicHero({
               </h2>
 
               <p className="mt-5 max-w-[320px] text-sm leading-relaxed text-blue-50/80">
-                Watch an autonomous
-                investigation inspect,
-                execute, browse, and
-                verify the work.
+                Wizard works inside
+                the workflow you
+                already use.
               </p>
 
-              <StageLabel
-                progress={progress}
-              />
+              <div className="mt-7 flex items-center gap-2 font-mono text-[7px] uppercase tracking-[.18em] text-blue-100/55">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-300 shadow-[0_0_9px_rgba(110,231,183,.75)]" />
+
+                {phase ===
+                  "workspace" &&
+                  "developer workspace"}
+
+                {phase ===
+                  "inspect" &&
+                  "repository inspection"}
+
+                {phase ===
+                  "plan" &&
+                  "investigation planning"}
+
+                {phase ===
+                  "execute" &&
+                  "runtime execution"}
+
+                {phase ===
+                  "observe" &&
+                  "evidence collection"}
+
+                {phase ===
+                  "reason" &&
+                  "evidence reasoning"}
+
+                {phase ===
+                  "verify" &&
+                  "verification"}
+
+                {phase ===
+                  "converge" &&
+                  "investigation available"}
+              </div>
             </div>
 
             <div className="relative w-full max-w-[1180px] lg:ml-4">
               <div className="relative aspect-[650/400] w-full">
                 <MacbookPro
                   className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
-                  aria-label="Wizard autonomous repository investigation"
+                  aria-label="Wizard integrated developer workspace"
                   role="img"
                 >
                   <div className="screen relative h-full w-full overflow-hidden bg-[#07101f] font-mono">
-                    {/* Permanent MacBook workspace header */}
-
                     <div className="absolute left-0 right-0 top-0 z-[300] flex h-7 items-center border-b border-white/10 bg-[#0b1424] px-3">
                       <span className="text-[7px] font-medium tracking-[.16em] text-white/85 sm:text-[9px]">
                         WIZARD
@@ -952,61 +1363,86 @@ export function CinematicHero({
                       </span>
 
                       <span className="text-[6px] text-slate-500 sm:text-[8px]">
-                        autonomous investigation
+                        autonomous repository
+                        verification
                       </span>
 
                       <div className="ml-auto flex items-center gap-1.5">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(74,222,128,.7)]" />
 
                         <span className="text-[5px] uppercase tracking-[.12em] text-emerald-300/75 sm:text-[7px]">
-                          {progress >
-                          0.94
-                            ? "converged"
+                          {phase ===
+                          "converge"
+                            ? "available"
                             : "investigating"}
                         </span>
                       </div>
                     </div>
 
-                    {/* Workspace starts below permanent header */}
-
                     <div className="absolute inset-x-0 bottom-0 top-7 overflow-hidden">
-                      <WorkspaceWindow
+                      <VSCodeSurface
                         progress={
                           progress
                         }
-
-                      />
-
-                      <TerminalWindow
-                        progress={
-                          progress
+                        focus={
+                          focusMap.vscode
                         }
                       />
 
-                      <RepositoryWindow
+                      <TerminalSurface
                         progress={
                           progress
                         }
-                      />
-
-                      <KnowledgeWindow
-                        progress={
-                          progress
+                        focus={
+                          focusMap.terminal
                         }
                       />
 
-                      <BrowserWindow
+                      <RepositorySurface
                         progress={
                           progress
                         }
+                        focus={
+                          focusMap.vscode
+                        }
                       />
 
-                      <ReportWindow
+                      <WizardSurface
                         progress={
                           progress
+                        }
+                        focus={
+                          focusMap.wizard
+                        }
+                      />
+
+                      <BrowserSurface
+                        progress={
+                          progress
+                        }
+                        focus={
+                          focusMap.browser
+                        }
+                      />
+
+                      <ReportSurface
+                        progress={
+                          progress
+                        }
+                        focus={
+                          focusMap.report
                         }
                       />
                     </div>
+
+                    <WorkspaceTabs
+                      activeTab={
+                        activeTab
+                      }
+                      progress={
+                        progress
+                      }
+                    />
                   </div>
                 </MacbookPro>
               </div>

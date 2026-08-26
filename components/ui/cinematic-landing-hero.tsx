@@ -80,12 +80,20 @@ const repositoryFiles = [
 ]
 
 function clamp(value: number) {
-  return Math.min(1, Math.max(0, value))
+  return Math.min(
+    1,
+    Math.max(0, value)
+  )
 }
 
 function ease(value: number) {
   const x = clamp(value)
-  return x * x * (3 - 2 * x)
+
+  return (
+    x *
+    x *
+    (3 - 2 * x)
+  )
 }
 
 function phase(
@@ -93,20 +101,25 @@ function phase(
   start: number,
   end: number
 ) {
-  if (value <= start) return 0
-  if (value >= end) return 1
+  if (value <= start) {
+    return 0
+  }
+
+  if (value >= end) {
+    return 1
+  }
 
   return ease(
     (value - start) /
-      Math.max(0.0001, end - start)
+      Math.max(
+        0.0001,
+        end - start
+      )
   )
 }
 
 /* =========================================================
    OCEANIC BACKGROUND
-
-   This is the only outer scene layer that moves.
-   The MacBook and text are outside this transform.
 ========================================================= */
 
 export function SafeMeshGradient({
@@ -125,7 +138,8 @@ export function SafeMeshGradient({
       <div
         className="absolute inset-0"
         style={{
-          backgroundColor: "#123A6B",
+          backgroundColor:
+            "#123A6B",
           backgroundImage:
             "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.215'/></svg>\"), radial-gradient(150% 48.4% at 41.58% 6%, rgba(234,247,251,.92) 0%, rgba(234,247,251,0) 53%), radial-gradient(150% 48.4% at 42.42% 33%, rgba(127,198,230,.92) 0%, rgba(127,198,230,0) 53%), radial-gradient(150% 48.4% at 51.19% 67%, rgba(46,124,192,.92) 0%, rgba(46,124,192,0) 53%), radial-gradient(150% 48.4% at 53.67% 94%, rgba(18,58,107,.92) 0%, rgba(18,58,107,0) 53%)",
           backgroundSize:
@@ -143,7 +157,7 @@ export function SafeMeshGradient({
           mixBlendMode: "overlay",
         }}
       >
-        <filter id="wizard-oceanic-grain-final">
+        <filter id="wizard-ocean-grain">
           <feTurbulence
             type="fractalNoise"
             baseFrequency="0.8"
@@ -160,7 +174,7 @@ export function SafeMeshGradient({
         <rect
           width="100%"
           height="100%"
-          filter="url(#wizard-oceanic-grain-final)"
+          filter="url(#wizard-ocean-grain)"
         />
       </svg>
     </div>
@@ -204,16 +218,18 @@ function WindowBar({
 ========================================================= */
 
 function FinderSurface() {
-  const [active, setActive] = useState(0)
+  const [active, setActive] =
+    useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setActive(
-        value =>
-          (value + 1) %
-          repositoryFiles.length
-      )
-    }, 1900)
+    const timer =
+      window.setInterval(() => {
+        setActive(
+          value =>
+            (value + 1) %
+            repositoryFiles.length
+        )
+      }, 1900)
 
     return () =>
       window.clearInterval(timer)
@@ -285,25 +301,28 @@ function FinderSurface() {
 ========================================================= */
 
 function VSCodeSurface() {
-  const [line, setLine] = useState(0)
+  const [line, setLine] =
+    useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setLine(
-        value =>
-          (value + 1) %
-          (code.length + 1)
-      )
-    }, 1450)
+    const timer =
+      window.setInterval(() => {
+        setLine(
+          value =>
+            (value + 1) %
+            (code.length + 1)
+        )
+      }, 1450)
 
     return () =>
       window.clearInterval(timer)
   }, [])
 
-  const visible = code.slice(
-    0,
-    Math.max(1, line)
-  )
+  const visible =
+    code.slice(
+      0,
+      Math.max(1, line)
+    )
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -343,11 +362,14 @@ function VSCodeSurface() {
           <code>
             {visible.map(
               (text, index) => (
-                <React.Fragment key={index}>
+                <React.Fragment
+                  key={index}
+                >
                   <span
                     className={cn(
                       index ===
-                        visible.length - 1 &&
+                        visible.length -
+                          1 &&
                         "rounded bg-blue-500/10 text-white"
                     )}
                   >
@@ -374,16 +396,18 @@ function VSCodeSurface() {
 ========================================================= */
 
 function TerminalSurface() {
-  const [count, setCount] = useState(0)
+  const [count, setCount] =
+    useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCount(
-        value =>
-          (value + 1) %
-          (commands.length + 1)
-      )
-    }, 1850)
+    const timer =
+      window.setInterval(() => {
+        setCount(
+          value =>
+            (value + 1) %
+            (commands.length + 1)
+        )
+      }, 1850)
 
     return () =>
       window.clearInterval(timer)
@@ -400,43 +424,48 @@ function TerminalSurface() {
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(37,99,235,.11),transparent_45%)]" />
 
         <div className="relative">
-          {commands.slice(0, count).map(
-            (command, index) => (
-              <div
-                key={command}
-                className="mb-5 sm:mb-6"
-              >
-                <div>
-                  <span className="text-cyan-400">
-                    wizard@repo
-                  </span>
+          {commands
+            .slice(0, count)
+            .map(
+              (
+                command,
+                index
+              ) => (
+                <div
+                  key={command}
+                  className="mb-5 sm:mb-6"
+                >
+                  <div>
+                    <span className="text-cyan-400">
+                      wizard@repo
+                    </span>
 
-                  <span className="text-slate-500">
-                    {" "}
-                    ~/wizard repo $
-                  </span>
+                    <span className="text-slate-500">
+                      {" "}
+                      ~/wizard-repo $
+                    </span>
 
-                  <span className="ml-2 text-white">
-                    {command}
-                  </span>
+                    <span className="ml-2 text-white">
+                      {command}
+                    </span>
+                  </div>
+
+                  <div className="mt-1 text-emerald-400/75">
+                    {index === 0 &&
+                      "investigation request created"}
+
+                    {index === 1 &&
+                      "repository manifest generated"}
+
+                    {index === 2 &&
+                      "dependencies installed"}
+
+                    {index === 3 &&
+                      "runtime listening on port 3000"}
+                  </div>
                 </div>
-
-                <div className="mt-1 text-emerald-400/75">
-                  {index === 0 &&
-                    "investigation request created"}
-
-                  {index === 1 &&
-                    "repository manifest generated"}
-
-                  {index === 2 &&
-                    "dependencies installed"}
-
-                  {index === 3 &&
-                    "runtime listening on port 3000"}
-                </div>
-              </div>
-            )
-          )}
+              )
+            )}
 
           <div>
             <span className="text-cyan-400">
@@ -445,7 +474,7 @@ function TerminalSurface() {
 
             <span className="text-slate-500">
               {" "}
-              ~/wizard repo $
+              ~/wizard-repo $
             </span>
 
             <span className="ml-2 inline-block h-3 w-[2px] animate-pulse bg-white align-middle" />
@@ -610,6 +639,10 @@ function ReportSurface() {
   )
 }
 
+/* =========================================================
+   SURFACE ROUTER
+========================================================= */
+
 function Surface({
   app,
 }: {
@@ -676,7 +709,7 @@ const dockApps = [
 ]
 
 /* =========================================================
-   CINEMATIC HERO
+   HERO
 ========================================================= */
 
 export function CinematicHero({
@@ -711,18 +744,11 @@ export function CinematicHero({
             window.innerHeight
         )
 
-      const next =
-        clamp(
-          -rect.top / distance
-        )
-
       setProgress(
-        current =>
-          Math.abs(
-            current - next
-          ) > 0.0004
-            ? next
-            : current
+        clamp(
+          -rect.top /
+            distance
+        )
       )
     }
 
@@ -769,9 +795,9 @@ export function CinematicHero({
   }, [])
 
   /*
-   * ---------------------------------------------------------
+   * ========================================================
    * STORY STAGE
-   * ---------------------------------------------------------
+   * ========================================================
    */
 
   const raw =
@@ -785,7 +811,8 @@ export function CinematicHero({
     )
 
   const local =
-    raw - Math.floor(raw)
+    raw -
+    Math.floor(raw)
 
   const current =
     applications[stage]
@@ -797,59 +824,63 @@ export function CinematicHero({
       : null
 
   /*
-   * ---------------------------------------------------------
-   * ONLY OCEANIC BACKGROUND MOVES HERE
-   * ---------------------------------------------------------
+   * ========================================================
+   * OCEANIC BACKGROUND CARD
+   *
+   * This is intentionally NOT a scale transform on the
+   * MacBook or the text.
+   *
+   * The actual card dimensions change.
+   *
+   * START
+   * 78vw x 76vh
+   *
+   * MIDDLE
+   * 100vw x 100vh
+   *
+   * END
+   * 78vw x 76vh
+   * ========================================================
    */
 
-  const oceanEntry =
-    phase(progress, 0, 0.14)
+  const backgroundEntry =
+    phase(
+      progress,
+      0,
+      0.16
+    )
 
-  const oceanExit =
-    phase(progress, 0.9, 1)
+  const backgroundExit =
+    phase(
+      progress,
+      0.88,
+      1
+    )
 
-  const oceanScale =
-    0.74 +
-    oceanEntry * 0.26 -
-    oceanExit * 0.2
+  const backgroundWidth =
+    78 +
+    backgroundEntry * 22 -
+    backgroundExit * 22
 
-  const oceanRadius =
+  const backgroundHeight =
+    76 +
+    backgroundEntry * 24 -
+    backgroundExit * 24
+
+  const backgroundRadius =
     38 -
-    oceanEntry * 38 +
-    oceanExit * 38
+    backgroundEntry * 38 +
+    backgroundExit * 38
+
+  const backgroundShadow =
+    0.28 +
+    backgroundEntry * 0.2 -
+    backgroundExit * 0.05
 
   /*
-   * ---------------------------------------------------------
+   * ========================================================
    * APPLICATION HANDOFF
-   * ---------------------------------------------------------
-   *
-   * Stable application:
-   *
-   * 0.00 to 0.72
-   *
-   * Minimize:
-   *
-   * 0.72 to 0.80
-   *
-   * Desktop:
-   *
-   * 0.78 to 0.85
-   *
-   * Dock:
-   *
-   * 0.83 to 0.89
-   *
-   * Cursor:
-   *
-   * 0.88 to 0.94
-   *
-   * Click:
-   *
-   * 0.93 to 0.96
-   *
-   * New application:
-   *
-   * 0.96 to 1.00
+   * ========================================================
    */
 
   const minimize =
@@ -859,21 +890,21 @@ export function CinematicHero({
       0.8
     )
 
-  const desktop =
+  const desktopReveal =
     phase(
       local,
-      0.78,
+      0.77,
       0.85
     )
 
-  const dock =
+  const dockReveal =
     phase(
       local,
       0.83,
       0.89
     )
 
-  const pointer =
+  const cursorTravel =
     phase(
       local,
       0.88,
@@ -887,7 +918,7 @@ export function CinematicHero({
       0.96
     )
 
-  const open =
+  const opening =
     phase(
       local,
       0.96,
@@ -895,7 +926,9 @@ export function CinematicHero({
     )
 
   /*
-   * Only the CURRENT application can shrink.
+   * CURRENT APP
+   *
+   * Only the outgoing app is allowed to minimize.
    */
 
   const outgoingScale =
@@ -911,38 +944,42 @@ export function CinematicHero({
   const outgoingRotation =
     -minimize * 1.2
 
+  const outgoingOpacity =
+    1 -
+    desktopReveal * 0.48
+
   /*
-   * NEXT application never scales.
-   * It is already the size of the entire display.
-   * It simply enters from below.
+   * NEXT APP
+   *
+   * It is full screen from the beginning.
+   * It only translates vertically.
    */
 
   const incomingY =
     100 -
-    open * 100
+    opening * 100
 
   /*
-   * Desktop only becomes visible while the
-   * current application has moved away.
+   * DESKTOP
    */
 
   const desktopOpacity =
     next
-      ? desktop
+      ? desktopReveal
       : 0
 
   /*
-   * Dock only exists during the handoff.
+   * DOCK
    */
 
   const dockVisible =
     next
-      ? dock *
-        (1 - open)
+      ? dockReveal *
+        (1 - opening)
       : 0
 
   /*
-   * Cursor target.
+   * CURSOR TARGET
    */
 
   const nextIndex =
@@ -961,11 +998,12 @@ export function CinematicHero({
     (25 +
       iconFraction * 50 -
       40) *
-      pointer
+      cursorTravel
 
   const cursorY =
     56 +
-    31 * pointer
+    31 *
+      cursorTravel
 
   return (
     <section
@@ -976,113 +1014,161 @@ export function CinematicHero({
       )}
     >
       <div className="sticky top-0 flex min-h-screen w-full items-center justify-center overflow-hidden">
-        <div className="relative min-h-screen w-full">
 
-          {/* ===================================================
-              OCEANIC BACKGROUND
-              ONLY THIS TRANSFORMS
-             =================================================== */}
+        {/* ======================================================
+            OCEANIC CARD
 
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute z-0 overflow-hidden"
-            style={{
-              inset: "-28%",
-              borderRadius:
-                `${oceanRadius}px`,
-              transform:
-                `scale(${oceanScale})`,
-              transformOrigin:
-                "center center",
-              willChange:
-                "transform, border-radius",
-            }}
-          >
-            <SafeMeshGradient />
+            THIS IS THE ONLY LARGE OUTER THING THAT CHANGES
+            SIZE DURING THE CINEMATIC INTRO AND EXIT.
+           ====================================================== */}
+
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute z-0 overflow-hidden"
+          style={{
+            width:
+              `${backgroundWidth}vw`,
+            height:
+              `${backgroundHeight}vh`,
+            left:
+              `${(100 - backgroundWidth) / 2}vw`,
+            top:
+              `${(100 - backgroundHeight) / 2}vh`,
+            borderRadius:
+              `${backgroundRadius}px`,
+            boxShadow:
+              `0 30px 80px rgba(2,36,116,${backgroundShadow})`,
+            transition:
+              "none",
+            willChange:
+              "width, height, left, top, border-radius",
+          }}
+        >
+          <SafeMeshGradient />
+        </div>
+
+        {/* ======================================================
+            STATIC CONTENT
+           ====================================================== */}
+
+        <div className="relative z-20 flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 py-12 lg:flex-row lg:gap-14 lg:px-10">
+
+          {/* ====================================================
+              STATIC TEXT
+
+              NO TRANSFORM
+              NO SCALE
+              NO TRANSLATE
+              NO FADE
+             ==================================================== */}
+
+          <div className="w-full max-w-[340px] shrink-0">
+            <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
+              Wizard investigation
+            </p>
+
+            <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
+              AI writes the code.
+              <br />
+              Wizard checks the
+              reality.
+            </h2>
+
+            <p className="mt-5 max-w-[310px] text-sm leading-relaxed text-blue-50/80">
+              Wizard works inside
+              the workflow you already
+              use.
+            </p>
+
+            <p className="mt-8 font-mono text-[7px] uppercase tracking-[.24em] text-blue-100/35">
+              {applicationNames[current]}
+            </p>
           </div>
 
-          <div className="pointer-events-none absolute inset-0 z-[1] bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
+          {/* ====================================================
+              STATIC MACBOOK
 
-          {/* ===================================================
-              STATIC FOREGROUND
-             =================================================== */}
+              NO TRANSFORM
+              NO SCALE
+              NO TRANSLATE
+              NO OPACITY CHOREOGRAPHY
+             ==================================================== */}
 
-          <div className="absolute inset-0 z-20 flex items-center justify-center">
-            <div className="flex w-full max-w-[1540px] flex-col items-center gap-8 px-4 lg:flex-row lg:gap-14 lg:px-10">
+          <div className="relative w-full max-w-[1180px] lg:ml-4">
+            <div className="relative mx-auto aspect-[650/400] w-full">
 
-              {/* STATIC TEXT */}
+              <MacbookPro
+                className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
+                aria-label="Wizard autonomous investigation"
+                role="img"
+              >
+                <div
+                  className="screen relative h-full w-full overflow-hidden bg-[#111827]"
+                  style={{
+                    isolation:
+                      "isolate",
+                  }}
+                >
 
-              <div className="w-full max-w-[340px] shrink-0">
-                <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
-                  Wizard investigation
-                </p>
+                  {/* =================================================
+                      MACOS DESKTOP
+                     ================================================= */}
 
-                <h2 className="text-balance text-3xl font-semibold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl">
-                  AI writes the code.
-                  <br />
-                  Wizard checks the
-                  reality.
-                </h2>
+                  <div
+                    className="absolute inset-0 z-0"
+                    style={{
+                      opacity:
+                        desktopOpacity,
+                      background:
+                        "radial-gradient(circle at 50% 25%,rgba(104,154,255,.4),transparent 32%),radial-gradient(circle at 20% 72%,rgba(48,94,170,.32),transparent 35%),linear-gradient(145deg,#1b3154 0%,#0d1b32 48%,#050b15 100%)",
+                    }}
+                  />
 
-                <p className="mt-5 max-w-[310px] text-sm leading-relaxed text-blue-50/80">
-                  Wizard works inside
-                  the workflow you already
-                  use.
-                </p>
+                  {/* =================================================
+                      CURRENT APP
 
-                <p className="mt-8 font-mono text-[7px] uppercase tracking-[.24em] text-blue-100/35">
-                  {applicationNames[current]}
-                </p>
-              </div>
+                      Full screen until the deliberate
+                      minimize sequence.
+                     ================================================= */}
 
-              {/* STATIC MACBOOK */}
-
-              <div className="relative w-full max-w-[1180px] lg:ml-4">
-                <div className="relative mx-auto aspect-[650/400] w-full">
-
-                  <MacbookPro
-                    className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl"
-                    aria-label="Wizard autonomous investigation"
-                    role="img"
+                  <div
+                    className="absolute inset-0 z-20 overflow-hidden"
+                    style={{
+                      transform:
+                        `translate3d(${outgoingX}%,${outgoingY}%,0) scale(${outgoingScale}) rotate(${outgoingRotation}deg)`,
+                      opacity:
+                        outgoingOpacity,
+                      transformOrigin:
+                        "center center",
+                      pointerEvents:
+                        "none",
+                      willChange:
+                        "transform, opacity",
+                    }}
                   >
-                    <div
-                      className="screen relative h-full w-full overflow-hidden bg-[#111827]"
-                      style={{
-                        isolation:
-                          "isolate",
-                      }}
-                    >
+                    <Surface
+                      app={current}
+                    />
+                  </div>
 
-                      {/* Desktop */}
+                  {/* =================================================
+                      NEXT APP
 
+                      It never scales.
+
+                      It starts at exactly the size of the
+                      MacBook display and only moves upward.
+                     ================================================= */}
+
+                  {next &&
+                    opening > 0 && (
                       <div
-                        className="absolute inset-0 z-0"
-                        style={{
-                          opacity:
-                            desktopOpacity,
-                          background:
-                            "radial-gradient(circle at 50% 25%,rgba(104,154,255,.4),transparent 32%),radial-gradient(circle at 20% 72%,rgba(48,94,170,.32),transparent 35%),linear-gradient(145deg,#1b3154 0%,#0d1b32 48%,#050b15 100%)",
-                        }}
-                      />
-
-                      {/* =================================================
-                          CURRENT APPLICATION
-
-                          Full display until handoff.
-                          This is the only place where an application
-                          is allowed to minimize.
-                         ================================================= */}
-
-                      <div
-                        className="absolute inset-0 z-20 overflow-hidden"
+                        className="absolute inset-0 z-40 overflow-hidden"
                         style={{
                           transform:
-                            `translate3d(${outgoingX}%,${outgoingY}%,0) scale(${outgoingScale}) rotate(${outgoingRotation}deg)`,
-                          transformOrigin:
-                            "center center",
+                            `translate3d(0,${incomingY}%,0)`,
                           opacity:
-                            1 -
-                            desktop * 0.45,
+                            opening,
                           pointerEvents:
                             "none",
                           willChange:
@@ -1090,117 +1176,90 @@ export function CinematicHero({
                         }}
                       >
                         <Surface
-                          app={current}
+                          app={next}
                         />
                       </div>
+                    )}
 
-                      {/* =================================================
-                          NEXT APPLICATION
+                  {/* =================================================
+                      DOCK
+                     ================================================= */}
 
-                          Never scales.
-                          Never shrinks.
-                          Enters at 100 percent display size.
-                         ================================================= */}
+                  <div
+                    className="absolute bottom-[5%] left-1/2 z-[100]"
+                    style={{
+                      opacity:
+                        dockVisible,
+                      transform:
+                        `translate3d(-50%,${(1 - dockVisible) * 18}px,0)`,
+                      pointerEvents:
+                        dockVisible >
+                        0.96
+                          ? "auto"
+                          : "none",
+                    }}
+                  >
+                    <MacOSDock
+                      apps={dockApps}
+                      onAppClick={() => {}}
+                      openApps={
+                        next
+                          ? [next]
+                          : [current]
+                      }
+                      className="scale-[.72] sm:scale-[.78] md:scale-[.84]"
+                    />
+                  </div>
 
-                      {next &&
-                        open > 0 && (
-                          <div
-                            className="absolute inset-0 z-40 overflow-hidden"
-                            style={{
-                              transform:
-                                `translate3d(0,${incomingY}%,0)`,
-                              opacity:
-                                open,
-                              pointerEvents:
-                                "none",
-                            }}
-                          >
-                            <Surface
-                              app={next}
-                            />
-                          </div>
-                        )}
+                  {/* =================================================
+                      WIZARD POINTER
+                     ================================================= */}
 
-                      {/* =================================================
-                          DOCK
-                         ================================================= */}
-
+                  {next &&
+                    cursorTravel >
+                      0 &&
+                    opening === 0 && (
                       <div
-                        className="absolute bottom-[5%] left-1/2 z-[100]"
+                        aria-hidden="true"
+                        className="pointer-events-none absolute z-[150] hidden md:block"
                         style={{
-                          opacity:
-                            dockVisible,
+                          left:
+                            `${cursorX}%`,
+                          top:
+                            `${cursorY}%`,
                           transform:
-                            `translate3d(-50%,${(1 - dockVisible) * 18}px,0) scale(.78)`,
-                          pointerEvents:
-                            dockVisible >
-                            0.96
-                              ? "auto"
-                              : "none",
+                            `translate(-6px,-5px) scale(${
+                              click >
+                              0.2
+                                ? 0.82
+                                : 1
+                            })`,
+                          filter:
+                            "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
                         }}
                       >
-                        <MacOSDock
-                          apps={dockApps}
-                          onAppClick={() => {}}
-                          openApps={
-                            next
-                              ? [next]
-                              : [current]
-                          }
-                          className="scale-[.72] sm:scale-[.78] md:scale-[.84]"
-                        />
-                      </div>
+                        <svg
+                          width="18"
+                          height="22"
+                          viewBox="0 0 22 25"
+                          fill="none"
+                        >
+                          <path
+                            d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
+                            fill="#111827"
+                            stroke="white"
+                            strokeWidth="1.4"
+                          />
+                        </svg>
 
-                      {/* =================================================
-                          WIZARD POINTER
-                         ================================================= */}
-
-                      {next &&
-                        pointer > 0 &&
-                        open === 0 && (
-                          <div
-                            aria-hidden="true"
-                            className="pointer-events-none absolute z-[150] hidden md:block"
-                            style={{
-                              left:
-                                `${cursorX}%`,
-                              top:
-                                `${cursorY}%`,
-                              transform:
-                                `translate(-6px,-5px) scale(${
-                                  click >
-                                  0.2
-                                    ? 0.82
-                                    : 1
-                                })`,
-                              filter:
-                                "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
-                            }}
-                          >
-                            <svg
-                              width="18"
-                              height="22"
-                              viewBox="0 0 22 25"
-                              fill="none"
-                            >
-                              <path
-                                d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
-                                fill="#111827"
-                                stroke="white"
-                                strokeWidth="1.4"
-                              />
-                            </svg>
-
-                            {click >
-                              0.2 && (
-                              <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
-                            )}
-                          </div>
+                        {click >
+                          0.2 && (
+                          <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
                         )}
-                    </div>
-                  </MacbookPro>
+                      </div>
+                    )}
                 </div>
-              </div>
+              </MacbookPro>
             </div>
           </div>
         </div>

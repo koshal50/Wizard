@@ -251,3 +251,12 @@
 @media (max-width: 640px) { .pipeline-report { margin: .5rem; }.pipeline-graph { min-height: 10.5rem; padding: .55rem; }.pipeline-node { width: 28%; }.pipeline-node strong { font-size: .5rem; }.pipeline-outputs { right: .5rem; font-size: .42rem; }.pipeline-stats { gap: .55rem; padding-inline: .6rem; }.pipeline-stack { display: none !important; } .pipeline-message { font-size: .42rem; } }
 
 
+/* Hide scrollbars while preserving scrolling */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+*::-webkit-scrollbar {
+  display: none;
+}

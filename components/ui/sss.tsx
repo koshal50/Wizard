@@ -8,235 +8,583 @@ import {
 } from "react"
 
 export interface AsciiArtHandle {
-  setProgress: (
-    progress: number
-  ) => void
+  setProgress: (progress: number) => void
 }
 
 interface AsciiArtProps {
   className?: string
 }
 
-export const AsciiArt =
-  forwardRef<
-    AsciiArtHandle,
-    AsciiArtProps
-  >(function AsciiArt(
-    {
-      className,
-    },
-    ref
-  ) {
-    const videoRef =
-      useRef<HTMLVideoElement>(null)
+const FRAME_COUNT = 240
+const FRAME_PATH = "/cinematic/wizard-frames"
 
-    const targetProgress =
-      useRef(0)
+const INITIAL_FRAMES = 12
+const LOAD_BATCH_SIZE = 12
+const MAX_CACHED_FRAMES = 48
 
-    const currentTime =
-      useRef(-1)
+export const AsciiArt = forwardRef<
+  AsciiArtHandle,
+  AsciiArtProps
+>(function AsciiArt({ className }, ref) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
 
-    const frameRef =
-      useRef<number | null>(null)
+  const targetProgressRef = useRef(0)
+  const currentFrameRef = useRef(0)
 
-    const readyRef =
-      useRef(false)
+  const imagesRef = useRef<
+    Map<number, HTMLImageElement>
+  >(new Map())
 
-    const durationRef =
-      useRef(0)
+  const loadingRef = useRef<
+    Set<number>
+  >(new Set())
 
-    useImperativeHandle(
-      ref,
-      () => ({
-        setProgress(
-          value: number
-        ) {
-          targetProgress.current =
-            Math.min(
-              1,
-              Math.max(
-                0,
-                value
-              )
-            )
-        },
-      }),
-      []
+  const loadedRef = useRef<
+    Set<number>
+  >(new Set())
+
+  const frameRequestRef =
+    useRef<number | null>(null)
+
+  const renderRequestRef =
+    useRef<number | null>(null)
+
+  const destroyedRef =
+    useRef(false)
+
+  const lastWidthRef =
+    useRef(0)
+
+  const lastHeightRef =
+    useRef(0)
+
+  const dprRef =
+    useRef(1)
+
+  const lastRenderedFrameRef =
+    useRef(-1)
+
+  const drawFrame = (
+    frameNumber: number
+  ) => {
+    const canvas =
+      canvasRef.current
+
+    if (!canvas) return
+
+    const image =
+      imagesRef.current.get(
+        frameNumber
+      )
+
+    if (!image || !image.complete) {
+      return
+    }
+
+    const context =
+      canvas.getContext("2d", {
+        alpha: false,
+        desynchronized: true,
+      })
+
+    if (!context) return
+
+    const rect =
+      canvas.getBoundingClientRect()
+
+    const width =
+      Math.max(
+        1,
+        Math.round(rect.width)
+      )
+
+    const height =
+      Math.max(
+        1,
+        Math.round(rect.height)
+      )
+
+    const dpr =
+      Math.min(
+        window.devicePixelRatio || 1,
+        2
+      )
+
+    if (
+      lastWidthRef.current !==
+        width ||
+      lastHeightRef.current !==
+        height ||
+      dprRef.current !== dpr
+    ) {
+      canvas.width =
+        Math.round(width * dpr)
+
+      canvas.height =
+        Math.round(height * dpr)
+
+      lastWidthRef.current =
+        width
+
+      lastHeightRef.current =
+        height
+
+      dprRef.current = dpr
+
+      context.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+      )
+    }
+
+    context.clearRect(
+      0,
+      0,
+      width,
+      height
     )
 
-    useEffect(() => {
-      const video =
-        videoRef.current
+    const imageWidth =
+      image.naturalWidth
 
-      if (!video) {
+    const imageHeight =
+      image.naturalHeight
+
+    if (
+      !imageWidth ||
+      !imageHeight
+    ) {
+      return
+    }
+
+    /*
+     * Equivalent to object-fit: cover.
+     *
+     * The image itself scales.
+     * Nothing outside the cinematic
+     * background is transformed here.
+     */
+    const scale =
+      Math.max(
+        width / imageWidth,
+        height / imageHeight
+      )
+
+    const drawWidth =
+      imageWidth * scale
+
+    const drawHeight =
+      imageHeight * scale
+
+    const x =
+      (width - drawWidth) / 2
+
+    const y =
+      (height - drawHeight) / 2
+
+    context.drawImage(
+      image,
+      x,
+      y,
+      drawWidth,
+      drawHeight
+    )
+
+    lastRenderedFrameRef.current =
+      frameNumber
+  }
+
+  const loadFrame = (
+    frameNumber: number
+  ) => {
+    if (
+      frameNumber < 0 ||
+      frameNumber >= FRAME_COUNT
+    ) {
+      return
+    }
+
+    if (
+      loadedRef.current.has(
+        frameNumber
+      )
+    ) {
+      return
+    }
+
+    if (
+      loadingRef.current.has(
+        frameNumber
+      )
+    ) {
+      return
+    }
+
+    loadingRef.current.add(
+      frameNumber
+    )
+
+    const image =
+      new Image()
+
+    image.decoding = "async"
+
+    image.onload = () => {
+      if (
+        destroyedRef.current
+      ) {
         return
       }
 
-      video.pause()
-
-      const handleMetadata =
-        () => {
-          if (
-            !Number.isFinite(
-              video.duration
-            ) ||
-            video.duration <= 0
-          ) {
-            return
-          }
-
-          durationRef.current =
-            video.duration
-
-          readyRef.current =
-            true
-
-          video.currentTime =
-            0
-
-          currentTime.current =
-            0
-        }
-
-      const handleCanPlay =
-        () => {
-          if (
-            Number.isFinite(
-              video.duration
-            ) &&
-            video.duration > 0
-          ) {
-            durationRef.current =
-              video.duration
-
-            readyRef.current =
-              true
-          }
-        }
-
-      video.addEventListener(
-        "loadedmetadata",
-        handleMetadata
+      imagesRef.current.set(
+        frameNumber,
+        image
       )
 
-      video.addEventListener(
-        "canplay",
-        handleCanPlay
+      loadedRef.current.add(
+        frameNumber
       )
+
+      loadingRef.current.delete(
+        frameNumber
+      )
+
+      /*
+       * If this is currently requested,
+       * render it immediately.
+       */
+      const targetFrame =
+        Math.round(
+          targetProgressRef.current *
+            (FRAME_COUNT - 1)
+        )
 
       if (
-        video.readyState >= 1
+        targetFrame ===
+        frameNumber
       ) {
-        handleMetadata()
+        drawFrame(frameNumber)
       }
+    }
 
-      video.load()
+    image.onerror = () => {
+      loadingRef.current.delete(
+        frameNumber
+      )
+    }
 
-      return () => {
-        video.removeEventListener(
-          "loadedmetadata",
-          handleMetadata
+    image.src =
+      `${FRAME_PATH}/frame_${String(
+        frameNumber + 1
+      ).padStart(4, "0")}.webp`
+  }
+
+  const maintainCache = (
+    centerFrame: number
+  ) => {
+    if (
+      imagesRef.current.size <=
+      MAX_CACHED_FRAMES
+    ) {
+      return
+    }
+
+    const entries =
+      Array.from(
+        imagesRef.current.keys()
+      )
+
+    entries.sort(
+      (a, b) =>
+        Math.abs(
+          a - centerFrame
+        ) -
+        Math.abs(
+          b - centerFrame
+        )
+    )
+
+    const keep =
+      new Set(
+        entries.slice(
+          0,
+          MAX_CACHED_FRAMES
+        )
+      )
+
+    for (
+      const frame of entries
+    ) {
+      if (!keep.has(frame)) {
+        imagesRef.current.delete(
+          frame
         )
 
-        video.removeEventListener(
-          "canplay",
-          handleCanPlay
+        loadedRef.current.delete(
+          frame
         )
       }
-    }, [])
+    }
+  }
 
-    useEffect(() => {
-      const update =
-        () => {
-          const video =
-            videoRef.current
+  const preloadAround =
+    (centerFrame: number) => {
+      /*
+       * Load slightly ahead and behind.
+       *
+       * This means fast scrolling does
+       * not immediately hit an unloaded
+       * frame.
+       */
+      const radius =
+        LOAD_BATCH_SIZE
 
-          if (
-            video &&
-            readyRef.current &&
-            durationRef.current > 0
-          ) {
-            const target =
-              targetProgress.current
+      for (
+        let offset = -radius;
+        offset <= radius;
+        offset++
+      ) {
+        const frame =
+          centerFrame + offset
 
-            const nextTime =
-              target *
-              durationRef.current
+        loadFrame(frame)
+      }
 
-            /*
-             * Roughly one frame at
-             * 30fps.
-             *
-             * This prevents tiny scroll
-             * movements from triggering
-             * unnecessary seeks.
-             */
-            const threshold =
-              1 / 30
+      maintainCache(
+        centerFrame
+      )
+    }
 
-            if (
-              Math.abs(
-                nextTime -
-                  currentTime.current
-              ) >=
-              threshold
-            ) {
-              video.currentTime =
-                nextTime
-
-              currentTime.current =
-                nextTime
-            }
-          }
-
-          frameRef.current =
-            window.requestAnimationFrame(
-              update
+  useImperativeHandle(
+    ref,
+    () => ({
+      setProgress(progress) {
+        const value =
+          Math.min(
+            1,
+            Math.max(
+              0,
+              progress
             )
-        }
-
-      frameRef.current =
-        window.requestAnimationFrame(
-          update
-        )
-
-      return () => {
-        if (
-          frameRef.current !==
-          null
-        ) {
-          window.cancelAnimationFrame(
-            frameRef.current
           )
 
-          frameRef.current =
-            null
-        }
-      }
-    }, [])
+        targetProgressRef.current =
+          value
 
-    return (
-      <video
-        ref={videoRef}
-        className={className}
-        src="/cinematic/wizard-world-scrub.mp4"
-        muted
-        playsInline
-        preload="auto"
-        controls={false}
-        disablePictureInPicture
-        aria-label="Wizard cinematic world"
-        style={{
-          display: "block",
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          pointerEvents: "none",
-          transform:
-            "translateZ(0)",
-          backfaceVisibility:
-            "hidden",
-        }}
-      />
-    )
-  })
+        if (
+          frameRequestRef.current ===
+          null
+        ) {
+          frameRequestRef.current =
+            window.requestAnimationFrame(
+              () => {
+                frameRequestRef.current =
+                  null
+
+                const frame =
+                  Math.round(
+                    targetProgressRef.current *
+                      (FRAME_COUNT - 1)
+                  )
+
+                if (
+                  frame ===
+                  currentFrameRef.current
+                ) {
+                  return
+                }
+
+                currentFrameRef.current =
+                  frame
+
+                preloadAround(
+                  frame
+                )
+
+                const image =
+                  imagesRef.current.get(
+                    frame
+                  )
+
+                if (image) {
+                  if (
+                    renderRequestRef.current ===
+                    null
+                  ) {
+                    renderRequestRef.current =
+                      window.requestAnimationFrame(
+                        () => {
+                          renderRequestRef.current =
+                            null
+
+                          drawFrame(
+                            frame
+                          )
+                        }
+                      )
+                  }
+                } else {
+                  /*
+                   * If the exact frame is
+                   * not ready, find the closest
+                   * already decoded frame.
+                   */
+                  let closest =
+                    -1
+
+                  let distance =
+                    Infinity
+
+                  for (
+                    const loadedFrame of
+                      loadedRef.current
+                  ) {
+                    const nextDistance =
+                      Math.abs(
+                        loadedFrame -
+                          frame
+                      )
+
+                    if (
+                      nextDistance <
+                      distance
+                    ) {
+                      distance =
+                        nextDistance
+
+                      closest =
+                        loadedFrame
+                    }
+                  }
+
+                  if (
+                    closest >= 0 &&
+                    renderRequestRef.current ===
+                      null
+                  ) {
+                    renderRequestRef.current =
+                      window.requestAnimationFrame(
+                        () => {
+                          renderRequestRef.current =
+                            null
+
+                          drawFrame(
+                            closest
+                          )
+                        }
+                      )
+                  }
+                }
+              }
+            )
+        }
+      },
+    }),
+    []
+  )
+
+  useEffect(() => {
+    destroyedRef.current =
+      false
+
+    /*
+     * Load the first small group.
+     *
+     * We deliberately do not load all
+     * 240 images on mount.
+     */
+    for (
+      let frame = 0;
+      frame < INITIAL_FRAMES;
+      frame++
+    ) {
+      loadFrame(frame)
+    }
+
+    const resizeObserver =
+      new ResizeObserver(() => {
+        lastWidthRef.current = 0
+        lastHeightRef.current = 0
+
+        const frame =
+          currentFrameRef.current
+
+        const image =
+          imagesRef.current.get(
+            frame
+          )
+
+        if (image) {
+          drawFrame(frame)
+        }
+      })
+
+    const canvas =
+      canvasRef.current
+
+    if (canvas) {
+      resizeObserver.observe(
+        canvas
+      )
+    }
+
+    return () => {
+      destroyedRef.current =
+        true
+
+      resizeObserver.disconnect()
+
+      if (
+        frameRequestRef.current !==
+        null
+      ) {
+        cancelAnimationFrame(
+          frameRequestRef.current
+        )
+
+        frameRequestRef.current =
+          null
+      }
+
+      if (
+        renderRequestRef.current !==
+        null
+      ) {
+        cancelAnimationFrame(
+          renderRequestRef.current
+        )
+
+        renderRequestRef.current =
+          null
+      }
+
+      imagesRef.current.clear()
+      loadedRef.current.clear()
+      loadingRef.current.clear()
+    }
+  }, [])
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className={className}
+      aria-label="Wizard cinematic world"
+      style={{
+        display: "block",
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        background:
+          "#07131a",
+        transform:
+          "translateZ(0)",
+        backfaceVisibility:
+          "hidden",
+      }}
+    />
+  )
+})

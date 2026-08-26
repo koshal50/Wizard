@@ -16,3 +16,19 @@ export interface ManifestSummary {
   entryFiles: string[];
   projectType: string;
 }
+
+import type { PlannerContext } from "../core/types.ts";
+
+/**
+ * The two artifacts the ongoing planner consumes: the human/LLM-readable
+ * `plannerContext` (rendered into the prompt) and the structured
+ * `heuristicContext` the offline provider reads to decide deterministically.
+ *
+ * The Runtime's Context Engine now owns building the projection this is derived
+ * from; the Planner only consumes the safe packet (see src/http/server.ts),
+ * which is why this type no longer lives in a Planner-side context builder.
+ */
+export interface BuiltContext {
+  plannerContext: PlannerContext;
+  heuristicContext: Record<string, unknown>;
+}

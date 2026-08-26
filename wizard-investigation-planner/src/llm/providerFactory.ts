@@ -25,6 +25,8 @@ export type ProviderName = "heuristic" | "mock" | "anthropic" | "openai";
 export interface ProviderEnv {
   LLM_PROVIDER?: string;
   LLM_MODEL?: string;
+  /** OpenAI-compatible base URL — point this at a vLLM server for free/offline real models. */
+  LLM_BASE_URL?: string;
   ANTHROPIC_API_KEY?: string;
   OPENAI_API_KEY?: string;
 }
@@ -61,8 +63,8 @@ export function createProviderFromEnv(opts: ProviderFactoryOptions = {}): LLMPro
       log?.warn("llm.provider.fallback", { requested: "openai", reason: "missing OPENAI_API_KEY", using: "heuristic" });
       return new HeuristicLLMProvider();
     }
-    log?.info("llm.provider.selected", { provider: "openai", keyPresent: true });
-    return new OpenAILLMProvider({ apiKey, model: env.LLM_MODEL });
+    log?.info("llm.provider.selected", { provider: "openai", keyPresent: true, baseUrl: env.LLM_BASE_URL ?? "default" });
+    return new OpenAILLMProvider({ apiKey, model: env.LLM_MODEL, baseUrl: env.LLM_BASE_URL });
   }
 
   if (requested === "mock") {

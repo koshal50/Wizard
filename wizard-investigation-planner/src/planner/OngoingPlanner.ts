@@ -7,7 +7,7 @@
  */
 import type { LLMProvider } from "../llm/LLMProvider.ts";
 import type { Logger } from "../util/logger.ts";
-import type { BuiltContext } from "./PlannerContextBuilder.ts";
+import type { BuiltContext } from "./contextTypes.ts";
 import { buildOngoingPlanPrompt } from "./prompts.ts";
 import { plannerNodeBatchSchema } from "./schemas.ts";
 import { validateParsedBatch } from "./PlannerValidator.ts";

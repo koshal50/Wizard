@@ -27,7 +27,12 @@
       "Bash(echo \"TSC_EXIT: $?\")",
       "Bash(npm test *)",
       "Bash(node -e 'const fs=require\\('\\\\''fs'\\\\''\\); const j=JSON.parse\\(fs.readFileSync\\('\\\\''__TRACKED_VAR__/investigation.json'\\\\'','\\\\''utf8'\\\\''\\)\\); console.log\\('\\\\''snapshot OK — claims:'\\\\'', j.claims.length, '\\\\''| goals:'\\\\'', j.statistics.goalsSatisfied+'\\\\''/'\\\\''+j.statistics.goalsTotal, '\\\\''| state:'\\\\'', j.state, '\\\\''| terminationReason:'\\\\'', JSON.stringify\\(j.terminationReason\\)\\);')",
-      "Bash(node -e 'const fs=require\\('\\\\''fs'\\\\''\\); const md=fs.readFileSync\\('\\\\''__TRACKED_VAR__/verification_report.md'\\\\'','\\\\''utf8'\\\\''\\); console.log\\('\\\\''report bytes:'\\\\'', md.length, '\\\\''| leaks SECRET?'\\\\'', md.includes\\('\\\\''SECRET'\\\\''\\)\\); console.log\\(md.split\\('\\\\''\\\\n'\\\\''\\).slice\\(0,6\\).join\\('\\\\''\\\\n'\\\\''\\)\\);')"
+      "Bash(node -e 'const fs=require\\('\\\\''fs'\\\\''\\); const md=fs.readFileSync\\('\\\\''__TRACKED_VAR__/verification_report.md'\\\\'','\\\\''utf8'\\\\''\\); console.log\\('\\\\''report bytes:'\\\\'', md.length, '\\\\''| leaks SECRET?'\\\\'', md.includes\\('\\\\''SECRET'\\\\''\\)\\); console.log\\(md.split\\('\\\\''\\\\n'\\\\''\\).slice\\(0,6\\).join\\('\\\\''\\\\n'\\\\''\\)\\);')",
+      "Bash(xargs grep -lE \"read_file|list_tree\")",
+      "Bash(rm -rf src/runtime src/graphs src/claims src/evidence src/trust src/observations src/report src/nodes src/cli)",
+      "Bash(rm -f src/planner/PlannerContextBuilder.ts)",
+      "Bash(rm -f tests/endToEnd.test.ts tests/evidencePipeline.test.ts tests/report.test.ts tests/resultEvaluator.test.ts tests/trust.test.ts tests/cli.test.ts)",
+      "Bash(rm -f tests/__init__.py)"
     ]
   }
 }

@@ -21,7 +21,7 @@ import type { Logger } from "../util/logger.ts";
 import { TechnologyPlanner } from "./TechnologyPlanner.ts";
 import { OngoingPlanner } from "./OngoingPlanner.ts";
 import { EscalationPlanner } from "./EscalationPlanner.ts";
-import type { BuiltContext } from "./PlannerContextBuilder.ts";
+import type { BuiltContext } from "./contextTypes.ts";
 import type { ValidatedBatch, ValidationOptions } from "./PlannerValidator.ts";
 
 export class InvestigationPlanner {

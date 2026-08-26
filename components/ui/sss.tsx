@@ -1,222 +1,205 @@
 "use client"
 
 import {
+  forwardRef,
   useEffect,
+  useImperativeHandle,
   useRef,
 } from "react"
 
-interface AsciiArtProps {
-  className?: string
-  progress?: number
+export interface AsciiArtHandle {
+  setProgress: (
+    progress: number
+  ) => void
 }
 
-export function AsciiArt({
-  className,
-  progress = 0,
-}: AsciiArtProps) {
-  const videoRef =
-    useRef<HTMLVideoElement>(null)
+interface AsciiArtProps {
+  className?: string
+}
 
-  const targetProgress =
-    useRef(0)
+export const AsciiArt =
+  forwardRef<
+    AsciiArtHandle,
+    AsciiArtProps
+  >(function AsciiArt(
+    {
+      className,
+    },
+    ref
+  ) {
+    const videoRef =
+      useRef<HTMLVideoElement>(null)
 
-  const currentProgress =
-    useRef(0)
+    const targetProgress =
+      useRef(0)
 
-  const animationFrame =
-    useRef<number | null>(null)
+    const currentTime =
+      useRef(-1)
 
-  const metadataReady =
-    useRef(false)
+    const frameRef =
+      useRef<number | null>(null)
 
-  /*
-   * Keep the latest scroll position
-   * available without causing React
-   * renders.
-   */
-  useEffect(() => {
-    targetProgress.current =
-      Math.min(
-        1,
-        Math.max(
-          0,
-          progress
-        )
-      )
-  }, [progress])
+    const readyRef =
+      useRef(false)
 
-  /*
-   * Prepare the video.
-   *
-   * This is intentionally NOT autoplay.
-   * Scroll controls the timeline.
-   */
-  useEffect(() => {
-    const video =
-      videoRef.current
+    /*
+     * The parent communicates with the
+     * video imperatively.
+     *
+     * This does NOT trigger React renders.
+     */
+    useImperativeHandle(
+      ref,
+      () => ({
+        setProgress(
+          value: number
+        ) {
+          targetProgress.current =
+            Math.min(
+              1,
+              Math.max(
+                0,
+                value
+              )
+            )
+        },
+      }),
+      []
+    )
 
-    if (!video) {
-      return
-    }
-
-    const handleMetadata = () => {
-      metadataReady.current =
-        true
-
-      video.currentTime = 0
-    }
-
-    if (
-      video.readyState >= 1
-    ) {
-      metadataReady.current =
-        true
-    } else {
-      video.addEventListener(
-        "loadedmetadata",
-        handleMetadata
-      )
-    }
-
-    return () => {
-      video.removeEventListener(
-        "loadedmetadata",
-        handleMetadata
-      )
-    }
-  }, [])
-
-  /*
-   * Smoothly translate scroll progress
-   * into video time.
-   *
-   * We deliberately interpolate instead
-   * of directly assigning currentTime on
-   * every scroll event.
-   *
-   * This prevents the cinematic background
-   * from looking like it is jumping between
-   * frames.
-   */
-  useEffect(() => {
-    const animate = () => {
+    /*
+     * Prepare the video once.
+     */
+    useEffect(() => {
       const video =
         videoRef.current
 
+      if (!video) {
+        return
+      }
+
+      video.pause()
+      video.currentTime = 0
+
+      const handleMetadata =
+        () => {
+          readyRef.current =
+            true
+
+          currentTime.current =
+            0
+
+          video.currentTime = 0
+        }
+
       if (
-        video &&
-        metadataReady.current &&
-        Number.isFinite(
-          video.duration
-        ) &&
-        video.duration > 0
+        video.readyState >= 1
       ) {
-        const target =
-          targetProgress.current
+        handleMetadata()
+      } else {
+        video.addEventListener(
+          "loadedmetadata",
+          handleMetadata
+        )
+      }
 
-        const current =
-          currentProgress.current
+      return () => {
+        video.removeEventListener(
+          "loadedmetadata",
+          handleMetadata
+        )
+      }
+    }, [])
 
-        const difference =
-          target - current
+    /*
+     * There is exactly ONE animation
+     * loop responsible for scrubbing.
+     *
+     * React never participates in this loop.
+     */
+    useEffect(() => {
+      const update =
+        () => {
+          const video =
+            videoRef.current
 
-        if (
-          Math.abs(difference) >
-          0.00005
-        ) {
-          const next =
-            current +
-            difference *
-              0.12
-
-          currentProgress.current =
-            next
-
-          const safeProgress =
-            Math.min(
-              0.999,
-              Math.max(
-                0,
-                next
-              )
-            )
-
-          const targetTime =
-            safeProgress *
-            video.duration
-
-          /*
-           * Avoid unnecessary seeks.
-           */
           if (
-            Math.abs(
-              video.currentTime -
-                targetTime
-            ) >
-            0.012
+            video &&
+            readyRef.current &&
+            Number.isFinite(
+              video.duration
+            ) &&
+            video.duration > 0
           ) {
-            video.currentTime =
-              targetTime
+            const target =
+              targetProgress.current
+
+            const nextTime =
+              target *
+              video.duration
+
+            /*
+             * Do not seek repeatedly to
+             * effectively identical frames.
+             */
+            if (
+              Math.abs(
+                nextTime -
+                  currentTime.current
+              ) > 0.035
+            ) {
+              video.currentTime =
+                nextTime
+
+              currentTime.current =
+                nextTime
+            }
           }
+
+          frameRef.current =
+            window.requestAnimationFrame(
+              update
+            )
+        }
+
+      frameRef.current =
+        window.requestAnimationFrame(
+          update
+        )
+
+      return () => {
+        if (
+          frameRef.current !==
+          null
+        ) {
+          window.cancelAnimationFrame(
+            frameRef.current
+          )
+
+          frameRef.current =
+            null
         }
       }
+    }, [])
 
-      animationFrame.current =
-        window.requestAnimationFrame(
-          animate
-        )
-    }
-
-    animationFrame.current =
-      window.requestAnimationFrame(
-        animate
-      )
-
-    return () => {
-      if (
-        animationFrame.current !==
-        null
-      ) {
-        window.cancelAnimationFrame(
-          animationFrame.current
-        )
-      }
-    }
-  }, [])
-
-  /*
-   * Keep the video paused forever.
-   *
-   * It is a visual timeline controlled
-   * entirely by the cinematic scroll.
-   */
-  useEffect(() => {
-    const video =
-      videoRef.current
-
-    if (!video) {
-      return
-    }
-
-    video.pause()
-  }, [])
-
-  return (
-    <video
-      ref={videoRef}
-      className={className}
-      src="/cinematic/wizard-world.mp4"
-      muted
-      playsInline
-      preload="auto"
-      controls={false}
-      aria-label="Wizard cinematic world"
-      style={{
-        display: "block",
-        width: "100%",
-        height: "100%",
-        objectFit: "cover",
-      }}
-    />
-  )
-}
+    return (
+      <video
+        ref={videoRef}
+        className={className}
+        src="/cinematic/wizard-world.mp4"
+        muted
+        playsInline
+        preload="auto"
+        controls={false}
+        disablePictureInPicture
+        aria-label="Wizard cinematic world"
+        style={{
+          display: "block",
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+          pointerEvents: "none",
+        }}
+      />
+    )
+  })

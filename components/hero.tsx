@@ -1,66 +1,96 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import { X } from "lucide-react"
-import { motion, AnimatePresence } from "framer-motion"
-import { SafeMeshGradient } from "@/components/ui/cinematic-landing-hero"
-import { AsciiArt } from "@/components/ui/sss"
-import { createClient } from "@supabase/supabase-js"
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react"
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-)
+import {
+  X,
+} from "lucide-react"
+
+import {
+  motion,
+  AnimatePresence,
+} from "framer-motion"
+
+import {
+  SafeMeshGradient,
+} from "@/components/ui/cinematic-landing-hero"
+
+import {
+  AsciiArt,
+  AsciiArtHandle,
+} from "@/components/ui/sss"
+
+import {
+  createClient,
+} from "@supabase/supabase-js"
+
+const supabase =
+  createClient(
+    process.env
+      .NEXT_PUBLIC_SUPABASE_URL!,
+    process.env
+      .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+      process.env
+        .NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  )
 
 export default function Hero() {
+  const asciiRef =
+    useRef<AsciiArtHandle>(null)
+
+  const scrollFrame =
+    useRef<number | null>(null)
+
   const [isExpanded, setIsExpanded] =
     useState(false)
 
   const [isSubmitting, setIsSubmitting] =
     useState(false)
 
-  const [submissionStatus, setSubmissionStatus] =
-    useState<"idle" | "success" | "error">("idle")
+  const [
+    submissionStatus,
+    setSubmissionStatus,
+  ] = useState<
+    "idle" |
+    "success" |
+    "error"
+  >("idle")
 
   /*
-   * Background cinematic progress.
+   * --------------------------------------------------
+   * CINEMATIC BACKGROUND
+   * --------------------------------------------------
    *
-   * The hero background is now controlled
-   * by scroll instead of autoplay.
+   * This is deliberately not React state.
    *
-   * This page is intentionally independent
-   * from the MacBook cinematic section.
+   * Scrolling only talks directly to
+   * AsciiArt through its imperative ref.
    */
-  const [backgroundProgress, setBackgroundProgress] =
-    useState(0)
 
   useEffect(() => {
-    let frame = 0
+    const updateBackground =
+      () => {
+        scrollFrame.current =
+          null
 
-    const updateProgress = () => {
-      if (frame) {
-        return
-      }
-
-      frame = window.requestAnimationFrame(() => {
-        frame = 0
-
-        /*
-         * The hero occupies the first viewport.
-         *
-         * We use a slightly longer scroll window
-         * so the background does not race through
-         * its 10 second cinematic sequence.
-         */
         const scrollY =
           window.scrollY
 
         const viewportHeight =
           window.innerHeight
 
+        /*
+         * Give the background enough
+         * vertical distance to tell its
+         * story slowly.
+         */
         const cinematicDistance =
-          viewportHeight * 1.35
+          viewportHeight *
+          1.75
 
         const progress =
           Math.min(
@@ -72,138 +102,229 @@ export default function Hero() {
             )
           )
 
-        setBackgroundProgress(
+        asciiRef.current?.setProgress(
           progress
         )
-      })
-    }
+      }
+
+    const handleScroll =
+      () => {
+        /*
+         * Never run more than one
+         * scroll calculation per frame.
+         */
+        if (
+          scrollFrame.current !==
+          null
+        ) {
+          return
+        }
+
+        scrollFrame.current =
+          window.requestAnimationFrame(
+            updateBackground
+          )
+      }
 
     window.addEventListener(
       "scroll",
-      updateProgress,
-      { passive: true }
+      handleScroll,
+      {
+        passive: true,
+      }
     )
 
-    updateProgress()
+    /*
+     * Establish initial position.
+     */
+    updateBackground()
 
     return () => {
       window.removeEventListener(
         "scroll",
-        updateProgress
+        handleScroll
       )
 
-      if (frame) {
+      if (
+        scrollFrame.current !==
+        null
+      ) {
         window.cancelAnimationFrame(
-          frame
+          scrollFrame.current
         )
+
+        scrollFrame.current =
+          null
       }
     }
   }, [])
 
-  const handleExpand = () => {
-    setIsExpanded(true)
-  }
+  /*
+   * --------------------------------------------------
+   * CONTACT FORM
+   * --------------------------------------------------
+   */
 
-  const handleClose = () => {
-    setIsExpanded(false)
-    setSubmissionStatus("idle")
-  }
-
-  const handleSubmit = async (
-    event: React.FormEvent<HTMLFormElement>
-  ) => {
-    event.preventDefault()
-
-    setIsSubmitting(true)
-    setSubmissionStatus("idle")
-
-    const form =
-      event.currentTarget
-
-    if (!form.reportValidity()) {
-      setIsSubmitting(false)
-      return
+  const handleExpand =
+    () => {
+      setIsExpanded(true)
     }
 
-    const formData =
-      new FormData(form)
-
-    const { error } =
-      await supabase
-        .from(
-          "wizard_contact_submissions"
-        )
-        .insert({
-          name: String(
-            formData.get("name") ?? ""
-          ).trim(),
-
-          email: String(
-            formData.get("email") ?? ""
-          ).trim(),
-
-          website:
-            String(
-              formData.get("website") ?? ""
-            ).trim() || null,
-
-          role:
-            String(
-              formData.get("role") ?? ""
-            ).trim() || null,
-
-          message:
-            String(
-              formData.get("message") ?? ""
-            ).trim() || null,
-        })
-
-    setIsSubmitting(false)
-
-    if (error) {
-      setSubmissionStatus("error")
-      return
-    }
-
-    form.reset()
-    setSubmissionStatus("success")
-
-    window.setTimeout(() => {
+  const handleClose =
+    () => {
       setIsExpanded(false)
-      setSubmissionStatus("idle")
-    }, 3000)
-  }
+      setSubmissionStatus(
+        "idle"
+      )
+    }
 
+  const handleSubmit =
+    async (
+      event: React.FormEvent<HTMLFormElement>
+    ) => {
+      event.preventDefault()
+
+      setIsSubmitting(true)
+      setSubmissionStatus(
+        "idle"
+      )
+
+      const form =
+        event.currentTarget
+
+      if (
+        !form.reportValidity()
+      ) {
+        setIsSubmitting(false)
+        return
+      }
+
+      const formData =
+        new FormData(form)
+
+      const {
+        error,
+      } =
+        await supabase
+          .from(
+            "wizard_contact_submissions"
+          )
+          .insert({
+            name: String(
+              formData.get(
+                "name"
+              ) ?? ""
+            ).trim(),
+
+            email: String(
+              formData.get(
+                "email"
+              ) ?? ""
+            ).trim(),
+
+            website:
+              String(
+                formData.get(
+                  "website"
+                ) ?? ""
+              ).trim() ||
+              null,
+
+            role:
+              String(
+                formData.get(
+                  "role"
+                ) ?? ""
+              ).trim() ||
+              null,
+
+            message:
+              String(
+                formData.get(
+                  "message"
+                ) ?? ""
+              ).trim() ||
+              null,
+          })
+
+      setIsSubmitting(false)
+
+      if (error) {
+        setSubmissionStatus(
+          "error"
+        )
+
+        return
+      }
+
+      form.reset()
+
+      setSubmissionStatus(
+        "success"
+      )
+
+      window.setTimeout(
+        () => {
+          setIsExpanded(false)
+
+          setSubmissionStatus(
+            "idle"
+          )
+        },
+        3000
+      )
+    }
+
+  /*
+   * Prevent background scrolling while
+   * the contact experience is open.
+   */
   useEffect(() => {
     if (isExpanded) {
       document.body.style.overflow =
         "hidden"
     } else {
       document.body.style.overflow =
-        "unset"
+        ""
     }
 
     return () => {
       document.body.style.overflow =
-        "unset"
+        ""
     }
   }, [isExpanded])
 
   return (
     <>
-      <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 py-12 sm:px-6 sm:py-20">
+      {/* ==================================================
+          HERO
+          ================================================== */}
 
-        {/* 
-         * Cinematic background.
-         *
-         * This is no longer an autoplaying loop.
-         * AsciiArt receives scroll progress and
-         * scrubs through wizard-world.mp4.
-         *
-         * The background itself owns the cinematic
-         * movement. The hero content does not inherit
-         * any transform from it.
-         */}
+      <section
+        className="
+          relative
+          flex
+          min-h-screen
+          flex-col
+          items-center
+          justify-center
+          overflow-hidden
+          px-4
+          py-12
+          sm:px-6
+          sm:py-20
+        "
+      >
+        {/* ==================================================
+            CINEMATIC WORLD
+
+            This layer owns the video.
+
+            It does not transform the text.
+            It does not transform the CTA.
+            It does not participate in their layout.
+            ================================================== */}
+
         <div
           className="
             pointer-events-none
@@ -215,33 +336,27 @@ export default function Hero() {
           "
         >
           <AsciiArt
-            progress={
-              backgroundProgress
-            }
+            ref={asciiRef}
             className="
               h-full
               w-full
             "
           />
 
-          {/* 
-           * Very subtle readability layer.
-           *
-           * This does not animate independently.
-           * It simply keeps the typography readable
-           * over brighter frames of the video.
-           */}
           <div
             className="
               pointer-events-none
               absolute
               inset-0
-              bg-black/[0.04]
+              bg-black/[0.035]
             "
           />
         </div>
 
-        {/* Hero content */}
+        {/* ==================================================
+            HERO CONTENT
+            ================================================== */}
+
         <div
           className="
             relative
@@ -294,27 +409,33 @@ export default function Hero() {
             confidence.
           </p>
 
-          {/* CTA */}
+          {/* ==================================================
+              CTA
+              ================================================== */}
+
           <AnimatePresence
             initial={false}
           >
             {!isExpanded && (
               <motion.div
-                className="relative inline-block"
+                className="
+                  relative
+                  inline-block
+                "
               >
                 <motion.div
+                  layout
+                  layoutId="cta-card"
                   style={{
                     borderRadius:
                       "100px",
                   }}
-                  layout
-                  layoutId="cta-card"
                   className="
                     absolute
                     inset-0
-                    bg-[#123A6B]
                     border
                     border-[#7FC6E6]/25
+                    bg-[#123A6B]
                     shadow-[0_8px_30px_rgba(18,58,107,0.35)]
                     transform-gpu
                     will-change-transform
@@ -330,6 +451,10 @@ export default function Hero() {
                     opacity: 1,
                     scale: 1,
                   }}
+                  exit={{
+                    opacity: 0,
+                    scale: 0.8,
+                  }}
                   transition={{
                     delay: 0.2,
                     duration: 0.45,
@@ -339,10 +464,6 @@ export default function Hero() {
                       0.36,
                       1,
                     ],
-                  }}
-                  exit={{
-                    opacity: 0,
-                    scale: 0.8,
                   }}
                   layout={false}
                   onClick={
@@ -367,20 +488,35 @@ export default function Hero() {
             )}
           </AnimatePresence>
         </div>
-      </div>
+      </section>
 
-      {/* Expanded contact experience */}
+      {/* ==================================================
+          CONTACT MODAL
+          ================================================== */}
+
       <AnimatePresence
         initial={false}
       >
         {isExpanded && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
+          <div
+            className="
+              fixed
+              inset-0
+              z-50
+              flex
+              items-center
+              justify-center
+              p-3
+              sm:p-4
+            "
+          >
             <motion.div
+              layout
               layoutId="cta-card"
               style={{
-                borderRadius: "24px",
+                borderRadius:
+                  "24px",
               }}
-              layout
               className="
                 relative
                 flex
@@ -395,8 +531,19 @@ export default function Hero() {
                 will-change-transform
               "
             >
-              {/* Oceanic background */}
-              <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden">
+              {/* ==================================================
+                  OCEANIC CONTACT BACKGROUND
+                  ================================================== */}
+
+              <div
+                className="
+                  pointer-events-none
+                  absolute
+                  inset-0
+                  z-0
+                  overflow-hidden
+                "
+              >
                 <SafeMeshGradient
                   speed={1}
                   colors={[
@@ -409,15 +556,19 @@ export default function Hero() {
                   swirl={0.1}
                   grainMixer={0}
                   grainOverlay={0}
-                  className="absolute inset-0 h-full w-full"
-                  style={{
-                    height: "100%",
-                    width: "100%",
-                  }}
+                  className="
+                    absolute
+                    inset-0
+                    h-full
+                    w-full
+                  "
                 />
 
                 <div
-                  className="absolute inset-0"
+                  className="
+                    absolute
+                    inset-0
+                  "
                   style={{
                     background:
                       "linear-gradient(180deg, rgba(18,58,107,0.08) 0%, rgba(18,58,107,0.32) 100%)",
@@ -425,8 +576,21 @@ export default function Hero() {
                 />
               </div>
 
-              {/* Content */}
-              <div className="relative z-10 h-full w-full overflow-y-auto overscroll-contain scrollbar-hide">
+              {/* ==================================================
+                  MODAL CONTENT
+                  ================================================== */}
+
+              <div
+                className="
+                  relative
+                  z-10
+                  h-full
+                  w-full
+                  overflow-y-auto
+                  overscroll-contain
+                  scrollbar-hide
+                "
+              >
                 <motion.div
                   initial={{
                     opacity: 0,
@@ -464,13 +628,43 @@ export default function Hero() {
                     lg:p-16
                   "
                 >
-                  {/* Left side */}
-                  <div className="flex w-full flex-1 flex-col justify-center space-y-3">
-                    <h2 className="text-3xl font-medium leading-none tracking-[-0.03em] text-[#EAF7FB] sm:text-4xl lg:text-5xl">
+                  {/* ==================================================
+                      LEFT
+                      ================================================== */}
+
+                  <div
+                    className="
+                      flex
+                      w-full
+                      flex-1
+                      flex-col
+                      justify-center
+                      space-y-3
+                    "
+                  >
+                    <h2
+                      className="
+                        text-3xl
+                        font-medium
+                        leading-none
+                        tracking-[-0.03em]
+                        text-[#EAF7FB]
+                        sm:text-4xl
+                        lg:text-5xl
+                      "
+                    >
                       Talk to the Wizard team
                     </h2>
 
-                    <p className="pt-4 text-base leading-[150%] text-[#EAF7FB]/90 sm:text-lg">
+                    <p
+                      className="
+                        pt-4
+                        text-base
+                        leading-[150%]
+                        text-[#EAF7FB]/90
+                        sm:text-lg
+                      "
+                    >
                       Whether you're a
                       developer building
                       with AI or a business
@@ -480,7 +674,14 @@ export default function Hero() {
                       to hear from you.
                     </p>
 
-                    <p className="text-base leading-[150%] text-[#EAF7FB]/90 sm:text-lg">
+                    <p
+                      className="
+                        text-base
+                        leading-[150%]
+                        text-[#EAF7FB]/90
+                        sm:text-lg
+                      "
+                    >
                       See how Wizard can
                       help you understand,
                       verify, and improve
@@ -488,12 +689,38 @@ export default function Hero() {
                       evidence you can trust.
                     </p>
 
-                    <div className="mt-4 border-t border-[#EAF7FB]/20 pt-6 sm:mt-6 sm:pt-8">
-                      <p className="mb-3 font-mono text-[10px] uppercase tracking-[0.5px] text-[#EAF7FB]/65">
+                    <div
+                      className="
+                        mt-4
+                        border-t
+                        border-[#EAF7FB]/20
+                        pt-6
+                        sm:mt-6
+                        sm:pt-8
+                      "
+                    >
+                      <p
+                        className="
+                          mb-3
+                          font-mono
+                          text-[10px]
+                          uppercase
+                          tracking-[0.5px]
+                          text-[#EAF7FB]/65
+                        "
+                      >
                         Built with Wizard
                       </p>
 
-                      <p className="text-lg leading-[150%] text-[#EAF7FB] sm:text-xl lg:text-2xl">
+                      <p
+                        className="
+                          text-lg
+                          leading-[150%]
+                          text-[#EAF7FB]
+                          sm:text-xl
+                          lg:text-2xl
+                        "
+                      >
                         “Wizard gives our
                         team confidence that
                         what AI builds
@@ -502,19 +729,37 @@ export default function Hero() {
                     </div>
                   </div>
 
-                  {/* Form */}
-                  <div className="w-full flex-1">
+                  {/* ==================================================
+                      FORM
+                      ================================================== */}
+
+                  <div
+                    className="
+                      w-full
+                      flex-1
+                    "
+                  >
                     <form
                       onSubmit={
                         handleSubmit
                       }
-                      className="space-y-4 sm:space-y-5"
+                      className="
+                        space-y-4
+                        sm:space-y-5
+                      "
                     >
-                      {/* Name */}
                       <div>
                         <label
                           htmlFor="name"
-                          className="mb-2 block font-mono text-[10px] font-normal uppercase tracking-[0.5px] text-[#EAF7FB]"
+                          className="
+                            mb-2
+                            block
+                            font-mono
+                            text-[10px]
+                            uppercase
+                            tracking-[0.5px]
+                            text-[#EAF7FB]
+                          "
                         >
                           FULL NAME *
                         </label>
@@ -545,11 +790,18 @@ export default function Hero() {
                         />
                       </div>
 
-                      {/* Email */}
                       <div>
                         <label
                           htmlFor="email"
-                          className="mb-2 block font-mono text-[10px] font-normal uppercase tracking-[0.5px] text-[#EAF7FB]"
+                          className="
+                            mb-2
+                            block
+                            font-mono
+                            text-[10px]
+                            uppercase
+                            tracking-[0.5px]
+                            text-[#EAF7FB]
+                          "
                         >
                           WORK EMAIL *
                         </label>
@@ -580,12 +832,26 @@ export default function Hero() {
                         />
                       </div>
 
-                      {/* Website + Role */}
-                      <div className="flex flex-col gap-4 sm:flex-row">
+                      <div
+                        className="
+                          flex
+                          flex-col
+                          gap-4
+                          sm:flex-row
+                        "
+                      >
                         <div className="flex-1">
                           <label
                             htmlFor="website"
-                            className="mb-2 block font-mono text-[10px] font-normal uppercase tracking-[0.5px] text-[#EAF7FB]"
+                            className="
+                              mb-2
+                              block
+                              font-mono
+                              text-[10px]
+                              uppercase
+                              tracking-[0.5px]
+                              text-[#EAF7FB]
+                            "
                           >
                             COMPANY / PROJECT WEBSITE
                           </label>
@@ -615,10 +881,23 @@ export default function Hero() {
                           />
                         </div>
 
-                        <div className="w-full sm:w-40">
+                        <div
+                          className="
+                            w-full
+                            sm:w-40
+                          "
+                        >
                           <label
                             htmlFor="role"
-                            className="mb-2 block font-mono text-[10px] font-normal uppercase tracking-[0.5px] text-[#EAF7FB]"
+                            className="
+                              mb-2
+                              block
+                              font-mono
+                              text-[10px]
+                              uppercase
+                              tracking-[0.5px]
+                              text-[#EAF7FB]
+                            "
                           >
                             YOUR ROLE
                           </label>
@@ -673,11 +952,18 @@ export default function Hero() {
                         </div>
                       </div>
 
-                      {/* Message */}
                       <div>
                         <label
                           htmlFor="message"
-                          className="mb-2 block font-mono text-[10px] font-normal uppercase tracking-[0.5px] text-[#EAF7FB]"
+                          className="
+                            mb-2
+                            block
+                            font-mono
+                            text-[10px]
+                            uppercase
+                            tracking-[0.5px]
+                            text-[#EAF7FB]
+                          "
                         >
                           ANYTHING ELSE?
                         </label>
@@ -707,7 +993,6 @@ export default function Hero() {
                         />
                       </div>
 
-                      {/* Error */}
                       <AnimatePresence
                         mode="wait"
                         initial={false}
@@ -723,7 +1008,10 @@ export default function Hero() {
                             animate={{
                               opacity: 1,
                             }}
-                            className="text-sm text-[#EAF7FB]"
+                            className="
+                              text-sm
+                              text-[#EAF7FB]
+                            "
                           >
                             Something went wrong.
                             Please try again.
@@ -731,7 +1019,6 @@ export default function Hero() {
                         )}
                       </AnimatePresence>
 
-                      {/* Submit */}
                       <motion.button
                         type="submit"
                         disabled={
@@ -772,12 +1059,6 @@ export default function Hero() {
                           transition-colors
                           disabled:cursor-default
                         "
-                        aria-label={
-                          submissionStatus ===
-                          "success"
-                            ? "Form submitted"
-                            : "Submit form"
-                        }
                       >
                         <AnimatePresence
                           mode="wait"
@@ -788,7 +1069,10 @@ export default function Hero() {
                             <motion.svg
                               key="check"
                               viewBox="0 0 28 20"
-                              className="h-6 w-7"
+                              className="
+                                h-6
+                                w-7
+                              "
                               aria-hidden="true"
                             >
                               <motion.path

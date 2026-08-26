@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { Browser } from "@/components/ui/browser"
 import { FileTree, wizardFileStructure } from "@/components/ui/file-tree"
+import { MacbookPro } from "@/components/ui/macbook-pro"
 
 interface GradientProps extends React.HTMLAttributes<HTMLDivElement> {
   speed?: number
@@ -498,52 +499,21 @@ export function CinematicHero({
               </p>
             </div>
 
-            <div className="relative w-full max-w-[1060px] lg:ml-4">
-              <div className="rounded-t-2xl border-8 border-zinc-700 bg-zinc-950 p-2 shadow-2xl sm:rounded-t-3xl sm:border-[14px] sm:p-5">
-                <div className="screen relative aspect-[16/10] overflow-hidden rounded-lg bg-[#07101f] font-mono text-[8px] sm:text-[11px] md:text-xs">
-
-                  <div className="absolute left-0 right-0 top-0 z-30 flex gap-3 overflow-hidden border-b border-white/10 bg-[#0b1424] px-3 py-2 text-[7px] text-slate-400 sm:text-[10px]">
-                    {stages.map(
-                      (stage, i) => (
-                        <span
-                          key={stage}
-                          className={cn(
-                            "whitespace-nowrap",
-                            i === active &&
-                            "text-white"
-                          )}
-                        >
-                          {stage}
-                        </span>
-                      )
-                    )}
+            <div className="relative w-full max-w-[1180px] lg:ml-4">
+              <div className="relative aspect-[650/400] w-full">
+                <MacbookPro className="absolute inset-0 h-full w-full text-[#07101f] drop-shadow-2xl" aria-label="Wizard agent workspace" role="img">
+                  <div className="screen relative h-full w-full overflow-hidden bg-[#07101f] font-mono text-[8px] sm:text-[11px] md:text-xs">
+                    <div className="absolute left-0 right-0 top-0 z-30 flex gap-3 overflow-hidden border-b border-white/10 bg-[#0b1424] px-3 py-2 text-[7px] text-slate-400 sm:text-[10px]">
+                      {stages.map((stage, i) => <span key={stage} className={cn("whitespace-nowrap", i === active && "text-white")}>{stage}</span>)}
+                    </div>
+                    {active === 0 && <Workspace />}
+                    {active === 1 && <Terminal />}
+                    {active === 2 && <Repository />}
+                    {active === 3 && <BrowserPanel />}
+                    {active === 4 && <Report />}
                   </div>
-
-                  {active === 0 && (
-                    <Workspace />
-                  )}
-
-                  {active === 1 && (
-                    <Terminal />
-                  )}
-
-                  {active === 2 && (
-                    <Repository />
-                  )}
-
-                  {active === 3 && (
-                    <BrowserPanel />
-                  )}
-
-                  {active === 4 && (
-                    <Report />
-                  )}
-                </div>
+                </MacbookPro>
               </div>
-
-              <div className="mx-auto h-3 w-[92%] rounded-b-xl bg-zinc-700 sm:h-5 sm:rounded-b-2xl" />
-
-              <div className="mx-auto h-2 w-1/3 rounded-b-full bg-zinc-600 sm:h-3" />
             </div>
           </div>
         </div>

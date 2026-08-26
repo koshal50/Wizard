@@ -1013,7 +1013,7 @@ export function CinematicHero({
              =================================================== */}
 
           <div className="absolute inset-0 flex items-center justify-center">
-            <div className="flex w-full max-w-[1540px] items-center gap-8 px-4 lg:gap-14 lg:px-10">
+            <div className="flex w-full max-w-[1540px] felx-col items-center gap-8 px-4 sm:flex-row lg:gap-14 lg:px-10">
 
               {/* STATIC RELATIVE CONTENT.
                   It moves only because the entire scene moves. */}

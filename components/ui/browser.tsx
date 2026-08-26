@@ -1,10 +1,16 @@
 "use client"
 
-import React, { useEffect, useMemo, useState } from "react"
+import React, {
+  FormEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
+  Check,
   Globe,
   Lock,
   Maximize2,
@@ -87,6 +93,12 @@ function hostname(url: string) {
   }
 }
 
+function createTabId() {
+  return `tab-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`
+}
+
 export function Browser({
   className,
   initialUrl = DEFAULT_URL,
@@ -110,7 +122,7 @@ export function Browser({
   loadingDuration = 900,
 }: BrowserProps) {
   const [tabs, setTabs] = useState<Tab[]>(() => {
-    if (initialTabs && initialTabs.length > 0) {
+    if (initialTabs?.length) {
       return initialTabs.map((tab, index) => ({
         id:
           tab.id ||
@@ -166,6 +178,11 @@ export function Browser({
   const [iframeLoaded, setIframeLoaded] =
     useState(false)
 
+  const [agentActivity, setAgentActivity] =
+    useState<
+      "connecting" | "observing" | "ready"
+    >("connecting")
+
   const isDark =
     theme === "dark" ||
     (theme === "system" &&
@@ -175,9 +192,29 @@ export function Browser({
       ).matches)
 
   useEffect(() => {
-    setInputUrl(activeTab?.url || "")
+    setInputUrl(
+      activeTab?.url || ""
+    )
+
     setIframeLoaded(false)
-  }, [activeTab?.id, activeTab?.url])
+    setAgentActivity("connecting")
+  }, [
+    activeTab?.id,
+    activeTab?.url,
+  ])
+
+  useEffect(() => {
+    if (iframeLoaded) {
+      setAgentActivity("observing")
+
+      const id = window.setTimeout(() => {
+        setAgentActivity("ready")
+      }, 700)
+
+      return () =>
+        window.clearTimeout(id)
+    }
+  }, [iframeLoaded])
 
   const bookmarks = useMemo(
     () => [
@@ -203,6 +240,7 @@ export function Browser({
 
     setInputUrl(url)
     setIframeLoaded(false)
+    setAgentActivity("connecting")
 
     setCanGoBack(true)
     setCanGoForward(false)
@@ -223,7 +261,10 @@ export function Browser({
       )
     )
 
-    onNavigate?.(url, tabId)
+    onNavigate?.(
+      url,
+      tabId
+    )
 
     if (simulateLoading) {
       window.setTimeout(() => {
@@ -242,7 +283,7 @@ export function Browser({
   }
 
   const submitAddress = (
-    event: React.FormEvent
+    event: FormEvent
   ) => {
     event.preventDefault()
     navigate(inputUrl)
@@ -254,7 +295,7 @@ export function Browser({
     }
 
     const newTab: Tab = {
-      id: `tab-${Date.now()}`,
+      id: createTabId(),
       title: "New Tab",
       url: "about:blank",
       isActive: true,
@@ -272,11 +313,14 @@ export function Browser({
 
     setInputUrl("")
     setIframeLoaded(false)
+    setAgentActivity("ready")
 
     onTabCreate?.(newTab)
   }
 
-  const closeTab = (tabId: string) => {
+  const closeTab = (
+    tabId: string
+  ) => {
     if (tabs.length === 1) {
       return
     }
@@ -299,7 +343,9 @@ export function Browser({
       )
 
       remaining.forEach(
-        (tab) => (tab.isActive = false)
+        (tab) => {
+          tab.isActive = false
+        }
       )
 
       remaining[nextIndex].isActive = true
@@ -309,6 +355,7 @@ export function Browser({
       )
 
       setIframeLoaded(false)
+      setAgentActivity("connecting")
     }
 
     setTabs(remaining)
@@ -316,11 +363,14 @@ export function Browser({
     onTabClose?.(tabId)
   }
 
-  const switchTab = (tabId: string) => {
+  const switchTab = (
+    tabId: string
+  ) => {
     setTabs((current) =>
       current.map((tab) => ({
         ...tab,
-        isActive: tab.id === tabId,
+        isActive:
+          tab.id === tabId,
       }))
     )
 
@@ -333,6 +383,7 @@ export function Browser({
     }
 
     setIframeLoaded(false)
+    setAgentActivity("connecting")
 
     onTabSwitch?.(tabId)
   }
@@ -343,6 +394,7 @@ export function Browser({
     }
 
     setIframeLoaded(false)
+    setAgentActivity("connecting")
 
     setTabs((current) =>
       current.map((tab) =>
@@ -405,8 +457,16 @@ export function Browser({
     currentUrl === "about:blank" ||
     currentUrl === ""
 
+  const currentHost =
+    hostname(currentUrl)
+
   return (
     <div
+      data-wizard-browser="true"
+      data-wizard-browser-url={currentUrl}
+      data-wizard-browser-state={
+        agentActivity
+      }
       className={cn(
         "relative flex h-full w-full flex-col overflow-hidden rounded-xl border shadow-2xl",
         isDark
@@ -429,15 +489,19 @@ export function Browser({
             <button
               onClick={() =>
                 setIsFullscreen(
-                  !isFullscreen
+                  (value) => !value
                 )
               }
               className="rounded p-1 hover:bg-white/10"
+              aria-label="Toggle fullscreen"
             >
               <Maximize2 className="h-3 w-3" />
             </button>
 
-            <button className="rounded p-1 hover:bg-white/10">
+            <button
+              className="rounded p-1 hover:bg-white/10"
+              aria-label="Close"
+            >
               <X className="h-3 w-3" />
             </button>
           </div>
@@ -477,6 +541,7 @@ export function Browser({
                       closeTab(tab.id)
                     }}
                     className="rounded p-0.5 opacity-0 hover:bg-slate-200 group-hover:opacity-100 dark:hover:bg-slate-700"
+                    aria-label={`Close ${tab.title}`}
                   >
                     <X className="h-2.5 w-2.5" />
                   </button>
@@ -487,7 +552,11 @@ export function Browser({
 
           <button
             onClick={createTab}
-            className="mb-1 ml-1 rounded p-1.5 hover:bg-slate-300 dark:hover:bg-slate-700"
+            disabled={
+              tabs.length >= maxTabs
+            }
+            className="mb-1 ml-1 rounded p-1.5 hover:bg-slate-300 disabled:opacity-30 dark:hover:bg-slate-700"
+            aria-label="New tab"
           >
             <Plus className="h-3 w-3" />
           </button>
@@ -499,6 +568,7 @@ export function Browser({
           onClick={goBack}
           disabled={!canGoBack}
           className="rounded-md p-1.5 hover:bg-slate-200 disabled:opacity-30 dark:hover:bg-slate-700"
+          aria-label="Back"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
         </button>
@@ -507,6 +577,7 @@ export function Browser({
           onClick={goForward}
           disabled={!canGoForward}
           className="rounded-md p-1.5 hover:bg-slate-200 disabled:opacity-30 dark:hover:bg-slate-700"
+          aria-label="Forward"
         >
           <ArrowRight className="h-3.5 w-3.5" />
         </button>
@@ -514,6 +585,7 @@ export function Browser({
         <button
           onClick={refresh}
           className="rounded-md p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700"
+          aria-label="Reload"
         >
           <RotateCcw
             className={cn(
@@ -557,6 +629,11 @@ export function Browser({
           <button
             onClick={toggleBookmark}
             className="rounded-md p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700"
+            aria-label={
+              isBookmarked
+                ? "Remove bookmark"
+                : "Bookmark page"
+            }
           >
             <Star
               className={cn(
@@ -570,9 +647,12 @@ export function Browser({
 
         <button
           onClick={() =>
-            setShowSettings(!showSettings)
+            setShowSettings(
+              (value) => !value
+            )
           }
           className="rounded-md p-1.5 hover:bg-slate-200 dark:hover:bg-slate-700"
+          aria-label="More options"
         >
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
@@ -583,17 +663,21 @@ export function Browser({
           <div className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-b border-slate-200 bg-white px-3 dark:border-slate-700 dark:bg-slate-900">
             <Bookmark className="h-3 w-3 text-slate-400" />
 
-            {bookmarks.map((bookmark) => (
-              <button
-                key={bookmark.url}
-                onClick={() =>
-                  navigate(bookmark.url)
-                }
-                className="whitespace-nowrap text-[8px] text-slate-500 hover:text-blue-600"
-              >
-                {bookmark.title}
-              </button>
-            ))}
+            {bookmarks.map(
+              (bookmark) => (
+                <button
+                  key={bookmark.url}
+                  onClick={() =>
+                    navigate(
+                      bookmark.url
+                    )
+                  }
+                  className="whitespace-nowrap text-[8px] text-slate-500 hover:text-blue-600"
+                >
+                  {bookmark.title}
+                </button>
+              )
+            )}
           </div>
         )}
 
@@ -603,18 +687,22 @@ export function Browser({
             Bookmarks
           </p>
 
-          {bookmarks.map((bookmark) => (
-            <button
-              key={bookmark.url}
-              onClick={() => {
-                navigate(bookmark.url)
-                setShowBookmarks(false)
-              }}
-              className="block w-full rounded px-2 py-1.5 text-left text-[8px] hover:bg-slate-100"
-            >
-              {bookmark.title}
-            </button>
-          ))}
+          {bookmarks.map(
+            (bookmark) => (
+              <button
+                key={bookmark.url}
+                onClick={() => {
+                  navigate(
+                    bookmark.url
+                  )
+                  setShowBookmarks(false)
+                }}
+                className="block w-full rounded px-2 py-1.5 text-left text-[8px] hover:bg-slate-100"
+              >
+                {bookmark.title}
+              </button>
+            )
+          )}
         </div>
       )}
 
@@ -640,7 +728,10 @@ export function Browser({
 
             <div className="mt-3 space-y-2 text-[8px] text-slate-500">
               <div className="flex justify-between">
-                <span>Safe browsing</span>
+                <span>
+                  Safe browsing
+                </span>
+
                 <span className="text-emerald-600">
                   Enhanced
                 </span>
@@ -650,11 +741,22 @@ export function Browser({
                 <span>Zoom</span>
                 <span>100%</span>
               </div>
+
+              {enableDownloads && (
+                <div className="flex justify-between">
+                  <span>Downloads</span>
+                  <span>Ready</span>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
+      <div
+        data-wizard-browser-viewport="true"
+        data-wizard-browser-content="true"
+        className="relative min-h-0 flex-1 overflow-hidden bg-white"
+      >
         {isBlank ? (
           <div className="flex h-full items-center justify-center bg-slate-50">
             <div className="text-center">
@@ -674,21 +776,33 @@ export function Browser({
             {!iframeLoaded && (
               <div className="absolute inset-0 z-20 flex items-center justify-center bg-white">
                 <div className="flex flex-col items-center gap-3">
-                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600" />
+                  <div className="relative">
+                    <div className="h-7 w-7 animate-spin rounded-full border-2 border-slate-200 border-t-blue-600" />
 
-                  <span className="text-[8px] text-slate-400">
-                    Loading {hostname(currentUrl)}
-                  </span>
+                    <div className="absolute inset-1 rounded-full bg-white" />
+                  </div>
+
+                  <div className="text-center">
+                    <span className="block text-[8px] font-medium text-slate-500">
+                      Establishing verification session
+                    </span>
+
+                    <span className="mt-1 block text-[7px] text-slate-400">
+                      {currentHost}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}
 
             <iframe
               key={currentUrl}
+              data-wizard-browser-iframe="true"
+              data-wizard-target="verification-page"
               src={currentUrl}
-              title={hostname(currentUrl)}
+              title={`Wizard verification browser · ${currentHost}`}
               className={cn(
-                "h-full w-full border-0",
+                "absolute inset-0 h-full w-full border-0 transition-opacity duration-300",
                 iframeLoaded
                   ? "opacity-100"
                   : "opacity-0"
@@ -697,13 +811,14 @@ export function Browser({
                 setIframeLoaded(true)
 
                 setTabs((current) =>
-                  current.map((tab) =>
-                    tab.isActive
-                      ? {
-                          ...tab,
-                          isLoading: false,
-                        }
-                      : tab
+                  current.map(
+                    (tab) =>
+                      tab.isActive
+                        ? {
+                            ...tab,
+                            isLoading: false,
+                          }
+                        : tab
                   )
                 )
               }}
@@ -711,10 +826,25 @@ export function Browser({
               loading="eager"
             />
 
-            <div className="pointer-events-none absolute bottom-2 right-3 z-30 flex items-center gap-1 rounded bg-white/80 px-2 py-1 text-[7px] text-slate-500 shadow-sm backdrop-blur-sm">
-              <Lock className="h-2.5 w-2.5 text-emerald-500" />
-              Secure browser session
-            </div>
+            {iframeLoaded && (
+              <div
+                data-wizard-browser-status="true"
+                className="pointer-events-none absolute bottom-2 right-3 z-30 flex items-center gap-1.5 rounded-md border border-slate-200/80 bg-white/85 px-2 py-1 text-[7px] text-slate-500 shadow-sm backdrop-blur-md"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-40" />
+
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+                </span>
+
+                <span>
+                  {agentActivity ===
+                  "observing"
+                    ? "Agent observing"
+                    : "Secure browser session"}
+                </span>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -723,12 +853,24 @@ export function Browser({
         <div className="flex h-6 shrink-0 items-center justify-between border-t border-slate-300 bg-slate-100 px-3 text-[7px] text-slate-400">
           <span className="flex items-center gap-1">
             <Lock className="h-2.5 w-2.5 text-emerald-500" />
+
             Secure
           </span>
 
-          <span>
-            {tabs.length} tab
-            {tabs.length !== 1 ? "s" : ""}
+          <span className="flex items-center gap-2">
+            {iframeLoaded && (
+              <span className="flex items-center gap-1 text-emerald-600">
+                <Check className="h-2.5 w-2.5" />
+                Connected
+              </span>
+            )}
+
+            <span>
+              {tabs.length} tab
+              {tabs.length !== 1
+                ? "s"
+                : ""}
+            </span>
           </span>
         </div>
       )}
@@ -736,3 +878,4 @@ export function Browser({
   )
 }
 
+export default Browser

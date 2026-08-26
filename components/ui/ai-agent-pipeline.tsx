@@ -1,65 +1,41 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { motion } from "framer-motion"
 
-const messages = [
-  'Task received: "Validate the latest Wizard change"',
-  "Repository mapped → 42 files discovered → 8 relevant files selected",
-  "Evidence gathered from app/page.tsx, hero.tsx, globals.css",
-  "Browser check complete → wizardagents.vercel.app loaded successfully",
-  "Agent replayed the path: inspect → execute → verify",
-  "Finding: laptop scene and report render without blocking errors",
-  "Finding: responsive layout verified at desktop and mobile widths",
-  "Recommendation: ship the verified change with the captured evidence",
-  "Verification complete. 8 checks passed · 0 blockers.",
-]
-
-const nodes = [
-  ["SCOPE", "Inspect", "8 files"],
-  ["ACTION", "Execute", "3 checks"],
-  ["RESULT", "Verify", "0 blockers"],
+const events = [
+  ["09:41:02", "Scope locked", "Validated task requirements and target surface"],
+  ["09:41:04", "Repository inspected", "8 relevant files selected from 42 discovered"],
+  ["09:41:07", "Implementation verified", "TypeScript and responsive UI checks passed"],
+  ["09:41:10", "Browser evidence captured", "wizardagents.vercel.app loaded and replayed"],
 ]
 
 export default function AIAgentPipeline() {
-  const [message, setMessage] = useState(0)
-  const [workflows, setWorkflows] = useState(1247)
+  const [active, setActive] = useState(3)
+  const [run, setRun] = useState(1247)
 
   useEffect(() => {
-    const messageTimer = window.setInterval(() => setMessage((value) => (value + 1) % messages.length), 2700)
-    const workflowTimer = window.setInterval(() => setWorkflows((value) => value + 1), 7200)
-    return () => { window.clearInterval(messageTimer); window.clearInterval(workflowTimer) }
+    const eventTimer = window.setInterval(() => setActive((value) => (value + 1) % events.length), 2600)
+    const runTimer = window.setInterval(() => setRun((value) => value + 1), 7200)
+    return () => { window.clearInterval(eventTimer); window.clearInterval(runTimer) }
   }, [])
 
   return (
-    <div className="pipeline-report">
-      <div className="pipeline-header">
-        <span className="pipeline-live"><i /> AGENT PIPELINE · LIVE</span>
-        <span>3 agents · 0 errors</span>
+    <div className="verification-report">
+      <div className="verification-report__header">
+        <div><span className="verification-report__status" /> <span>WIZARD VERIFICATION REPORT</span></div>
+        <span className="verification-report__id">RUN WZ-02481 · LIVE TRACE</span>
       </div>
-      <div className="pipeline-graph" aria-label="Live agent pipeline">
-        <div className="pipeline-flow pipeline-flow-one" />
-        <div className="pipeline-flow pipeline-flow-two" />
-        <div className="pipeline-flow pipeline-flow-three" />
-        {nodes.map(([label, title, meta], index) => (
-          <div key={label} className={`pipeline-node pipeline-node-${index}`}>
-            <small>{label}</small><strong>{title}</strong><em>{meta}</em>
-            {index === 2 && <span className="pipeline-dots"><b /><b /><b /></span>}
-          </div>
-        ))}
-        <div className="pipeline-outputs">
-          <span><b>●</b> Email Draft</span>
-          <span><b>●</b> CRM Update</span>
-          <span><b>●</b> Report Gen</span>
-        </div>
+      <div className="verification-report__summary">
+        <div className="verification-report__check">✓</div>
+        <div><p className="verification-report__eyebrow">VERIFICATION COMPLETE</p><h3>Change is ready for review</h3><p>Wizard inspected the repository, replayed the browser path, and attached evidence for every conclusion.</p></div>
       </div>
-      <div className="pipeline-message"><span>›</span><motion.p key={message} initial={{ opacity: 0.35 }} animate={{ opacity: 1 }}>{messages[message]}</motion.p></div>
-      <div className="pipeline-stats">
-        <span><small>WORKFLOWS</small><b>{workflows.toLocaleString()}</b></span>
-        <span><small>TOKENS</small><b>4.2M</b></span>
-        <span><small>AVG LATENCY</small><b>342ms</b></span>
-        <span className="pipeline-stack"><small>STACK</small><b>Claude · Pinecone</b></span>
+      <div className="verification-report__grid">
+        <section><p className="verification-report__label">EXECUTION TRACE</p><div className="verification-report__timeline">{events.map(([time, title, detail], index) => <div key={time} className={index === active ? "is-active" : ""}><span>{time}</span><div><strong>{title}</strong><small>{detail}</small></div><i>✓</i></div>)}</div></section>
+        <section className="verification-report__findings"><p className="verification-report__label">FINDINGS</p><div><b>8</b><span>files inspected</span></div><div><b>3</b><span>checks passed</span></div><div><b>0</b><span>blocking issues</span></div></section>
       </div>
+      <div className="verification-report__footer"><span>Recommendation: ship with confidence</span><span>{run.toLocaleString()} verified runs · 342ms avg</span></div>
     </div>
   )
 }
+
+

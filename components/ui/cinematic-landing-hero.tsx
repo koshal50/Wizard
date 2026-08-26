@@ -109,10 +109,10 @@ function phase(
   return smoothstep(
     clamp(
       (value - start) /
-      Math.max(
-        0.0001,
-        end - start
-      )
+        Math.max(
+          0.0001,
+          end - start
+        )
     )
   )
 }
@@ -350,9 +350,9 @@ function VSCodeSurface() {
                   <span
                     className={cn(
                       index ===
-                      visible.length -
-                      1 &&
-                      "rounded bg-blue-500/10 text-white"
+                        visible.length -
+                          1 &&
+                        "rounded bg-blue-500/10 text-white"
                     )}
                   >
                     {text || " "}
@@ -684,13 +684,13 @@ export function CinematicHero({
         Math.max(
           1,
           element.offsetHeight -
-          window.innerHeight
+            window.innerHeight
         )
 
       const value =
         clamp(
           -rect.top /
-          totalDistance
+            totalDistance
         )
 
       setScrollProgress(
@@ -814,7 +814,7 @@ export function CinematicHero({
       0.08,
       0.28
     ) *
-    0.08
+      0.08
 
   const copyX =
     -phase(
@@ -953,13 +953,13 @@ export function CinematicHero({
     stage === 0
       ? 1
       : 0.42 +
-      opening * 0.58
+        opening * 0.58
 
   const newAppY =
     stage === 0
       ? 0
       : 10 -
-      opening * 10
+        opening * 10
 
   const newAppOpacity =
     stage === 0
@@ -1003,7 +1003,7 @@ export function CinematicHero({
     applications.length <= 1
       ? 0.5
       : iconIndex /
-      (applications.length - 1)
+        (applications.length - 1)
 
   const cursorStartX =
     42 +
@@ -1023,13 +1023,13 @@ export function CinematicHero({
     cursorStartX +
     (cursorTargetX -
       cursorStartX) *
-    pointerTravel
+      pointerTravel
 
   const cursorY =
     cursorStartY +
     (cursorTargetY -
       cursorStartY) *
-    pointerTravel
+      pointerTravel
 
   const cursorScale =
     click > 0
@@ -1038,8 +1038,8 @@ export function CinematicHero({
 
   const cursorOpacity =
     stage === 0 ||
-      pointerTravel === 0 ||
-      opening > 0
+    pointerTravel === 0 ||
+    opening > 0
       ? 0
       : 1
 
@@ -1200,7 +1200,7 @@ export function CinematicHero({
                             "center bottom",
                           pointerEvents:
                             opening >
-                              0.95
+                            0.95
                               ? "auto"
                               : "none",
                           willChange:
@@ -1231,7 +1231,7 @@ export function CinematicHero({
                             `translate3d(-50%,${(1 - dockOpacity) * 20}px,0) scale(${0.68 + dockOpacity * 0.12})`,
                           pointerEvents:
                             dockOpacity >
-                              0.9
+                            0.9
                               ? "auto"
                               : "none",
                         }}
@@ -1274,7 +1274,7 @@ export function CinematicHero({
                                 "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23E5E7EB'/%3E%3Cpath d='M10 7h9l4 4v14H10V7Z' fill='white' stroke='%239CA3AF'/%3E%3Cpath d='M19 7v5h4M13 16h7M13 20h7' stroke='%236B7280' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E",
                             },
                           ]}
-                          onAppClick={() => { }}
+                          onAppClick={() => {}}
                           openApps={[current]}
                           className="scale-[.72] sm:scale-[.78] md:scale-[.84]"
                         />
@@ -1289,41 +1289,41 @@ export function CinematicHero({
 
                       {cursorOpacity >
                         0 && (
-                          <div
-                            className="pointer-events-none absolute z-[150] hidden md:block"
-                            style={{
-                              left:
-                                `${cursorX}%`,
-                              top:
-                                `${cursorY}%`,
-                              opacity:
-                                cursorOpacity,
-                              transform:
-                                `translate(-6px,-5px) scale(${cursorScale})`,
-                              filter:
-                                "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
-                            }}
+                        <div
+                          className="pointer-events-none absolute z-[150] hidden md:block"
+                          style={{
+                            left:
+                              `${cursorX}%`,
+                            top:
+                              `${cursorY}%`,
+                            opacity:
+                              cursorOpacity,
+                            transform:
+                              `translate(-6px,-5px) scale(${cursorScale})`,
+                            filter:
+                              "drop-shadow(0 2px 3px rgba(0,0,0,.5))",
+                          }}
+                        >
+                          <svg
+                            width="18"
+                            height="22"
+                            viewBox="0 0 22 25"
+                            fill="none"
                           >
-                            <svg
-                              width="18"
-                              height="22"
-                              viewBox="0 0 22 25"
-                              fill="none"
-                            >
-                              <path
-                                d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
-                                fill="#111827"
-                                stroke="white"
-                                strokeWidth="1.4"
-                              />
-                            </svg>
+                            <path
+                              d="M18.8 18.4 12.1 3.2c-.5-1.2-2.2-1.2-2.7 0L2.4 18.4c-.7 1.6.9 3.1 2.5 2.4l5.9-2.2c.2-.1.5-.1.7 0l5.8 2.2c1.6.7 2.3-.9 1.5-2.4Z"
+                              fill="#111827"
+                              stroke="white"
+                              strokeWidth="1.4"
+                            />
+                          </svg>
 
-                            {click >
-                              0 && (
-                                <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
-                              )}
-                          </div>
-                        )}
+                          {click >
+                            0 && (
+                            <span className="absolute -right-2 -bottom-2 h-4 w-4 rounded-full border border-blue-300/80 bg-blue-400/20" />
+                          )}
+                        </div>
+                      )}
                     </div>
                   </MacbookPro>
                 </div>

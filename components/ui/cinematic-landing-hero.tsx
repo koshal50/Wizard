@@ -42,7 +42,10 @@ const applications: AppId[] = [
   "report",
 ]
 
-const applicationNames: Record<AppId, string> = {
+const applicationNames: Record<
+  AppId,
+  string
+> = {
   finder: "Finder",
   vscode: "VS Code",
   terminal: "Terminal",
@@ -80,12 +83,20 @@ const repositoryFiles = [
 ]
 
 function clamp(value: number) {
-  return Math.min(1, Math.max(0, value))
+  return Math.min(
+    1,
+    Math.max(0, value)
+  )
 }
 
 function ease(value: number) {
   const x = clamp(value)
-  return x * x * (3 - 2 * x)
+
+  return (
+    x *
+    x *
+    (3 - 2 * x)
+  )
 }
 
 function phase(
@@ -93,12 +104,20 @@ function phase(
   start: number,
   end: number
 ) {
-  if (value <= start) return 0
-  if (value >= end) return 1
+  if (value <= start) {
+    return 0
+  }
+
+  if (value >= end) {
+    return 1
+  }
 
   return ease(
     (value - start) /
-      Math.max(0.0001, end - start)
+      Math.max(
+        0.0001,
+        end - start
+      )
   )
 }
 
@@ -122,7 +141,8 @@ export function SafeMeshGradient({
       <div
         className="absolute inset-0"
         style={{
-          backgroundColor: "#123A6B",
+          backgroundColor:
+            "#123A6B",
           backgroundImage:
             "url(\"data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.215'/></svg>\"), radial-gradient(150% 48.4% at 41.58% 6%, rgba(234,247,251,.92) 0%, rgba(234,247,251,0) 53%), radial-gradient(150% 48.4% at 42.42% 33%, rgba(127,198,230,.92) 0%, rgba(127,198,230,0) 53%), radial-gradient(150% 48.4% at 51.19% 67%, rgba(46,124,192,.92) 0%, rgba(46,124,192,0) 53%), radial-gradient(150% 48.4% at 53.67% 94%, rgba(18,58,107,.92) 0%, rgba(18,58,107,0) 53%)",
           backgroundSize:
@@ -137,7 +157,8 @@ export function SafeMeshGradient({
         className="pointer-events-none absolute inset-0 h-full w-full"
         style={{
           opacity: 0.215,
-          mixBlendMode: "overlay",
+          mixBlendMode:
+            "overlay",
         }}
       >
         <filter id="wizard-ocean-grain">
@@ -147,6 +168,7 @@ export function SafeMeshGradient({
             numOctaves="2"
             stitchTiles="stitch"
           />
+
           <feColorMatrix
             type="saturate"
             values="0"
@@ -200,19 +222,23 @@ function WindowBar({
 ========================================================= */
 
 function FinderSurface() {
-  const [active, setActive] = useState(0)
+  const [active, setActive] =
+    useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setActive(
-        value =>
-          (value + 1) %
-          repositoryFiles.length
-      )
-    }, 1900)
+    const timer =
+      window.setInterval(() => {
+        setActive(
+          value =>
+            (value + 1) %
+            repositoryFiles.length
+        )
+      }, 1900)
 
     return () =>
-      window.clearInterval(timer)
+      window.clearInterval(
+        timer
+      )
   }, [])
 
   return (
@@ -233,7 +259,9 @@ function FinderSurface() {
           </div>
 
           <FileTree
-            data={wizardFileStructure}
+            data={
+              wizardFileStructure
+            }
             className="text-[7px] sm:text-[8px]"
           />
         </div>
@@ -248,11 +276,13 @@ function FinderSurface() {
           </h3>
 
           <p className="mt-3 max-w-md text-[8px] leading-relaxed text-slate-500 sm:text-[9px]">
-            Wizard starts with metadata.
-            File names, directories,
-            extensions and sizes are
-            available before source
-            contents are requested.
+            Wizard starts with
+            metadata. File names,
+            directories,
+            extensions and sizes
+            are available before
+            source contents are
+            requested.
           </p>
 
           <div className="mt-8 max-w-lg rounded-lg border border-white/10 bg-white/[0.025] p-4 sm:mt-10">
@@ -261,13 +291,25 @@ function FinderSurface() {
             </div>
 
             <div className="mt-2 font-mono text-xs text-white sm:text-sm">
-              {repositoryFiles[active]}
+              {
+                repositoryFiles[
+                  active
+                ]
+              }
             </div>
 
             <div className="mt-4 flex gap-3 font-mono text-[6px] text-blue-300/70 sm:text-[7px]">
-              <span>metadata</span>
-              <span>indexed</span>
-              <span>available</span>
+              <span>
+                metadata
+              </span>
+
+              <span>
+                indexed
+              </span>
+
+              <span>
+                available
+              </span>
             </div>
           </div>
         </div>
@@ -281,19 +323,23 @@ function FinderSurface() {
 ========================================================= */
 
 function VSCodeSurface() {
-  const [line, setLine] = useState(0)
+  const [line, setLine] =
+    useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setLine(
-        value =>
-          (value + 1) %
-          (code.length + 1)
-      )
-    }, 1450)
+    const timer =
+      window.setInterval(() => {
+        setLine(
+          value =>
+            (value + 1) %
+            (code.length + 1)
+        )
+      }, 1450)
 
     return () =>
-      window.clearInterval(timer)
+      window.clearInterval(
+        timer
+      )
   }, [])
 
   const visible =
@@ -346,7 +392,8 @@ function VSCodeSurface() {
                   <span
                     className={cn(
                       index ===
-                        visible.length - 1 &&
+                        visible.length -
+                          1 &&
                         "rounded bg-blue-500/10 text-white"
                     )}
                   >
@@ -354,7 +401,8 @@ function VSCodeSurface() {
                   </span>
 
                   {index <
-                    visible.length - 1 &&
+                    visible.length -
+                      1 &&
                     "\n"}
                 </React.Fragment>
               )
@@ -373,19 +421,23 @@ function VSCodeSurface() {
 ========================================================= */
 
 function TerminalSurface() {
-  const [count, setCount] = useState(0)
+  const [count, setCount] =
+    useState(0)
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setCount(
-        value =>
-          (value + 1) %
-          (commands.length + 1)
-      )
-    }, 1850)
+    const timer =
+      window.setInterval(() => {
+        setCount(
+          value =>
+            (value + 1) %
+            (commands.length + 1)
+        )
+      }, 1850)
 
     return () =>
-      window.clearInterval(timer)
+      window.clearInterval(
+        timer
+      )
   }, [])
 
   return (
@@ -706,7 +758,9 @@ export function CinematicHero({
       const element =
         root.current
 
-      if (!element) return
+      if (!element) {
+        return
+      }
 
       const rect =
         element.getBoundingClientRect()
@@ -728,7 +782,9 @@ export function CinematicHero({
     }
 
     const onScroll = () => {
-      if (frame) return
+      if (frame) {
+        return
+      }
 
       frame =
         window.requestAnimationFrame(
@@ -739,13 +795,17 @@ export function CinematicHero({
     window.addEventListener(
       "scroll",
       onScroll,
-      { passive: true }
+      {
+        passive: true,
+      }
     )
 
     window.addEventListener(
       "resize",
       onScroll,
-      { passive: true }
+      {
+        passive: true,
+      }
     )
 
     update()
@@ -800,7 +860,7 @@ export function CinematicHero({
 
   /*
    * ========================================================
-   * ONE OUTER CINEMATIC OBJECT
+   * OUTER CINEMATIC OBJECT
    * ========================================================
    */
 
@@ -877,7 +937,9 @@ export function CinematicHero({
     )
 
   /*
-   * Only outgoing application minimizes.
+   * ========================================================
+   * OUTGOING APPLICATION
+   * ========================================================
    */
 
   const outgoingScale =
@@ -898,8 +960,9 @@ export function CinematicHero({
     desktop * 0.48
 
   /*
-   * Next application is full display size.
-   * It only slides upward.
+   * ========================================================
+   * INCOMING APPLICATION
+   * ========================================================
    */
 
   const incomingY =
@@ -950,18 +1013,11 @@ export function CinematicHero({
     >
       <div className="sticky top-0 h-screen w-full overflow-hidden">
 
-        {/* =====================================================
-            ONE CINEMATIC SCENE
-            Background + text + MacBook all scale together.
-           ===================================================== */}
-
         <div
           className="absolute left-1/2 top-1/2"
           style={{
-            width:
-              "100vw",
-            height:
-              "100vh",
+            width: "100vw",
+            height: "100vh",
             transform:
               `translate(-50%,-50%) scale(${sceneScale})`,
             transformOrigin:
@@ -970,10 +1026,6 @@ export function CinematicHero({
               "transform",
           }}
         >
-
-          {/* ===================================================
-              OCEANIC BACKGROUND
-             =================================================== */}
 
           <div
             aria-hidden="true"
@@ -988,11 +1040,9 @@ export function CinematicHero({
 
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,rgba(255,255,255,.08),transparent_52%)]" />
 
-          {/* ===================================================
-              SCENE CONTENT
-
-              Responsive composition only.
-             =================================================== */}
+          {/* =================================================
+              RESPONSIVE CONTENT
+          ================================================= */}
 
           <div className="absolute inset-0 flex items-center justify-center">
             <div
@@ -1014,7 +1064,7 @@ export function CinematicHero({
 
               {/* =================================================
                   TEXT
-                 ================================================= */}
+              ================================================= */}
 
               <div className="w-full max-w-[340px] shrink-0 lg:w-[340px]">
                 <p className="mb-3 font-mono text-[10px] uppercase tracking-[.3em] text-blue-100/70">
@@ -1035,13 +1085,24 @@ export function CinematicHero({
                 </p>
 
                 <p className="mt-8 font-mono text-[7px] uppercase tracking-[.24em] text-blue-100/35">
-                  {applicationNames[current]}
+                  {
+                    applicationNames[
+                      current
+                    ]
+                  }
                 </p>
               </div>
 
               {/* =================================================
                   MACBOOK
-                 ================================================= */}
+
+                  IMPORTANT:
+
+                  Desktop and laptop sizing are exactly the
+                  original sizing.
+
+                  The 92vw width applies ONLY below 640px.
+              ================================================= */}
 
               <div
                 className="
@@ -1049,9 +1110,7 @@ export function CinematicHero({
                   w-full
                   max-w-[1180px]
                   shrink-0
-                  sm:w-[92vw]
-                  md:w-[88vw]
-                  lg:w-full
+                  max-[639px]:w-[92vw]
                 "
               >
                 <div className="relative aspect-[650/400] w-full">
@@ -1071,7 +1130,7 @@ export function CinematicHero({
 
                       {/* =================================================
                           DESKTOP
-                         ================================================= */}
+                      ================================================= */}
 
                       <div
                         className="absolute inset-0 z-0"
@@ -1085,7 +1144,7 @@ export function CinematicHero({
 
                       {/* =================================================
                           CURRENT APPLICATION
-                         ================================================= */}
+                      ================================================= */}
 
                       <div
                         className="absolute inset-0 z-20 overflow-hidden"
@@ -1107,7 +1166,7 @@ export function CinematicHero({
 
                       {/* =================================================
                           NEXT APPLICATION
-                         ================================================= */}
+                      ================================================= */}
 
                       {next &&
                         opening >
@@ -1131,7 +1190,7 @@ export function CinematicHero({
 
                       {/* =================================================
                           DOCK
-                         ================================================= */}
+                      ================================================= */}
 
                       <div
                         className="absolute bottom-[5%] left-1/2 z-[100]"
@@ -1163,7 +1222,7 @@ export function CinematicHero({
 
                       {/* =================================================
                           WIZARD CURSOR
-                         ================================================= */}
+                      ================================================= */}
 
                       {next &&
                         pointer >

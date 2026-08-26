@@ -287,37 +287,35 @@ function Repository() {
 }
 
 function BrowserPanel() {
+  const [page, setPage] = useState(0)
+  const pages = [
+    { title: "wizardagents.vercel.app", url: "https://wizardagents.vercel.app" },
+    { title: "wizardagents.vercel.app/docs", url: "https://wizardagents.vercel.app/docs" },
+    { title: "wizardagents.vercel.app/verify", url: "https://wizardagents.vercel.app/verify" },
+  ]
+  const current = pages[page]
+
   return (
     <div
       data-screen-panel
       className="screen-panel"
+      onWheel={() => setPage((value) => (value + 1) % pages.length)}
     >
       <Browser
-  initialUrl="https://wizardagents.vercel.app"
-  initialTabs={[
-    {
-      id: "wizard",
-      title: "wizardagents.vercel.app",
-      url: "https://wizardagents.vercel.app",
-    },
-  ]}
-  showWindowControls={false}
-  showBookmarksBar={false}
-  showStatusBar={false}
-  enableTabManagement={true}
-  enableBookmarks={true}
-  enableHistory={true}
-  enableDownloads={false}
-  enableSettings={false}
-  className="h-full rounded-none border-0 shadow-none"
-/>
-
-      <span
-        className="browser-agent-cursor"
-        aria-hidden="true"
-      >
-        <span />
-      </span>
+        key={current.url}
+        initialUrl={current.url}
+        initialTabs={[{ id: "wizard", title: current.title, url: current.url }]}
+        showWindowControls={false}
+        showBookmarksBar={false}
+        showStatusBar={false}
+        enableTabManagement={true}
+        enableBookmarks={true}
+        enableHistory={true}
+        enableDownloads={false}
+        enableSettings={false}
+        className="h-full rounded-none border-0 shadow-none"
+      />
+      <span className="browser-agent-cursor" aria-hidden="true"><span /></span>
     </div>
   )
 }

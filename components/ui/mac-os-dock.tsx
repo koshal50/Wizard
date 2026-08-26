@@ -1,10 +1,10 @@
 "use client"
 
 import React, {
-  useState,
-  useRef,
   useCallback,
   useEffect,
+  useRef,
+  useState,
 } from "react"
 
 interface DockApp {
@@ -20,357 +20,228 @@ interface MacOSDockProps {
   className?: string
 }
 
-const MacOSDock: React.FC<MacOSDockProps> = ({
+function VSCodeIcon() {
+  return (
+    <svg
+      width="32"
+      height="32"
+      viewBox="0 0 32 32"
+      fill="none"
+      aria-hidden="true"
+    >
+      <rect
+        width="32"
+        height="32"
+        rx="7"
+        fill="#007ACC"
+      />
+
+      <path
+        d="M22.4 5.5 16.8 9.9 12.5 6.7 7.2 10.8v10.4l5.3 4.1 4.3-3.2 5.6 4.4 4.3-2.7V8.2l-4.3-2.7Z"
+        fill="white"
+        opacity=".96"
+      />
+
+      <path
+        d="m16.8 9.9-4.3 3.3-2.4-1.9-1.5 1.2 3.9 3.1-3.9 3.1 1.5 1.2 2.4-1.9 4.3 3.3 5.6 4.4V5.5l-5.6 4.4Zm2.5 2.2v7.8l-4.8-3.9 4.8-3.9Z"
+        fill="#007ACC"
+      />
+    </svg>
+  )
+}
+
+function getResponsiveSize() {
+  if (typeof window === "undefined") {
+    return {
+      icon: 34,
+      maxScale: 1.42,
+      effectWidth: 180,
+      gap: 3,
+    }
+  }
+
+  const width = window.innerWidth
+
+  if (width < 640) {
+    return {
+      icon: 26,
+      maxScale: 1.3,
+      effectWidth: 130,
+      gap: 2,
+    }
+  }
+
+  if (width < 1024) {
+    return {
+      icon: 30,
+      maxScale: 1.36,
+      effectWidth: 155,
+      gap: 2,
+    }
+  }
+
+  return {
+    icon: 34,
+    maxScale: 1.42,
+    effectWidth: 180,
+    gap: 3,
+  }
+}
+
+export default function MacOSDock({
   apps,
   onAppClick,
   openApps = [],
   className = "",
-}) => {
+}: MacOSDockProps) {
+  const dockRef =
+    useRef<HTMLDivElement>(null)
+
   const [mouseX, setMouseX] =
     useState<number | null>(null)
 
-  const [currentScales, setCurrentScales] =
+  const [config, setConfig] =
+    useState(getResponsiveSize)
+
+  const [scales, setScales] =
     useState<number[]>(
       apps.map(() => 1)
     )
 
-  const [currentPositions, setCurrentPositions] =
-    useState<number[]>([])
-
-  const dockRef =
-    useRef<HTMLDivElement>(null)
-
-  const iconRefs =
-    useRef<(HTMLDivElement | null)[]>([])
-
-  const animationFrameRef =
-    useRef<number | undefined>(undefined)
-
-  const lastMouseMoveTime =
-    useRef<number>(0)
-
-  const getResponsiveConfig =
-    useCallback(() => {
-      if (typeof window === "undefined") {
-        return {
-          baseIconSize: 64,
-          maxScale: 1.6,
-          effectWidth: 240,
-        }
-      }
-
-      const smallerDimension =
-        Math.min(
-          window.innerWidth,
-          window.innerHeight
-        )
-
-      if (smallerDimension < 480) {
-        return {
-          baseIconSize: Math.max(
-            40,
-            smallerDimension * 0.08
-          ),
-          maxScale: 1.4,
-          effectWidth:
-            smallerDimension * 0.4,
-        }
-      }
-
-      if (smallerDimension < 768) {
-        return {
-          baseIconSize: Math.max(
-            48,
-            smallerDimension * 0.07
-          ),
-          maxScale: 1.5,
-          effectWidth:
-            smallerDimension * 0.35,
-        }
-      }
-
-      if (smallerDimension < 1024) {
-        return {
-          baseIconSize: Math.max(
-            56,
-            smallerDimension * 0.06
-          ),
-          maxScale: 1.6,
-          effectWidth:
-            smallerDimension * 0.3,
-        }
-      }
-
-      return {
-        baseIconSize: Math.max(
-          64,
-          Math.min(
-            80,
-            smallerDimension * 0.05
-          )
-        ),
-        maxScale: 1.8,
-        effectWidth: 300,
-      }
-    }, [])
-
-  const [config, setConfig] =
-    useState(getResponsiveConfig)
-
-  const {
-    baseIconSize,
-    maxScale,
-    effectWidth,
-  } = config
-
-  const minScale = 1
-
-  const baseSpacing =
-    Math.max(
-      4,
-      baseIconSize * 0.08
-    )
+  const animationRef =
+    useRef<number | null>(null)
 
   useEffect(() => {
-    const handleResize = () => {
-      setConfig(getResponsiveConfig())
+    const resize = () => {
+      setConfig(getResponsiveSize())
     }
 
     window.addEventListener(
       "resize",
-      handleResize
+      resize
     )
 
     return () =>
       window.removeEventListener(
         "resize",
-        handleResize
+        resize
       )
-  }, [getResponsiveConfig])
+  }, [])
 
-  const calculateTargetMagnification =
+  const {
+    icon,
+    maxScale,
+    effectWidth,
+    gap,
+  } = config
+
+  const calculateScales =
     useCallback(
-      (mousePosition: number | null) => {
-        if (mousePosition === null) {
-          return apps.map(
-            () => minScale
-          )
+      (x: number | null) => {
+        if (x === null) {
+          return apps.map(() => 1)
         }
 
-        return apps.map(
-          (_, index) => {
-            const normalIconCenter =
-              index *
-                (baseIconSize +
-                  baseSpacing) +
-              baseIconSize / 2
+        return apps.map((_, index) => {
+          const center =
+            index * (icon + gap) +
+            icon / 2
 
-            const minX =
-              mousePosition -
-              effectWidth / 2
+          const distance =
+            Math.abs(center - x)
 
-            const maxX =
-              mousePosition +
-              effectWidth / 2
-
-            if (
-              normalIconCenter < minX ||
-              normalIconCenter > maxX
-            ) {
-              return minScale
-            }
-
-            const theta =
-              ((normalIconCenter -
-                minX) /
-                effectWidth) *
-              2 *
-              Math.PI
-
-            const cappedTheta =
-              Math.min(
-                Math.max(theta, 0),
-                2 * Math.PI
-              )
-
-            const scaleFactor =
-              (1 -
-                Math.cos(
-                  cappedTheta
-                )) /
-              2
-
-            return (
-              minScale +
-              scaleFactor *
-                (maxScale -
-                  minScale)
-            )
+          if (
+            distance >
+            effectWidth / 2
+          ) {
+            return 1
           }
-        )
+
+          const normalized =
+            distance /
+            (effectWidth / 2)
+
+          const influence =
+            Math.cos(
+              normalized *
+                Math.PI *
+                0.5
+            )
+
+          return (
+            1 +
+            influence *
+              (maxScale - 1)
+          )
+        })
       },
       [
         apps,
-        baseIconSize,
-        baseSpacing,
+        icon,
+        gap,
         effectWidth,
         maxScale,
       ]
     )
 
-  const calculatePositions =
-    useCallback(
-      (scales: number[]) => {
-        let currentX = 0
-
-        return scales.map(
-          scale => {
-            const scaledWidth =
-              baseIconSize *
-              scale
-
-            const centerX =
-              currentX +
-              scaledWidth / 2
-
-            currentX +=
-              scaledWidth +
-              baseSpacing
-
-            return centerX
-          }
-        )
-      },
-      [
-        baseIconSize,
-        baseSpacing,
-      ]
-    )
-
   useEffect(() => {
-    const initialScales =
-      apps.map(() => minScale)
+    const animate = () => {
+      const target =
+        calculateScales(mouseX)
 
-    setCurrentScales(
-      initialScales
-    )
-
-    setCurrentPositions(
-      calculatePositions(
-        initialScales
-      )
-    )
-  }, [
-    apps,
-    calculatePositions,
-    config,
-  ])
-
-  const animateToTarget =
-    useCallback(() => {
-      const targetScales =
-        calculateTargetMagnification(
-          mouseX
+      setScales(previous =>
+        previous.map(
+          (value, index) =>
+            value +
+            (target[index] -
+              value) *
+              0.18
         )
-
-      const targetPositions =
-        calculatePositions(
-          targetScales
-        )
-
-      const lerpFactor =
-        mouseX !== null
-          ? 0.2
-          : 0.12
-
-      setCurrentScales(
-        previous =>
-          previous.map(
-            (scale, index) =>
-              scale +
-              (targetScales[index] -
-                scale) *
-                lerpFactor
-          )
       )
 
-      setCurrentPositions(
-        previous =>
-          previous.map(
-            (position, index) =>
-              position +
-              (targetPositions[index] -
-                position) *
-                lerpFactor
-          )
-      )
-
-      animationFrameRef.current =
-        requestAnimationFrame(
-          animateToTarget
+      animationRef.current =
+        window.requestAnimationFrame(
+          animate
         )
-    }, [
-      mouseX,
-      calculateTargetMagnification,
-      calculatePositions,
-    ])
+    }
 
-  useEffect(() => {
-    animationFrameRef.current =
-      requestAnimationFrame(
-        animateToTarget
+    animationRef.current =
+      window.requestAnimationFrame(
+        animate
       )
 
     return () => {
       if (
-        animationFrameRef.current
+        animationRef.current !==
+        null
       ) {
-        cancelAnimationFrame(
-          animationFrameRef.current
+        window.cancelAnimationFrame(
+          animationRef.current
         )
       }
     }
-  }, [animateToTarget])
+  }, [
+    mouseX,
+    calculateScales,
+  ])
 
   const handleMouseMove =
     useCallback(
       (
         event: React.MouseEvent
       ) => {
-        const now =
-          performance.now()
-
-        if (
-          now -
-            lastMouseMoveTime.current <
-          16
-        ) {
-          return
-        }
-
-        lastMouseMoveTime.current =
-          now
-
-        if (!dockRef.current) {
-          return
-        }
-
         const rect =
-          dockRef.current.getBoundingClientRect()
+          dockRef.current?.getBoundingClientRect()
 
-        const padding =
-          Math.max(
-            8,
-            baseIconSize * 0.12
-          )
+        if (!rect) return
 
         setMouseX(
           event.clientX -
             rect.left -
-            padding
+            7
         )
       },
-      [baseIconSize]
+      []
     )
 
   const handleMouseLeave =
@@ -378,199 +249,131 @@ const MacOSDock: React.FC<MacOSDockProps> = ({
       setMouseX(null)
     }, [])
 
-  const handleAppClick = (
-    appId: string,
-    index: number
-  ) => {
-    const element =
-      iconRefs.current[index]
-
-    if (element) {
-      element.animate(
-        [
-          {
-            transform:
-              "translateY(0)",
-          },
-          {
-            transform:
-              "translateY(-10px)",
-          },
-          {
-            transform:
-              "translateY(0)",
-          },
-        ],
-        {
-          duration: 380,
-          easing:
-            "cubic-bezier(.2,.8,.2,1)",
-        }
-      )
-    }
-
-    onAppClick(appId)
-  }
-
-  const contentWidth =
-    currentPositions.length > 0
-      ? Math.max(
-          ...currentPositions.map(
-            (position, index) =>
-              position +
-              (baseIconSize *
-                currentScales[index]) /
-                2
-          )
-        )
-      : apps.length *
-          (baseIconSize +
-            baseSpacing)
-
-  const padding =
+  const totalWidth =
+    apps.length *
+      icon +
     Math.max(
-      8,
-      baseIconSize * 0.12
-    )
+      0,
+      apps.length - 1
+    ) *
+      gap
 
   return (
     <div
       ref={dockRef}
-      className={`backdrop-blur-md ${className}`}
-      style={{
-        width:
-          contentWidth +
-          padding * 2,
-        background:
-          "rgba(30, 30, 32, .78)",
-        borderRadius:
-          Math.max(
-            12,
-            baseIconSize * 0.4
-          ),
-        border:
-          "1px solid rgba(255,255,255,.14)",
-        boxShadow:
-          "0 12px 35px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.12)",
-        padding,
-      }}
+      className={className}
       onMouseMove={
         handleMouseMove
       }
       onMouseLeave={
         handleMouseLeave
       }
+      style={{
+        width:
+          totalWidth + 16,
+        height: icon + 12,
+        padding:
+          "6px 8px",
+        borderRadius: 13,
+        background:
+          "rgba(24, 24, 27, 0.76)",
+        border:
+          "1px solid rgba(255,255,255,0.13)",
+        boxShadow:
+          "0 8px 24px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.1)",
+        backdropFilter:
+          "blur(18px)",
+        WebkitBackdropFilter:
+          "blur(18px)",
+      }}
     >
       <div
-        className="relative"
+        className="relative flex items-end"
         style={{
-          height: baseIconSize,
-          width: "100%",
+          width: totalWidth,
+          height: icon,
+          gap,
         }}
       >
         {apps.map(
           (app, index) => {
             const scale =
-              currentScales[index] ||
-              1
+              scales[index] || 1
 
-            const position =
-              currentPositions[
-                index
-              ] || 0
-
-            const scaledSize =
-              baseIconSize * scale
+            const size =
+              icon * scale
 
             return (
-              <div
+              <button
                 key={app.id}
-                ref={element => {
-                  iconRefs.current[
-                    index
-                  ] = element
-                }}
-                className="absolute flex cursor-pointer flex-col items-center justify-end"
+                type="button"
                 title={app.name}
+                aria-label={
+                  app.name
+                }
                 onClick={() =>
-                  handleAppClick(
-                    app.id,
-                    index
+                  onAppClick(
+                    app.id
                   )
                 }
+                className="group relative flex shrink-0 items-end justify-center border-0 bg-transparent p-0 outline-none"
                 style={{
-                  left:
-                    position -
-                    scaledSize / 2,
-                  bottom: 0,
-                  width:
-                    scaledSize,
-                  height:
-                    scaledSize,
-                  transformOrigin:
-                    "bottom center",
+                  width: icon,
+                  height: icon,
+                  transform:
+                    `translateY(${
+                      -(size -
+                        icon) *
+                      0.32
+                    })`,
                   zIndex:
                     Math.round(
-                      scale * 10
+                      scale * 100
                     ),
+                  transition:
+                    "transform 80ms linear",
                 }}
               >
-                <img
-                  src={app.icon}
-                  alt={app.name}
-                  width={scaledSize}
-                  height={scaledSize}
-                  className="object-contain"
-                  draggable={false}
+                <div
+                  className="flex items-center justify-center overflow-hidden rounded-[8px]"
                   style={{
+                    width: size,
+                    height: size,
+                    transition:
+                      "width 80ms linear, height 80ms linear",
                     filter:
-                      `drop-shadow(0 ${Math.max(
-                        1,
-                        baseIconSize *
-                          0.04
-                      )}px ${Math.max(
-                        2,
-                        baseIconSize *
-                          0.08
-                      )}px rgba(0,0,0,.3))`,
+                      "drop-shadow(0 3px 5px rgba(0,0,0,.32))",
                   }}
-                />
+                >
+                  {app.id ===
+                  "vscode" ? (
+                    <VSCodeIcon />
+                  ) : (
+                    <img
+                      src={app.icon}
+                      alt=""
+                      width={size}
+                      height={size}
+                      draggable={false}
+                      className="h-full w-full object-contain"
+                    />
+                  )}
+                </div>
 
                 {openApps.includes(
                   app.id
                 ) && (
-                  <div
-                    className="absolute"
+                  <span
+                    className="absolute bottom-[-4px] left-1/2 -translate-x-1/2 rounded-full bg-white/80"
                     style={{
-                      bottom:
-                        Math.max(
-                          -2,
-                          -baseIconSize *
-                            0.05
-                        ),
-                      left: "50%",
-                      transform:
-                        "translateX(-50%)",
-                      width:
-                        Math.max(
-                          3,
-                          baseIconSize *
-                            0.06
-                        ),
-                      height:
-                        Math.max(
-                          3,
-                          baseIconSize *
-                            0.06
-                        ),
-                      borderRadius:
-                        "50%",
-                      background:
-                        "rgba(255,255,255,.8)",
+                      width: 3,
+                      height: 3,
+                      boxShadow:
+                        "0 0 4px rgba(255,255,255,.45)",
                     }}
                   />
                 )}
-              </div>
+              </button>
             )
           }
         )}
@@ -578,5 +381,3 @@ const MacOSDock: React.FC<MacOSDockProps> = ({
     </div>
   )
 }
-
-export default MacOSDock

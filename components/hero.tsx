@@ -1,126 +1,320 @@
-'use client';
+"use client"
 
-import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { SafeMeshGradient } from '@/components/ui/cinematic-landing-hero';
-import { AsciiArt } from '@/components/ui/sss';
-import { createClient } from '@supabase/supabase-js';
+import { useState, useEffect } from "react"
+import { X } from "lucide-react"
+import { motion, AnimatePresence } from "framer-motion"
+import { SafeMeshGradient } from "@/components/ui/cinematic-landing-hero"
+import { AsciiArt } from "@/components/ui/sss"
+import { createClient } from "@supabase/supabase-js"
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-);
+)
 
 export default function Hero() {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submissionStatus, setSubmissionStatus] = useState<
-    'idle' | 'success' | 'error'
-  >('idle');
+  const [isExpanded, setIsExpanded] =
+    useState(false)
+
+  const [isSubmitting, setIsSubmitting] =
+    useState(false)
+
+  const [submissionStatus, setSubmissionStatus] =
+    useState<"idle" | "success" | "error">("idle")
+
+  /*
+   * Background cinematic progress.
+   *
+   * The hero background is now controlled
+   * by scroll instead of autoplay.
+   *
+   * This page is intentionally independent
+   * from the MacBook cinematic section.
+   */
+  const [backgroundProgress, setBackgroundProgress] =
+    useState(0)
+
+  useEffect(() => {
+    let frame = 0
+
+    const updateProgress = () => {
+      if (frame) {
+        return
+      }
+
+      frame = window.requestAnimationFrame(() => {
+        frame = 0
+
+        /*
+         * The hero occupies the first viewport.
+         *
+         * We use a slightly longer scroll window
+         * so the background does not race through
+         * its 10 second cinematic sequence.
+         */
+        const scrollY =
+          window.scrollY
+
+        const viewportHeight =
+          window.innerHeight
+
+        const cinematicDistance =
+          viewportHeight * 1.35
+
+        const progress =
+          Math.min(
+            1,
+            Math.max(
+              0,
+              scrollY /
+                cinematicDistance
+            )
+          )
+
+        setBackgroundProgress(
+          progress
+        )
+      })
+    }
+
+    window.addEventListener(
+      "scroll",
+      updateProgress,
+      { passive: true }
+    )
+
+    updateProgress()
+
+    return () => {
+      window.removeEventListener(
+        "scroll",
+        updateProgress
+      )
+
+      if (frame) {
+        window.cancelAnimationFrame(
+          frame
+        )
+      }
+    }
+  }, [])
 
   const handleExpand = () => {
-    setIsExpanded(true);
-  };
+    setIsExpanded(true)
+  }
 
   const handleClose = () => {
-    setIsExpanded(false);
-    setSubmissionStatus('idle');
-  };
+    setIsExpanded(false)
+    setSubmissionStatus("idle")
+  }
 
   const handleSubmit = async (
-    event: React.FormEvent<HTMLFormElement>,
+    event: React.FormEvent<HTMLFormElement>
   ) => {
-    event.preventDefault();
+    event.preventDefault()
 
-    setIsSubmitting(true);
-    setSubmissionStatus('idle');
+    setIsSubmitting(true)
+    setSubmissionStatus("idle")
 
-    const form = event.currentTarget;
+    const form =
+      event.currentTarget
 
     if (!form.reportValidity()) {
-      setIsSubmitting(false);
-      return;
+      setIsSubmitting(false)
+      return
     }
 
-    const formData = new FormData(form);
+    const formData =
+      new FormData(form)
 
-    const { error } = await supabase
-      .from('wizard_contact_submissions')
-      .insert({
-        name: String(formData.get('name') ?? '').trim(),
-        email: String(formData.get('email') ?? '').trim(),
-        website:
-          String(formData.get('website') ?? '').trim() || null,
-        role:
-          String(formData.get('role') ?? '').trim() || null,
-        message:
-          String(formData.get('message') ?? '').trim() || null,
-      });
+    const { error } =
+      await supabase
+        .from(
+          "wizard_contact_submissions"
+        )
+        .insert({
+          name: String(
+            formData.get("name") ?? ""
+          ).trim(),
 
-    setIsSubmitting(false);
+          email: String(
+            formData.get("email") ?? ""
+          ).trim(),
+
+          website:
+            String(
+              formData.get("website") ?? ""
+            ).trim() || null,
+
+          role:
+            String(
+              formData.get("role") ?? ""
+            ).trim() || null,
+
+          message:
+            String(
+              formData.get("message") ?? ""
+            ).trim() || null,
+        })
+
+    setIsSubmitting(false)
 
     if (error) {
-      setSubmissionStatus('error');
-      return;
+      setSubmissionStatus("error")
+      return
     }
 
-    form.reset();
-    setSubmissionStatus('success');
+    form.reset()
+    setSubmissionStatus("success")
 
     window.setTimeout(() => {
-      setIsExpanded(false);
-      setSubmissionStatus('idle');
-    }, 3000);
-  };
+      setIsExpanded(false)
+      setSubmissionStatus("idle")
+    }, 3000)
+  }
 
   useEffect(() => {
     if (isExpanded) {
-      document.body.style.overflow = 'hidden';
+      document.body.style.overflow =
+        "hidden"
     } else {
-      document.body.style.overflow = 'unset';
+      document.body.style.overflow =
+        "unset"
     }
 
     return () => {
-      document.body.style.overflow = 'unset';
-    };
-  }, [isExpanded]);
+      document.body.style.overflow =
+        "unset"
+    }
+  }, [isExpanded])
 
   return (
     <>
-      <div className="relative flex min-h-screen flex-col items-center justify-center px-4 py-12 sm:px-6 sm:py-20">
-        {/* Animated background */}
-        <div className="fixed inset-0 z-0 overflow-hidden bg-black">
-          <AsciiArt className="pointer-events-none h-full w-full" />
+      <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 py-12 sm:px-6 sm:py-20">
+
+        {/* 
+         * Cinematic background.
+         *
+         * This is no longer an autoplaying loop.
+         * AsciiArt receives scroll progress and
+         * scrubs through wizard-world.mp4.
+         *
+         * The background itself owns the cinematic
+         * movement. The hero content does not inherit
+         * any transform from it.
+         */}
+        <div
+          className="
+            pointer-events-none
+            fixed
+            inset-0
+            z-0
+            overflow-hidden
+            bg-black
+          "
+        >
+          <AsciiArt
+            progress={
+              backgroundProgress
+            }
+            className="
+              h-full
+              w-full
+            "
+          />
+
+          {/* 
+           * Very subtle readability layer.
+           *
+           * This does not animate independently.
+           * It simply keeps the typography readable
+           * over brighter frames of the video.
+           */}
+          <div
+            className="
+              pointer-events-none
+              absolute
+              inset-0
+              bg-black/[0.04]
+            "
+          />
         </div>
 
         {/* Hero content */}
-        <div className="relative z-10 isolate flex flex-col items-center gap-4 px-5 py-6 text-center sm:gap-6">
-          <h1 className="max-w-2xl text-balance text-4xl font-normal leading-[90%] tracking-[-0.03em] text-black mix-blend-exclusion sm:text-5xl md:text-6xl lg:text-7xl">
-            Build with AI. Verify with Wizard.
+        <div
+          className="
+            relative
+            z-10
+            isolate
+            flex
+            flex-col
+            items-center
+            gap-4
+            px-5
+            py-6
+            text-center
+            sm:gap-6
+          "
+        >
+          <h1
+            className="
+              max-w-2xl
+              text-balance
+              text-4xl
+              font-normal
+              leading-[90%]
+              tracking-[-0.03em]
+              text-black
+              mix-blend-exclusion
+              sm:text-5xl
+              md:text-6xl
+              lg:text-7xl
+            "
+          >
+            Build with AI.
+            Verify with Wizard.
           </h1>
 
-          <p className="max-w-2xl px-4 text-base leading-[160%] text-black sm:text-lg md:text-xl">
-            Let Wizard investigate, execute, and verify your
-            software automatically so you can build faster with
+          <p
+            className="
+              max-w-2xl
+              px-4
+              text-base
+              leading-[160%]
+              text-black
+              sm:text-lg
+              md:text-xl
+            "
+          >
+            Let Wizard investigate,
+            execute, and verify your
+            software automatically so
+            you can build faster with
             confidence.
           </p>
 
           {/* CTA */}
-          <AnimatePresence initial={false}>
+          <AnimatePresence
+            initial={false}
+          >
             {!isExpanded && (
-              <motion.div className="relative inline-block">
+              <motion.div
+                className="relative inline-block"
+              >
                 <motion.div
                   style={{
-                    borderRadius: '100px',
+                    borderRadius:
+                      "100px",
                   }}
                   layout
                   layoutId="cta-card"
                   className="
-                    absolute inset-0
+                    absolute
+                    inset-0
                     bg-[#123A6B]
-                    border border-[#7FC6E6]/25
+                    border
+                    border-[#7FC6E6]/25
                     shadow-[0_8px_30px_rgba(18,58,107,0.35)]
                     transform-gpu
                     will-change-transform
@@ -139,14 +333,21 @@ export default function Hero() {
                   transition={{
                     delay: 0.2,
                     duration: 0.45,
-                    ease: [0.22, 1, 0.36, 1],
+                    ease: [
+                      0.22,
+                      1,
+                      0.36,
+                      1,
+                    ],
                   }}
                   exit={{
                     opacity: 0,
                     scale: 0.8,
                   }}
                   layout={false}
-                  onClick={handleExpand}
+                  onClick={
+                    handleExpand
+                  }
                   className="
                     relative
                     h-15
@@ -169,13 +370,15 @@ export default function Hero() {
       </div>
 
       {/* Expanded contact experience */}
-      <AnimatePresence initial={false}>
+      <AnimatePresence
+        initial={false}
+      >
         {isExpanded && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
             <motion.div
               layoutId="cta-card"
               style={{
-                borderRadius: '24px',
+                borderRadius: "24px",
               }}
               layout
               className="
@@ -197,10 +400,10 @@ export default function Hero() {
                 <SafeMeshGradient
                   speed={1}
                   colors={[
-                    '#EAF7FB',
-                    '#7FC6E6',
-                    '#2E7CC0',
-                    '#123A6B',
+                    "#EAF7FB",
+                    "#7FC6E6",
+                    "#2E7CC0",
+                    "#123A6B",
                   ]}
                   distortion={0.8}
                   swirl={0.1}
@@ -208,17 +411,16 @@ export default function Hero() {
                   grainOverlay={0}
                   className="absolute inset-0 h-full w-full"
                   style={{
-                    height: '100%',
-                    width: '100%',
+                    height: "100%",
+                    width: "100%",
                   }}
                 />
 
-                {/* Deep Oceanic overlay */}
                 <div
                   className="absolute inset-0"
                   style={{
                     background:
-                      'linear-gradient(180deg, rgba(18,58,107,0.08) 0%, rgba(18,58,107,0.32) 100%)',
+                      "linear-gradient(180deg, rgba(18,58,107,0.08) 0%, rgba(18,58,107,0.32) 100%)",
                   }}
                 />
               </div>
@@ -236,7 +438,12 @@ export default function Hero() {
                   }}
                   transition={{
                     duration: 0.45,
-                    ease: [0.22, 1, 0.36, 1],
+                    ease: [
+                      0.22,
+                      1,
+                      0.36,
+                      1,
+                    ],
                   }}
                   className="
                     mx-auto
@@ -264,15 +471,20 @@ export default function Hero() {
                     </h2>
 
                     <p className="pt-4 text-base leading-[150%] text-[#EAF7FB]/90 sm:text-lg">
-                      Whether you're a developer building with AI
-                      or a business exploring reliable AI powered
-                      software development, we'd love to hear
-                      from you.
+                      Whether you're a
+                      developer building
+                      with AI or a business
+                      exploring reliable AI
+                      powered software
+                      development, we'd love
+                      to hear from you.
                     </p>
 
                     <p className="text-base leading-[150%] text-[#EAF7FB]/90 sm:text-lg">
-                      See how Wizard can help you understand,
-                      verify, and improve your software with
+                      See how Wizard can
+                      help you understand,
+                      verify, and improve
+                      your software with
                       evidence you can trust.
                     </p>
 
@@ -282,8 +494,10 @@ export default function Hero() {
                       </p>
 
                       <p className="text-lg leading-[150%] text-[#EAF7FB] sm:text-xl lg:text-2xl">
-                        “Wizard gives our team confidence that
-                        what AI builds actually works.”
+                        “Wizard gives our
+                        team confidence that
+                        what AI builds
+                        actually works.”
                       </p>
                     </div>
                   </div>
@@ -291,7 +505,9 @@ export default function Hero() {
                   {/* Form */}
                   <div className="w-full flex-1">
                     <form
-                      onSubmit={handleSubmit}
+                      onSubmit={
+                        handleSubmit
+                      }
                       className="space-y-4 sm:space-y-5"
                     >
                       {/* Name */}
@@ -431,18 +647,25 @@ export default function Hero() {
                               focus:ring-[#7FC6E6]/15
                             "
                           >
-                            <option value="" disabled>
+                            <option
+                              value=""
+                              disabled
+                            >
                               Select your role
                             </option>
+
                             <option value="Developer">
                               Developer
                             </option>
+
                             <option value="Founder">
                               Founder
                             </option>
+
                             <option value="Engineering Leader">
                               Engineering Leader
                             </option>
+
                             <option value="Other">
                               Other
                             </option>
@@ -489,16 +712,21 @@ export default function Hero() {
                         mode="wait"
                         initial={false}
                       >
-                        {submissionStatus === 'error' && (
+                        {submissionStatus ===
+                          "error" && (
                           <motion.p
                             key="error"
                             role="alert"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
+                            initial={{
+                              opacity: 0,
+                            }}
+                            animate={{
+                              opacity: 1,
+                            }}
                             className="text-sm text-[#EAF7FB]"
                           >
-                            Something went wrong. Please try
-                            again.
+                            Something went wrong.
+                            Please try again.
                           </motion.p>
                         )}
                       </AnimatePresence>
@@ -508,17 +736,24 @@ export default function Hero() {
                         type="submit"
                         disabled={
                           isSubmitting ||
-                          submissionStatus === 'success'
+                          submissionStatus ===
+                            "success"
                         }
                         animate={{
                           backgroundColor:
-                            submissionStatus === 'success'
-                              ? '#19D66B'
-                              : '#EAF7FB',
+                            submissionStatus ===
+                            "success"
+                              ? "#19D66B"
+                              : "#EAF7FB",
                         }}
                         transition={{
                           duration: 0.45,
-                          ease: [0.22, 1, 0.36, 1],
+                          ease: [
+                            0.22,
+                            1,
+                            0.36,
+                            1,
+                          ],
                         }}
                         className="
                           relative
@@ -538,16 +773,18 @@ export default function Hero() {
                           disabled:cursor-default
                         "
                         aria-label={
-                          submissionStatus === 'success'
-                            ? 'Form submitted'
-                            : 'Submit form'
+                          submissionStatus ===
+                          "success"
+                            ? "Form submitted"
+                            : "Submit form"
                         }
                       >
                         <AnimatePresence
                           mode="wait"
                           initial={false}
                         >
-                          {submissionStatus === 'success' ? (
+                          {submissionStatus ===
+                          "success" ? (
                             <motion.svg
                               key="check"
                               viewBox="0 0 28 20"
@@ -569,7 +806,12 @@ export default function Hero() {
                                 }}
                                 transition={{
                                   duration: 0.65,
-                                  ease: [0.65, 0, 0.35, 1],
+                                  ease: [
+                                    0.65,
+                                    0,
+                                    0.35,
+                                    1,
+                                  ],
                                 }}
                               />
                             </motion.svg>
@@ -584,8 +826,8 @@ export default function Hero() {
                               }}
                             >
                               {isSubmitting
-                                ? 'Sending…'
-                                : 'Submit'}
+                                ? "Sending…"
+                                : "Submit"}
                             </motion.span>
                           )}
                         </AnimatePresence>
@@ -623,5 +865,5 @@ export default function Hero() {
         )}
       </AnimatePresence>
     </>
-  );
+  )
 }

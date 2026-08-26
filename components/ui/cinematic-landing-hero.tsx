@@ -6,6 +6,7 @@ import { Browser } from "@/components/ui/browser"
 import { FileTree, wizardFileStructure } from "@/components/ui/file-tree"
 import { MacbookPro } from "@/components/ui/macbook-pro"
 import AIAgentPipeline from "@/components/ui/ai-agent-pipeline"
+import { GradientBackground } from "@/components/ui/oceanic-shimmer"
 
 interface GradientProps extends React.HTMLAttributes<HTMLDivElement> {
   speed?: number
@@ -20,10 +21,9 @@ export function SafeMeshGradient({
   className,
 }: GradientProps) {
   return (
-    <div
-      aria-hidden="true"
+    <GradientBackground
       className={cn(
-        "absolute inset-0 bg-[linear-gradient(135deg,#2452F1_0%,#163DB9_48%,#022474_100%)]",
+        "absolute inset-0",
         className
       )}
     />

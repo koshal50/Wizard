@@ -16,575 +16,725 @@ interface AsciiArtProps {
 }
 
 const FRAME_COUNT = 240
-const FRAME_PATH = "/cinematic/wizard-frames"
 
-const INITIAL_FRAMES = 12
-const LOAD_BATCH_SIZE = 12
-const MAX_CACHED_FRAMES = 48
+const FRAME_PATH = (index: number) =>
+  `/cinematic/wizard-frames/frame_${String(
+    index + 1
+  ).padStart(4, "0")}.webp`
+
+const MAX_DPR = 1
+
+const PRELOAD_AHEAD = 24
+
+const INITIAL_PRELOAD = 48
+
+const FRAME_EPSILON = 0.002
+
+type FrameImage = HTMLImageElement | null
 
 export const AsciiArt = forwardRef<
   AsciiArtHandle,
   AsciiArtProps
 >(function AsciiArt({ className }, ref) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const canvasRef =
+    useRef<HTMLCanvasElement>(null)
 
-  const targetProgressRef = useRef(0)
-  const currentFrameRef = useRef(0)
+  const containerRef =
+    useRef<HTMLDivElement>(null)
 
-  const imagesRef = useRef<
-    Map<number, HTMLImageElement>
-  >(new Map())
+  const framesRef =
+    useRef<FrameImage[]>(
+      new Array(FRAME_COUNT).fill(null)
+    )
 
-  const loadingRef = useRef<
-    Set<number>
-  >(new Set())
+  const loadingRef =
+    useRef<boolean[]>(
+      new Array(FRAME_COUNT).fill(false)
+    )
 
-  const loadedRef = useRef<
-    Set<number>
-  >(new Set())
+  const loadedRef =
+    useRef<boolean[]>(
+      new Array(FRAME_COUNT).fill(false)
+    )
 
-  const frameRequestRef =
+  const targetProgressRef =
+    useRef(0)
+
+  const renderedFrameRef =
+    useRef(-1)
+
+  const requestedFrameRef =
+    useRef(0)
+
+  const animationFrameRef =
     useRef<number | null>(null)
 
-  const renderRequestRef =
+  const preloadCursorRef =
+    useRef(0)
+
+  const resizeFrameRef =
     useRef<number | null>(null)
+
+  const readyRef =
+    useRef(false)
 
   const destroyedRef =
     useRef(false)
 
-  const lastWidthRef =
+  const canvasWidthRef =
     useRef(0)
 
-  const lastHeightRef =
+  const canvasHeightRef =
     useRef(0)
 
-  const dprRef =
-    useRef(1)
+  const drawFrame =
+    (frameIndex: number) => {
+      const canvas =
+        canvasRef.current
 
-  const lastRenderedFrameRef =
-    useRef(-1)
+      if (!canvas) {
+        return
+      }
 
-  const drawFrame = (
-    frameNumber: number
-  ) => {
-    const canvas =
-      canvasRef.current
+      const image =
+        framesRef.current[
+          frameIndex
+        ]
 
-    if (!canvas) return
+      if (!image) {
+        return
+      }
 
-    const image =
-      imagesRef.current.get(
-        frameNumber
-      )
+      const ctx =
+        canvas.getContext("2d", {
+          alpha: false,
+          desynchronized: true,
+        })
 
-    if (!image || !image.complete) {
-      return
-    }
+      if (!ctx) {
+        return
+      }
 
-    const context =
-      canvas.getContext("2d", {
-        alpha: false,
-        desynchronized: true,
-      })
+      const canvasWidth =
+        canvasWidthRef.current
 
-    if (!context) return
+      const canvasHeight =
+        canvasHeightRef.current
 
-    const rect =
-      canvas.getBoundingClientRect()
-
-    const width =
-      Math.max(
-        1,
-        Math.round(rect.width)
-      )
-
-    const height =
-      Math.max(
-        1,
-        Math.round(rect.height)
-      )
-
-    const dpr =
-      Math.min(
-        window.devicePixelRatio || 1,
-        2
-      )
-
-    if (
-      lastWidthRef.current !==
-        width ||
-      lastHeightRef.current !==
-        height ||
-      dprRef.current !== dpr
-    ) {
-      canvas.width =
-        Math.round(width * dpr)
-
-      canvas.height =
-        Math.round(height * dpr)
-
-      lastWidthRef.current =
-        width
-
-      lastHeightRef.current =
-        height
-
-      dprRef.current = dpr
-
-      context.setTransform(
-        dpr,
-        0,
-        0,
-        dpr,
-        0,
-        0
-      )
-    }
-
-    context.clearRect(
-      0,
-      0,
-      width,
-      height
-    )
-
-    const imageWidth =
-      image.naturalWidth
-
-    const imageHeight =
-      image.naturalHeight
-
-    if (
-      !imageWidth ||
-      !imageHeight
-    ) {
-      return
-    }
-
-    /*
-     * Equivalent to object-fit: cover.
-     *
-     * The image itself scales.
-     * Nothing outside the cinematic
-     * background is transformed here.
-     */
-    const scale =
-      Math.max(
-        width / imageWidth,
-        height / imageHeight
-      )
-
-    const drawWidth =
-      imageWidth * scale
-
-    const drawHeight =
-      imageHeight * scale
-
-    const x =
-      (width - drawWidth) / 2
-
-    const y =
-      (height - drawHeight) / 2
-
-    context.drawImage(
-      image,
-      x,
-      y,
-      drawWidth,
-      drawHeight
-    )
-
-    lastRenderedFrameRef.current =
-      frameNumber
-  }
-
-  const loadFrame = (
-    frameNumber: number
-  ) => {
-    if (
-      frameNumber < 0 ||
-      frameNumber >= FRAME_COUNT
-    ) {
-      return
-    }
-
-    if (
-      loadedRef.current.has(
-        frameNumber
-      )
-    ) {
-      return
-    }
-
-    if (
-      loadingRef.current.has(
-        frameNumber
-      )
-    ) {
-      return
-    }
-
-    loadingRef.current.add(
-      frameNumber
-    )
-
-    const image =
-      new Image()
-
-    image.decoding = "async"
-
-    image.onload = () => {
       if (
-        destroyedRef.current
+        canvasWidth <= 0 ||
+        canvasHeight <= 0
       ) {
         return
       }
 
-      imagesRef.current.set(
-        frameNumber,
-        image
-      )
-
-      loadedRef.current.add(
-        frameNumber
-      )
-
-      loadingRef.current.delete(
-        frameNumber
-      )
-
       /*
-       * If this is currently requested,
-       * render it immediately.
+       * Cover calculation.
+       *
+       * The source is 16:9.
+       * The canvas follows the viewport.
        */
-      const targetFrame =
-        Math.round(
-          targetProgressRef.current *
-            (FRAME_COUNT - 1)
-        )
+      const imageWidth =
+        image.naturalWidth
+
+      const imageHeight =
+        image.naturalHeight
 
       if (
-        targetFrame ===
-        frameNumber
+        imageWidth <= 0 ||
+        imageHeight <= 0
       ) {
-        drawFrame(frameNumber)
+        return
+      }
+
+      const scale =
+        Math.max(
+          canvasWidth /
+            imageWidth,
+          canvasHeight /
+            imageHeight
+        )
+
+      const drawWidth =
+        imageWidth * scale
+
+      const drawHeight =
+        imageHeight * scale
+
+      const x =
+        (canvasWidth -
+          drawWidth) /
+        2
+
+      const y =
+        (canvasHeight -
+          drawHeight) /
+        2
+
+      ctx.drawImage(
+        image,
+        x,
+        y,
+        drawWidth,
+        drawHeight
+      )
+
+      renderedFrameRef.current =
+        frameIndex
+    }
+
+  const loadFrame =
+    (index: number) => {
+      if (
+        index < 0 ||
+        index >= FRAME_COUNT
+      ) {
+        return
+      }
+
+      if (
+        loadedRef.current[index] ||
+        loadingRef.current[index]
+      ) {
+        return
+      }
+
+      loadingRef.current[index] =
+        true
+
+      const image =
+        new Image()
+
+      image.decoding = "async"
+
+      image.loading = "eager"
+
+      image.src =
+        FRAME_PATH(index)
+
+      image.onload = () => {
+        if (destroyedRef.current) {
+          return
+        }
+
+        framesRef.current[index] =
+          image
+
+        loadedRef.current[index] =
+          true
+
+        loadingRef.current[index] =
+          false
+
+        /*
+         * If this is the frame currently
+         * requested by scroll, render it
+         * immediately on the next RAF.
+         */
+        if (
+          requestedFrameRef.current ===
+          index
+        ) {
+          if (
+            animationFrameRef.current ===
+            null
+          ) {
+            animationFrameRef.current =
+              window.requestAnimationFrame(
+                render
+              )
+          }
+        }
+      }
+
+      image.onerror = () => {
+        loadingRef.current[index] =
+          false
       }
     }
-
-    image.onerror = () => {
-      loadingRef.current.delete(
-        frameNumber
-      )
-    }
-
-    image.src =
-      `${FRAME_PATH}/frame_${String(
-        frameNumber + 1
-      ).padStart(4, "0")}.webp`
-  }
-
-  const maintainCache = (
-    centerFrame: number
-  ) => {
-    if (
-      imagesRef.current.size <=
-      MAX_CACHED_FRAMES
-    ) {
-      return
-    }
-
-    const entries =
-      Array.from(
-        imagesRef.current.keys()
-      )
-
-    entries.sort(
-      (a, b) =>
-        Math.abs(
-          a - centerFrame
-        ) -
-        Math.abs(
-          b - centerFrame
-        )
-    )
-
-    const keep =
-      new Set(
-        entries.slice(
-          0,
-          MAX_CACHED_FRAMES
-        )
-      )
-
-    for (
-      const frame of entries
-    ) {
-      if (!keep.has(frame)) {
-        imagesRef.current.delete(
-          frame
-        )
-
-        loadedRef.current.delete(
-          frame
-        )
-      }
-    }
-  }
 
   const preloadAround =
     (centerFrame: number) => {
+      const start =
+        Math.max(
+          0,
+          centerFrame
+        )
+
+      const end =
+        Math.min(
+          FRAME_COUNT - 1,
+          centerFrame +
+            PRELOAD_AHEAD
+        )
+
       /*
-       * Load slightly ahead and behind.
-       *
-       * This means fast scrolling does
-       * not immediately hit an unloaded
-       * frame.
+       * Load the current frame first.
        */
-      const radius =
-        LOAD_BATCH_SIZE
+      loadFrame(centerFrame)
 
+      /*
+       * Then load frames in both
+       * directions around the current
+       * position.
+       */
       for (
-        let offset = -radius;
-        offset <= radius;
-        offset++
+        let distance = 1;
+        distance <=
+        PRELOAD_AHEAD;
+        distance++
       ) {
-        const frame =
-          centerFrame + offset
+        loadFrame(
+          centerFrame +
+            distance
+        )
 
-        loadFrame(frame)
+        loadFrame(
+          centerFrame -
+            distance
+        )
       }
 
-      maintainCache(
-        centerFrame
-      )
+      /*
+       * Keep the variables explicit so
+       * this function remains easy to
+       * tune later.
+       */
+      void start
+      void end
+    }
+
+  const render =
+    () => {
+      animationFrameRef.current =
+        null
+
+      if (destroyedRef.current) {
+        return
+      }
+
+      const targetFrame =
+        requestedFrameRef.current
+
+      if (
+        targetFrame ===
+        renderedFrameRef.current
+      ) {
+        return
+      }
+
+      const image =
+        framesRef.current[
+          targetFrame
+        ]
+
+      if (!image) {
+        /*
+         * Never synchronously decode here.
+         *
+         * The frame loader will render
+         * once the image becomes available.
+         */
+        return
+      }
+
+      drawFrame(targetFrame)
+    }
+
+  const scheduleRender =
+    () => {
+      if (
+        animationFrameRef.current !==
+        null
+      ) {
+        return
+      }
+
+      animationFrameRef.current =
+        window.requestAnimationFrame(
+          render
+        )
     }
 
   useImperativeHandle(
     ref,
     () => ({
-      setProgress(progress) {
-        const value =
-          Math.min(
-            1,
-            Math.max(
-              0,
+      setProgress(
+        progress: number
+      ) {
+        const clamped =
+          Math.max(
+            0,
+            Math.min(
+              1,
               progress
             )
           )
 
-        targetProgressRef.current =
-          value
-
+        /*
+         * Ignore microscopic scroll
+         * changes that map to the same
+         * cinematic frame.
+         */
         if (
-          frameRequestRef.current ===
-          null
+          Math.abs(
+            clamped -
+              targetProgressRef.current
+          ) <
+          FRAME_EPSILON
         ) {
-          frameRequestRef.current =
-            window.requestAnimationFrame(
-              () => {
-                frameRequestRef.current =
-                  null
-
-                const frame =
-                  Math.round(
-                    targetProgressRef.current *
-                      (FRAME_COUNT - 1)
-                  )
-
-                if (
-                  frame ===
-                  currentFrameRef.current
-                ) {
-                  return
-                }
-
-                currentFrameRef.current =
-                  frame
-
-                preloadAround(
-                  frame
-                )
-
-                const image =
-                  imagesRef.current.get(
-                    frame
-                  )
-
-                if (image) {
-                  if (
-                    renderRequestRef.current ===
-                    null
-                  ) {
-                    renderRequestRef.current =
-                      window.requestAnimationFrame(
-                        () => {
-                          renderRequestRef.current =
-                            null
-
-                          drawFrame(
-                            frame
-                          )
-                        }
-                      )
-                  }
-                } else {
-                  /*
-                   * If the exact frame is
-                   * not ready, find the closest
-                   * already decoded frame.
-                   */
-                  let closest =
-                    -1
-
-                  let distance =
-                    Infinity
-
-                  for (
-                    const loadedFrame of
-                      loadedRef.current
-                  ) {
-                    const nextDistance =
-                      Math.abs(
-                        loadedFrame -
-                          frame
-                      )
-
-                    if (
-                      nextDistance <
-                      distance
-                    ) {
-                      distance =
-                        nextDistance
-
-                      closest =
-                        loadedFrame
-                    }
-                  }
-
-                  if (
-                    closest >= 0 &&
-                    renderRequestRef.current ===
-                      null
-                  ) {
-                    renderRequestRef.current =
-                      window.requestAnimationFrame(
-                        () => {
-                          renderRequestRef.current =
-                            null
-
-                          drawFrame(
-                            closest
-                          )
-                        }
-                      )
-                  }
-                }
-              }
-            )
+          return
         }
+
+        targetProgressRef.current =
+          clamped
+
+        const frame =
+          Math.min(
+            FRAME_COUNT - 1,
+            Math.max(
+              0,
+              Math.round(
+                clamped *
+                  (FRAME_COUNT -
+                    1)
+              )
+            )
+          )
+
+        requestedFrameRef.current =
+          frame
+
+        /*
+         * Start preparing frames around
+         * the user's current position.
+         */
+        preloadAround(frame)
+
+        scheduleRender()
       },
     }),
     []
   )
 
   useEffect(() => {
-    destroyedRef.current =
-      false
-
-    /*
-     * Load the first small group.
-     *
-     * We deliberately do not load all
-     * 240 images on mount.
-     */
-    for (
-      let frame = 0;
-      frame < INITIAL_FRAMES;
-      frame++
-    ) {
-      loadFrame(frame)
-    }
-
-    const resizeObserver =
-      new ResizeObserver(() => {
-        lastWidthRef.current = 0
-        lastHeightRef.current = 0
-
-        const frame =
-          currentFrameRef.current
-
-        const image =
-          imagesRef.current.get(
-            frame
-          )
-
-        if (image) {
-          drawFrame(frame)
-        }
-      })
-
     const canvas =
       canvasRef.current
 
-    if (canvas) {
-      resizeObserver.observe(
-        canvas
-      )
+    const container =
+      containerRef.current
+
+    if (
+      !canvas ||
+      !container
+    ) {
+      return
     }
+
+    destroyedRef.current =
+      false
+
+    const ctx =
+      canvas.getContext("2d", {
+        alpha: false,
+        desynchronized: true,
+      })
+
+    if (!ctx) {
+      return
+    }
+
+    const resize =
+      () => {
+        resizeFrameRef.current =
+          null
+
+        const rect =
+          container.getBoundingClientRect()
+
+        const width =
+          Math.max(
+            1,
+            Math.round(
+              rect.width
+            )
+          )
+
+        const height =
+          Math.max(
+            1,
+            Math.round(
+              rect.height
+            )
+          )
+
+        const dpr =
+          Math.min(
+            window.devicePixelRatio ||
+              1,
+            MAX_DPR
+          )
+
+        canvasWidthRef.current =
+          width
+
+        canvasHeightRef.current =
+          height
+
+        canvas.width =
+          Math.round(
+            width * dpr
+          )
+
+        canvas.height =
+          Math.round(
+            height * dpr
+          )
+
+        canvas.style.width =
+          `${width}px`
+
+        canvas.style.height =
+          `${height}px`
+
+        /*
+         * We intentionally render at
+         * a maximum DPR of 1.
+         */
+        ctx.setTransform(
+          dpr,
+          0,
+          0,
+          dpr,
+          0,
+          0
+        )
+
+        /*
+         * Repaint the current frame
+         * after resize.
+         */
+        const current =
+          renderedFrameRef.current
+
+        if (
+          current >= 0 &&
+          framesRef.current[
+            current
+          ]
+        ) {
+          drawFrame(current)
+        }
+      }
+
+    const scheduleResize =
+      () => {
+        if (
+          resizeFrameRef.current !==
+          null
+        ) {
+          return
+        }
+
+        resizeFrameRef.current =
+          window.requestAnimationFrame(
+            resize
+          )
+      }
+
+    const resizeObserver =
+      new ResizeObserver(
+        scheduleResize
+      )
+
+    resizeObserver.observe(
+      container
+    )
+
+    window.addEventListener(
+      "resize",
+      scheduleResize,
+      {
+        passive: true,
+      }
+    )
+
+    resize()
+
+    /*
+     * Load the first chunk immediately.
+     *
+     * This means the cinematic is
+     * already populated before the
+     * user starts interacting with it.
+     */
+    const initialCount =
+      Math.min(
+        INITIAL_PRELOAD,
+        FRAME_COUNT
+      )
+
+    for (
+      let index = 0;
+      index < initialCount;
+      index++
+    ) {
+      loadFrame(index)
+    }
+
+    /*
+     * Continue loading the remaining
+     * frames gradually.
+     *
+     * This avoids decoding 240 images
+     * in one giant blocking operation.
+     */
+    const preloadRemaining =
+      () => {
+        if (
+          destroyedRef.current
+        ) {
+          return
+        }
+
+        const batchSize = 8
+
+        const start =
+          preloadCursorRef.current
+
+        const end =
+          Math.min(
+            FRAME_COUNT,
+            start +
+              batchSize
+          )
+
+        for (
+          let index = start;
+          index < end;
+          index++
+        ) {
+          loadFrame(index)
+        }
+
+        preloadCursorRef.current =
+          end
+
+        if (
+          end < FRAME_COUNT
+        ) {
+          window.setTimeout(
+            preloadRemaining,
+            50
+          )
+        }
+      }
+
+    preloadCursorRef.current =
+      initialCount
+
+    window.setTimeout(
+      preloadRemaining,
+      100
+    )
+
+    readyRef.current =
+      true
 
     return () => {
       destroyedRef.current =
         true
 
+      readyRef.current =
+        false
+
       resizeObserver.disconnect()
 
+      window.removeEventListener(
+        "resize",
+        scheduleResize
+      )
+
       if (
-        frameRequestRef.current !==
+        animationFrameRef.current !==
         null
       ) {
-        cancelAnimationFrame(
-          frameRequestRef.current
+        window.cancelAnimationFrame(
+          animationFrameRef.current
         )
 
-        frameRequestRef.current =
+        animationFrameRef.current =
           null
       }
 
       if (
-        renderRequestRef.current !==
+        resizeFrameRef.current !==
         null
       ) {
-        cancelAnimationFrame(
-          renderRequestRef.current
+        window.cancelAnimationFrame(
+          resizeFrameRef.current
         )
 
-        renderRequestRef.current =
+        resizeFrameRef.current =
           null
       }
 
-      imagesRef.current.clear()
-      loadedRef.current.clear()
-      loadingRef.current.clear()
+      /*
+       * Release image references so
+       * the browser can reclaim memory
+       * when this component unmounts.
+       */
+      framesRef.current =
+        new Array(
+          FRAME_COUNT
+        ).fill(null)
+
+      loadedRef.current =
+        new Array(
+          FRAME_COUNT
+        ).fill(false)
+
+      loadingRef.current =
+        new Array(
+          FRAME_COUNT
+        ).fill(false)
     }
   }, [])
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
+      ref={containerRef}
       className={className}
-      aria-label="Wizard cinematic world"
       style={{
-        display: "block",
+        position: "relative",
         width: "100%",
         height: "100%",
-        pointerEvents: "none",
-        background:
-          "#07131a",
+        overflow: "hidden",
+        background: "#000",
+        contain:
+          "layout paint size",
         transform:
           "translateZ(0)",
-        backfaceVisibility:
-          "hidden",
       }}
-    />
+    >
+      <canvas
+        ref={canvasRef}
+        aria-label="Wizard cinematic world"
+        role="img"
+        style={{
+          display: "block",
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          transform:
+            "translateZ(0)",
+          backfaceVisibility:
+            "hidden",
+        }}
+      />
+    </div>
   )
 })
+
+AsciiArt.displayName =
+  "AsciiArt"

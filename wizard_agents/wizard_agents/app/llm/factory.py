@@ -1,8 +1,9 @@
 """
 Factory for selecting an LLMProvider based on environment configuration.
 
-WIZARD_LLM_PROVIDER=mock (default) -> MockLLMProvider, no API key needed.
-WIZARD_LLM_PROVIDER=anthropic      -> AnthropicProvider, requires ANTHROPIC_API_KEY.
+WIZARD_LLM_PROVIDER=mock (default) -> MockLLMProvider, no server needed (tests/offline).
+WIZARD_LLM_PROVIDER=vllm            -> VLLMProvider, real runtime via a self-hosted
+                                       open-source model on vLLM's OpenAI-compatible API.
 """
 from __future__ import annotations
 
@@ -18,11 +19,11 @@ def get_llm_provider() -> LLMProvider:
     if provider_name == "mock":
         return MockLLMProvider()
 
-    if provider_name == "anthropic":
-        from app.llm.anthropic_provider import AnthropicProvider  # local import: optional dep
+    if provider_name == "vllm":
+        from app.llm.vllm_provider import VLLMProvider  # local import: keeps import graph light
 
-        return AnthropicProvider()
+        return VLLMProvider()
 
     raise ValueError(
-        f"Unknown WIZARD_LLM_PROVIDER='{provider_name}'. Supported: 'mock', 'anthropic'."
+        f"Unknown WIZARD_LLM_PROVIDER='{provider_name}'. Supported: 'mock', 'vllm'."
     )

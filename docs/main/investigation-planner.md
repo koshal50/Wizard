@@ -337,7 +337,7 @@ This includes:
 - Defining the escalation conditions (when does the Runtime escalate to the Planner vs. handling a result deterministically)
 - Coordinating with Shivam on how the Planner integrates with the Investigation Graph in the Runtime Engine
 
-**Tech stack: Undefined.** The Planner is primarily a prompt engineering and data format design problem. The LLM provider is also undefined — options include OpenAI, Anthropic, Google, or a local model via Ollama for the planning calls.
+**Tech stack: prompt engineering + data format design.** The LLM provider is a free, self-hosted **open-source model served through vLLM's OpenAI-compatible `/v1/chat/completions` endpoint** — the same provider and `WIZARD_LLM_BASE_URL` / `WIZARD_LLM_MODEL` configuration used by the Agent System (`app/llm/vllm_provider.py`, selected via `get_llm_provider()`). Both subsystems therefore share one open-source model and one integration pattern; no paid API is used.
 
 ---
 

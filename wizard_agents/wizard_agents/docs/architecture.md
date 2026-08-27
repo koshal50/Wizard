@@ -58,7 +58,7 @@ subsystem built independently.
 | Component | Responsibility |
 |---|---|
 | `app/contracts` | Pydantic schemas defining the exact input/output shape of both agents. This is the integration surface other subsystems build against. |
-| `app/llm` | `LLMProvider` abstraction plus `MockLLMProvider` (offline, deterministic) and `AnthropicProvider` (real). |
+| `app/llm` | `LLMProvider` abstraction plus `MockLLMProvider` (offline, deterministic) and `VLLMProvider` (real, open-source model via vLLM). |
 | `app/prompts` | System/user prompt templates for each agent. |
 | `app/validation` | Semantic validation of LLM output beyond Pydantic parsing (unknown tools, hallucinated claims, budget violations, etc). |
 | `app/explorer` | `ExplorerAgent` — turns an `ExplorerInput` into a validated `ExplorerOutput`. |

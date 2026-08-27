@@ -21,8 +21,8 @@ cp .env.example .env
 ```
 
 Defaults to `WIZARD_LLM_PROVIDER=mock`, which requires no further
-configuration. To use a real LLM, set `WIZARD_LLM_PROVIDER=anthropic` and
-`ANTHROPIC_API_KEY` — see `docs/llm_configuration.md`.
+configuration. To use a real LLM, set `WIZARD_LLM_PROVIDER=vllm` with
+`WIZARD_LLM_BASE_URL` and `WIZARD_LLM_MODEL` — see `docs/llm_configuration.md`.
 
 ## Run the API
 

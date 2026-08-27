@@ -4,51 +4,59 @@
 
 Set via the `WIZARD_LLM_PROVIDER` environment variable:
 
-| Value | Provider | Requires API key |
+| Value | Provider | Requires a server |
 |---|---|---|
-| `mock` (default) | `MockLLMProvider` | No |
-| `anthropic` | `AnthropicProvider` | Yes (`ANTHROPIC_API_KEY`) |
+| `mock` (default) | `MockLLMProvider` | No — tests / offline / deterministic dev |
+| `vllm` | `VLLMProvider` | Yes — a self-hosted vLLM instance (real runtime) |
 
-Selection happens in `app/llm/factory.py::get_llm_provider()`, used by
-both the API layer (`app/api/deps.py`) and can be called directly by
-other code.
+Selection happens in `app/llm/factory.py::get_llm_provider()`, used by the
+API layer (`app/api/deps.py`) and callable directly by other code (e.g. the
+Investigation Planner). Because agents depend only on the `LLMProvider`
+interface, switching providers is configuration, not code.
 
-## Running in mock mode (default, no key required)
+## Running in mock mode (default, no server required)
 
 ```bash
-# .env or shell
 WIZARD_LLM_PROVIDER=mock
 ```
 
 `MockLLMProvider` (`app/llm/mock_provider.py`) is fully deterministic: it
-builds `ExplorerOutput` / `VerificationOutput` directly from the
-structured input rather than parsing free text, using simple heuristics
-(prefer `read_file` if available; flag contradicted/missing/
-documentation-only claims). This is what the entire test suite and the
-example script run against, so the whole system — API, agents,
-validation — is exercisable and demonstrable with zero external
+builds `ExplorerOutput` / `VerificationOutput` directly from the structured
+input rather than parsing free text. The entire test suite and the example
+script run against it, so the whole system is exercisable with zero external
 dependencies.
 
-## Running with a real LLM
+## Running with a real, open-source LLM via vLLM
+
+vLLM serves open-source models (Llama, Qwen, Mistral, …) on your own hardware
+and exposes an **OpenAI-compatible** `POST /v1/chat/completions` endpoint — no
+per-token cost, no API key.
 
 ```bash
 # .env
-WIZARD_LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-WIZARD_LLM_MODEL=claude-sonnet-4-6   # optional, this is the default
+WIZARD_LLM_PROVIDER=vllm
+WIZARD_LLM_BASE_URL=http://localhost:8000   # vLLM default port
+WIZARD_LLM_MODEL=Qwen/Qwen2.5-7B-Instruct   # any model your vLLM serves
 ```
 
-`AnthropicProvider` (`app/llm/anthropic_provider.py`) calls the Anthropic
-Messages API, instructing the model (via the system prompt plus the
-target Pydantic model's JSON Schema) to return only a JSON object
-matching the schema. The response is parsed and validated with
-`response_model.model_validate(...)`; any parse or validation failure
-raises `LLMError`, which the agent layer turns into an
-`ExplorerAgentError` / `VerificationAgentError`.
+Start a server, for example:
 
-The API key is read from the environment only — it is never hard-coded,
-and `AnthropicProvider.__init__` fails fast with a clear message if it's
-missing.
+```bash
+python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-7B-Instruct
+```
+
+`VLLMProvider` (`app/llm/vllm_provider.py`) uses the already-installed `httpx`
+to POST to `{WIZARD_LLM_BASE_URL}/v1/chat/completions`. It enforces structure
+by appending the target Pydantic model's JSON Schema to the system prompt (and
+requesting `response_format=json_object`), then validates the response with
+`response_model.model_validate(...)`. Any parse or validation failure raises
+`LLMError`, which the agent layer turns into `ExplorerAgentError` /
+`VerificationAgentError`. No secrets are hard-coded — all configuration comes
+from the environment.
+
+The same `WIZARD_LLM_BASE_URL` / `WIZARD_LLM_MODEL` configuration is intended to
+be shared by the Investigation Planner, so both subsystems use one open-source
+model behind one integration pattern.
 
 ## Adding another provider
 
@@ -64,6 +72,6 @@ class LLMProvider(ABC):
     def name(self) -> str: ...
 ```
 
-Then add a branch in `app/llm/factory.py::get_llm_provider()`. No agent
-code changes are required — `ExplorerAgent` and `VerificationAgent` only
-depend on the `LLMProvider` interface.
+Then add a branch in `app/llm/factory.py::get_llm_provider()`. No agent code
+changes are required — `ExplorerAgent` and `VerificationAgent` only depend on
+the `LLMProvider` interface.

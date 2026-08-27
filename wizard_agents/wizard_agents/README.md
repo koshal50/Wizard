@@ -23,8 +23,8 @@ uvicorn app.api.main:app --reload   # http://localhost:8000/docs
 ## Stack
 
 Python, FastAPI, Pydantic, pytest, REST/JSON, Markdown, and a small LLM
-provider abstraction (`MockLLMProvider` for offline/dev, `AnthropicProvider`
-for production). No vector database, LangChain, or orchestration
+provider abstraction (`MockLLMProvider` for offline/dev, `VLLMProvider`
+for production via a self-hosted open-source model). No vector database, LangChain, or orchestration
 framework — the agents are stateless request/response transformations.
 
 ## Documentation
@@ -47,7 +47,7 @@ framework — the agents are stateless request/response transformations.
 wizard_agents/
   app/
     contracts/      Pydantic schemas (the integration surface)
-    llm/             LLMProvider abstraction, mock + Anthropic providers
+    llm/             LLMProvider abstraction, mock + vLLM providers
     prompts/         System/user prompt templates
     validation/       Semantic validation beyond Pydantic parsing
     explorer/        ExplorerAgent + tool registry

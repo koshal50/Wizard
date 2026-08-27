@@ -45,5 +45,5 @@ class LLMProvider(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Short identifier for logging/debugging, e.g. 'mock' or 'anthropic'."""
+        """Short identifier for logging/debugging, e.g. 'mock' or 'vllm'."""
         raise NotImplementedError

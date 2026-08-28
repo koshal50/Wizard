@@ -1,33 +1,37 @@
-# Dependencies
-node_modules/
-package*node_modules/
-# Build output
-dist/
-*.tsbuildinfo
+# Wizard — repository ignore rules
 
-# Python
+# Leftover runtime-engine working directory on this branch: virtualenv,
+# caches, compiled bytecode, and investigation output. The engine SOURCE
+# lives on other branches; on this branch this directory is NOT tracked and
+# must never be committed.
+wizard-runtime-engine/
+
+# Python bytecode / caches
 __pycache__/
 *.py[cod]
-*.egg-info/
+
+# Virtual environments
 .venv/
 venv/
+env/
+
+# Test cache
 .pytest_cache/
-.ruff_cache/
 
-# Env / secrets
-.env
-.env.local
+# Packaging build artifacts
+build/
+dist/
+*.egg-info/
 
-# Investigation runtime artifacts
+# Runtime investigation output written by the engine
 .wizard/
-investigations/
-*.log
 
-# OS / editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
+# Local environment / secrets (keep .env.example, ignore the real .env)
+.env
 
+# Node dependencies
+node_modules/
+package*node_modules/
 
-.agents
+# TypeScript build output
+*.tsbuildinfo

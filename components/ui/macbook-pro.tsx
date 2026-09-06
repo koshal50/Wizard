@@ -22,7 +22,7 @@ export function MacbookPro({
       <rect fill="currentColor" x="74.52" y="21.32" width="501.22" rx="5" ry="5" height="323.85" />
       {src && <image href={src} x="74.52" y="21.32" width="501.22" height="323.85" preserveAspectRatio="xMidYMid slice" clipPath="url(#roundedCorners)" />}
       <foreignObject x="74.52" y="21.32" width="501.22" height="323.85" clipPath="url(#roundedCorners)">
-        <div xmlns="http://www.w3.org/1999/xhtml" style={{ width: "100%", height: "100%" }}>{children}</div>
+        <div style={{ width: "100%", height: "100%" }}>{children}</div>
       </foreignObject>
       <rect fill="#1d1d1d" x="69.09" y="350.51" width="512.11" height="12.48" />
       <path fill="#000" d="M298.14,21.02h54.07v6.5c0,1.56-1.27,2.82-2.82,2.82h-48.42c-1.56,0-2.82-2.82-2.82-2.82v-6.5h0Z" />

@@ -3,6 +3,7 @@ import type { Metadata } from "next"
 import { Suspense } from "react"
 import { Inter_Tight, JetBrains_Mono } from "next/font/google"
 import "./globals.css"
+import { PrivacyConsent } from "@/components/privacy-consent"
 
 const instrumentSans = Inter_Tight({
   variable: "--font-sans",
@@ -29,6 +30,7 @@ export default function RootLayout({
     <html lang="en" className="bg-black">
       <body className={`font-sans ${instrumentSans.variable} ${jetbrainsMono.variable}`}>
         <Suspense fallback={null}>{children}</Suspense>
+        <PrivacyConsent />
       </body>
     </html>
   )

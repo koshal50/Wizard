@@ -3,14 +3,11 @@
 import { ArrowUpRight, ExternalLink } from "lucide-react"
 
 const links = [
-  {
-    label: "Wizard website",
-    href: "https://wizardagents.vercel.app",
-  },
-  {
-    label: "Documentation",
-    href: "https://wizardagents.vercel.app",
-  },
+  { label: "Wizard website", href: "https://wizardagents.vercel.app" },
+  { label: "Privacy policy", href: "/privacy" },
+  { label: "Terms and conditions", href: "/terms" },
+  { label: "Cookie policy", href: "/cookies" },
+  { label: "Refund policy", href: "/refunds" },
 ]
 
 export function CinematicFooter() {

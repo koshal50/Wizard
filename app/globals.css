@@ -251,6 +251,14 @@
 @media (max-width: 640px) { .pipeline-report { margin: .5rem; }.pipeline-graph { min-height: 10.5rem; padding: .55rem; }.pipeline-node { width: 28%; }.pipeline-node strong { font-size: .5rem; }.pipeline-outputs { right: .5rem; font-size: .42rem; }.pipeline-stats { gap: .55rem; padding-inline: .6rem; }.pipeline-stack { display: none !important; } .pipeline-message { font-size: .42rem; } }
 
 
+.policy-content { color: rgb(183 206 221 / .78); font-size: .98rem; line-height: 1.8; }
+.policy-content section + section { margin-top: 2.5rem; }
+.policy-content h2 { color: #f5fafc; font-size: 1.25rem; font-weight: 600; letter-spacing: -.02em; }
+.policy-content p { margin-top: .85rem; }
+.policy-content ul { margin-top: .85rem; list-style: disc; padding-left: 1.35rem; }
+.policy-content li + li { margin-top: .45rem; }
+.policy-content a { color: #eaf7fb; text-decoration: underline; text-underline-offset: 4px; }
+
 /* Hide scrollbars while preserving scrolling */
 * {
   scrollbar-width: none;

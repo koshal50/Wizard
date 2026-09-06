@@ -826,10 +826,10 @@ export default function Hero() {
                           lg:text-2xl
                         "
                       >
-                        “Wizard gives our
-                        team confidence that
-                        what AI builds
-                        actually works.”
+                        Built to make
+                        AI-assisted work
+                        easier to inspect,
+                        execute, and verify.
                       </p>
                     </div>
                   </div>
@@ -1097,6 +1097,11 @@ export default function Hero() {
                           "
                         />
                       </div>
+
+                      <label className="flex items-start gap-3 text-xs leading-5 text-[#B7CEDD]">
+                        <input type="checkbox" name="consent" required className="mt-1 h-4 w-4 rounded border-[#7FC6E6]/30 bg-[#001F63] accent-[#EAF7FB] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7FC6E6]" />
+                        <span>I agree that Wizard may use the information I submit to respond to my request. I have read the <a href="/privacy" className="text-[#EAF7FB] underline underline-offset-4">Privacy Policy</a>.</span>
+                      </label>
 
                       <AnimatePresence
                         mode="wait"

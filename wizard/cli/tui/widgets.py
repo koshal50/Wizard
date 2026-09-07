@@ -1,6 +1,6 @@
 """Rich renderables for the TUI, plus the Rich -> ANSI bridge.
 
-The layout is a persistent two-pane split: the sun animation sits on the left,
+The layout is a persistent two-pane split: the wizard banner sits on the left,
 the current screen's content on the right. No borders — spacing and color do the
 framing so it reads calm and premium. prompt_toolkit stacks the real input box
 underneath; these views never own keyboard input.
@@ -19,8 +19,11 @@ from rich.text import Text
 
 from prompt_toolkit.formatted_text import ANSI
 
-from wizard.cli.tui.art import SUN_WIDTH, ember_frame, sunrise_frame
-from wizard.cli.tui.theme import WIZARD_THEME
+import math
+import os
+
+from wizard.cli.tui.pixelart import load_pixel_grid, render_frame
+from wizard.cli.tui.theme import EMBER_RAMP, WIZARD_THEME, ramp_at
 
 # One console, reused. truecolor so the hex ramps land exactly; force_terminal
 # so ANSI codes are emitted even though we're writing to a capture buffer.
@@ -33,6 +36,55 @@ _console = Console(
 
 _BRAND = "✦ wizard"
 
+# ---------------------------------------------------------------------------
+# Wizard banner — load the GIF once, render_frame does the fire flickering
+# ---------------------------------------------------------------------------
+
+_BANNER_W = 40
+_IMAGE_PATH = os.path.join(os.path.dirname(__file__), "wizard_banner_preview.gif")
+_wizard_grid: list | None = None
+
+
+def _ensure_grid() -> list:
+    global _wizard_grid
+    if _wizard_grid is None:
+        _wizard_grid = load_pixel_grid(_IMAGE_PATH, _BANNER_W)
+    return _wizard_grid
+
+
+# ---------------------------------------------------------------------------
+# Ember flame — small working indicator (was in art.py)
+# ---------------------------------------------------------------------------
+
+_FLAME_SHAPE = [
+    "  .o.  ",
+    " .oOo. ",
+    ".oO@Oo.",
+    ".oO@Oo.",
+    " :oOo: ",
+]
+_SHAPE_TO_RAMP = {".": 0.0, ":": 0.15, "o": 0.45, "O": 0.72, "@": 1.0}
+
+
+def ember_frame(t: float) -> Text:
+    """Build one frame of the flickering ember flame at time `t` seconds."""
+    breath = 0.5 + 0.5 * math.sin(t * 6.0)
+    out = Text()
+    for r, line in enumerate(_FLAME_SHAPE):
+        for c, ch in enumerate(line):
+            if ch == " ":
+                out.append(" ")
+                continue
+            pos = _SHAPE_TO_RAMP[ch]
+            jitter = 0.12 * math.sin(t * 9.0 + r * 1.7 + c * 0.9)
+            intensity = min(1.0, max(0.0, pos + jitter + 0.12 * breath))
+            col = ramp_at(EMBER_RAMP, intensity)
+            glyph = "█" if intensity > 0.7 else "▓" if intensity > 0.4 else "▒"
+            out.append(glyph, style=col)
+        if r != len(_FLAME_SHAPE) - 1:
+            out.append("\n")
+    return out
+
 
 def render_to_ansi(renderable: RenderableType, width: int) -> ANSI:
     """Render a Rich renderable at `width` columns into a prompt_toolkit ANSI."""
@@ -43,16 +95,15 @@ def render_to_ansi(renderable: RenderableType, width: int) -> ANSI:
 
 
 # ---------------------------------------------------------------------------
-# The two-pane frame: sun on the left, content on the right, no borders.
+# The two-pane frame: wizard banner on the left, content on the right, no borders.
 # ---------------------------------------------------------------------------
 
 def frame(t: float, right: RenderableType) -> RenderableType:
-    """Compose the persistent sun-left / content-right layout."""
+    """Compose the persistent wizard-banner-left / content-right layout."""
     grid = Table.grid(padding=(0, 4), expand=True)
-    grid.add_column(width=SUN_WIDTH + 1, justify="left")
+    grid.add_column(width=_BANNER_W + 1, justify="left")
     grid.add_column(justify="left", ratio=1)
-    # A blank top line on both sides so the content floats a little.
-    grid.add_row(Padding(sunrise_frame(t), (1, 0, 0, 1)), Padding(right, (2, 0, 0, 0)))
+    grid.add_row(Padding(render_frame(_ensure_grid()), (1, 0, 0, 1)), Padding(right, (2, 0, 0, 0)))
     return grid
 
 

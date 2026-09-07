@@ -1,2 +1,0 @@
-wizard
-wizard-runtime-engine

@@ -1,18 +1,24 @@
 """The Wizard TUI application — a single prompt_toolkit full-screen app.
 
-prompt_toolkit owns the event loop, the alternate screen, and all keyboard
-input; that single ownership is what keeps the screen from breaking and lets an
-input box stay live *during* an investigation. Rich only builds the content of
-the upper region (see widgets.py), which we rasterize to ANSI each frame.
+Layout:
+    ╭── wizard v0.2.0 ──────────┬──────────────────╮
+    │   Welcome back Koshal!     │ Recent activity   │  ← always visible
+    │   [wizard pixel art]       │ ...               │
+    │   v0.2.0 · API Usage ...   │                   │
+    ╰────────────────────────────┴──────────────────╯
 
-State machine:  SPLASH → MENU → INTENT → WORKING → RESULT
-A ~0.08s refresh drives the pulsing dot and verb animations; a background worker
-(session.py) streams real engine events and calls `app.invalidate()` to redraw.
+    ╭───────────────────────────────────────────────╮
+    │   [content changes by state]                   │  ← one persistent box
+    ╰───────────────────────────────────────────────╯
+
+    › [input prompt]
+
+No SPLASH state — the top panel IS the welcome, and the command menu is
+immediately visible below it. States: MENU → INTENT → WORKING → RESULT.
 """
 
 from __future__ import annotations
 
-import os
 import time
 
 from prompt_toolkit.application import Application
@@ -28,17 +34,16 @@ from prompt_toolkit.widgets import Frame, TextArea
 from wizard.cli.parser.command_parser import COMMAND_TARGETS
 from wizard.cli.tui.session import TuiSession
 from wizard.cli.tui.widgets import (
-    frame,
-    intent_right,
-    menu_right,
+    command_box_intent,
+    command_box_menu,
+    command_box_result,
+    command_box_working,
     render_to_ansi,
-    result_right,
-    splash_right,
-    working_right,
+    top_panel,
 )
 
-# Screen states
-SPLASH, MENU, INTENT, WORKING, RESULT = "splash", "menu", "intent", "working", "result"
+# Screen states (no SPLASH — menu is immediately visible)
+MENU, INTENT, WORKING, RESULT = "menu", "intent", "working", "result"
 
 # Command families offered in the menu, sourced live from the canonical
 # registry (no duplicate list). Order is stable/insertion order.
@@ -49,7 +54,7 @@ class WizardTUI:
     """Owns all mutable UI state and wires prompt_toolkit together."""
 
     def __init__(self) -> None:
-        self.state = SPLASH
+        self.state = MENU
         self._start = time.monotonic()
 
         # Menu selection state
@@ -57,8 +62,13 @@ class WizardTUI:
         self.selected = 0
         self.family: str | None = None
         self.target: str | None = None
+        self.raw_intent: str = ""           # last intent text for history
 
         self.session: TuiSession | None = None
+
+        # Cache the top panel renderable (only changes when history updates)
+        self._top_panel_cache = None
+        self._top_panel_dirty = True
 
         # --- input box (used in INTENT and WORKING) ---
         self.input = TextArea(
@@ -77,10 +87,19 @@ class WizardTUI:
         )
 
         input_visible = Condition(lambda: self.state in (INTENT, WORKING))
+        hint_visible = Condition(lambda: self.state == MENU)
+
+        # Hint line at the bottom
+        self.hint = Window(
+            content=FormattedTextControl(lambda: "  ? for shortcuts"),
+            height=1,
+        )
+
         root = HSplit(
             [
                 self.body,
                 ConditionalContainer(self.input_frame, filter=input_visible),
+                ConditionalContainer(self.hint, filter=hint_visible),
             ]
         )
 
@@ -108,43 +127,69 @@ class WizardTUI:
         try:
             return self.app.output.get_size().columns
         except Exception:
-            return 80
+            return 120
 
     # ------------------------------------------------------------------
     # Content rendering (per frame)
     # ------------------------------------------------------------------
     def _render_body(self):
+        from rich.console import Group
         w = self._width()
         t = self._t()
 
-        if self.state == SPLASH:
-            right = splash_right()
+        # Top panel (always visible)
+        header = top_panel()
 
-        elif self.state == MENU:
+        # Command box (content changes by state)
+        if self.state == MENU:
             options = FAMILIES if self.menu_level == "family" else self._targets()
-            right = menu_right(self.menu_level, options, self.selected, self.family)
+            box = command_box_menu(self.menu_level, options, self.selected, self.family)
 
         elif self.state == INTENT:
-            right = intent_right(self.family, self.target)
+            box = command_box_intent(self.family, self.target)
 
         elif self.state == WORKING:
             s = self.session
             if s:
                 snap = s.snapshot()
                 bullets = s.snapshot_activity()
-                right = working_right(snap, bullets, t)
+                box = command_box_working(snap, bullets, t)
+
+                # Auto-transition to RESULT when finished
+                if snap.get("finished") and not snap.get("running"):
+                    self.state = RESULT
+                    self.app.layout.focus(self.body)
+                    # Record to history
+                    self._record_history(snap.get("status", "completed"))
             else:
-                right = splash_right()
+                box = command_box_menu("family", FAMILIES, 0, None)
 
         elif self.state == RESULT:
             s = self.session
             snap = s.snapshot() if s else {}
-            right = result_right(snap.get("status", ""), snap.get("report_markdown", ""))
+            box = command_box_result(snap.get("status", ""), snap.get("report_markdown", ""))
 
         else:
-            right = splash_right()
+            box = command_box_menu("family", FAMILIES, 0, None)
 
-        return render_to_ansi(frame(t, right), w)
+        return render_to_ansi(Group(header, box), w)
+
+    # ------------------------------------------------------------------
+    # History recording
+    # ------------------------------------------------------------------
+    def _record_history(self, status: str) -> None:
+        """Record this run in the activity history file."""
+        try:
+            from wizard.cli.tui.history import record_run
+            record_run(
+                family=self.family or "?",
+                target=self.target,
+                intent=self.raw_intent,
+                status=status,
+            )
+            self._top_panel_dirty = True
+        except Exception:
+            pass  # history is non-critical
 
     # ------------------------------------------------------------------
     # Menu helpers
@@ -169,6 +214,7 @@ class WizardTUI:
         self.selected = 0
         self.family = None
         self.target = None
+        self.raw_intent = ""
         self.app.layout.focus(self.body)
 
     def _select(self) -> None:
@@ -209,14 +255,12 @@ class WizardTUI:
             if s and not s.finished:
                 with s._lock:
                     s.cancelled = True
-            elif s and s.finished:
-                self.state = RESULT
-                self.app.layout.focus(self.body)
         elif self.state == RESULT:
             self._enter_menu()
 
     def _begin_work(self, raw_intent: str) -> None:
         """Build the session and start streaming via the service functions."""
+        self.raw_intent = raw_intent
         self.session = TuiSession(
             family=self.family,
             target=self.target,
@@ -225,13 +269,10 @@ class WizardTUI:
         self.state = WORKING
         self.app.layout.focus(self.input)
         self.session.start()
-        # Non-empty free-text intent is queued locally (engine has no raw-intent
-        # field yet) so it is visible and preserved — see plan "wire later".
         if raw_intent.strip():
             self.session.add_steering(raw_intent)
 
     def _invalidate(self) -> None:
-        # Called from the worker thread; invalidate() is thread-safe.
         try:
             self.app.invalidate()
         except Exception:
@@ -251,7 +292,7 @@ class WizardTUI:
                 self.app.layout.focus(self.body)
             elif s:
                 s.add_steering(text)
-        return False  # never keep the text; we manage it ourselves
+        return False
 
     # ------------------------------------------------------------------
     # Key bindings
@@ -261,14 +302,12 @@ class WizardTUI:
 
         typing = Condition(lambda: self.state in (INTENT, WORKING))
         navigating = Condition(lambda: self.state == MENU)
-        on_splash = Condition(lambda: self.state == SPLASH)
 
         @kb.add("c-c")
         def _(event):
             event.app.exit()
 
-        # q quits only when not typing and not on the splash (there it advances).
-        @kb.add("q", filter=~typing & ~on_splash)
+        @kb.add("q", filter=~typing)
         def _(event):
             event.app.exit()
 
@@ -286,19 +325,9 @@ class WizardTUI:
         def _(event):
             self._select()
 
-        # Not eager: prompt_toolkit must disambiguate a lone Esc from the ESC
-        # prefix of arrow-key sequences, or menu navigation breaks.
         @kb.add("escape")
         def _(event):
-            if self.state == SPLASH:
-                self._enter_menu()
-            else:
-                self._back()
-
-        # Any key dismisses the splash.
-        @kb.add(Keys.Any, filter=on_splash)
-        def _(event):
-            self._enter_menu()
+            self._back()
 
         return kb
 

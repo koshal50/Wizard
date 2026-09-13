@@ -1,28 +1,38 @@
-"""Rich renderables for the TUI, plus the Rich -> ANSI bridge.
+r"""Rich renderables for the TUI, plus the Rich -> ANSI bridge.
 
-The layout is a persistent two-pane split: the wizard banner sits on the left,
-the current screen's content on the right. No borders — spacing and color do the
-framing so it reads calm and premium. prompt_toolkit stacks the real input box
-underneath; these views never own keyboard input.
+Layout matching Claude Code CLI startup screen:
 
-The WORKING state renders a Claude-Code-style live activity log:
-  ● Summoning the runtime…              (green dot = done)
-  ● Consulting Explorer                 (green dot = done)
-    └ Read 256 lines                    (dim sub-line)
-  ○ Verifying dependencies…             (pulsing hollow dot = running)
+    ╭── wizard v0.2.0 ─────────────────┬─────────────────────────╮
+    │   Welcome back Koshal!            │ Recent activity         │
+    │                                   │ investigate · auth …    │
+    │       [wizard pixel art]          │ verify · runtime …      │
+    │                                   │                         │
+    │  v0.2.0 · API Usage · mock tokens │                         │
+    │             ~\Wizard              │                         │
+    ╰───────────────────────────────────┴─────────────────────────╯
 
-  ✦ conjuring…
-  conjuring… (12s · 1,280 tokens · esc to interrupt)
+    ╭────────────────────────────────────────────────────────────╮
+    │  what shall we do?                                         │
+    │  ↑ ↓ to move · Enter to open                              │
+    │  ▸  investigate                                            │
+    │     verify / report / explain                              │
+    ╰────────────────────────────────────────────────────────────╯
 
-Each builder returns a Rich renderable; `render_to_ansi` rasterizes the composed
-frame to an ANSI string for a `FormattedTextControl`.
+    › [input prompt]
+
+One bordered box at the bottom holds all states (command picker, target
+picker, intent, working, result) — content swaps, box stays.
 """
+
 
 from __future__ import annotations
 
+from rich.box import ROUNDED
 from rich.console import Console, Group, RenderableType
+from rich.columns import Columns
 from rich.markdown import Markdown
 from rich.padding import Padding
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -32,7 +42,9 @@ import math
 import os
 import time
 
+from wizard import __version__
 from wizard.cli.tui.events import BulletRow
+from wizard.cli.tui.history import load_recent
 from wizard.cli.tui.pixelart import load_pixel_grid, render_frame
 from wizard.cli.tui.session import GERUNDS
 from wizard.cli.tui.theme import EMBER_RAMP, WIZARD_THEME, ramp_at
@@ -43,16 +55,30 @@ _console = Console(
     theme=WIZARD_THEME,
     force_terminal=True,
     color_system="truecolor",
-    width=80,
+    width=120,
 )
 
-_BRAND = "✦ wizard"
+# ---------------------------------------------------------------------------
+# Identity — dynamically replaceable when auth is wired up
+# ---------------------------------------------------------------------------
+
+# TODO(auth): Replace with real authenticated identity from the website/auth
+# system. For now, hardcoded to the project owner. When auth is built, this
+# should read from a session/config file (e.g. ~/.wizard/session.json).
+def get_username() -> str:
+    """Return the display name for the welcome message.
+
+    Currently returns a hardcoded name. Replace this function body
+    with the real auth lookup when the identity system is built.
+    """
+    return "Koshal"
+
 
 # ---------------------------------------------------------------------------
 # Wizard banner — load the GIF once, render_frame does the fire flickering
 # ---------------------------------------------------------------------------
 
-_BANNER_W = 40
+_BANNER_W = 32
 _IMAGE_PATH = os.path.join(os.path.dirname(__file__), "wizard_banner_preview.gif")
 _wizard_grid: list | None = None
 
@@ -70,9 +96,7 @@ def _ensure_grid() -> list:
 
 def _pulsing_dot(t: float) -> Text:
     """A hollow dot ○ that pulses between dim and bright."""
-    # Oscillate intensity between 0.3 and 1.0
     intensity = 0.65 + 0.35 * math.sin(t * 5.0)
-    # Interpolate between dim violet and bright amber
     col = ramp_at(EMBER_RAMP, intensity)
     return Text("○", style=col)
 
@@ -93,47 +117,105 @@ def _error_dot() -> Text:
 
 def render_to_ansi(renderable: RenderableType, width: int) -> ANSI:
     """Render a Rich renderable at `width` columns into a prompt_toolkit ANSI."""
-    _console.width = max(20, width)
+    _console.width = max(40, width)
     with _console.capture() as capture:
         _console.print(renderable, end="")
     return ANSI(capture.get())
 
 
 # ---------------------------------------------------------------------------
-# The two-pane frame: wizard banner on the left, content on the right, no borders.
+# TOP PANEL — wizard identity left, recent activity right (ROUNDED border)
 # ---------------------------------------------------------------------------
 
-def frame(t: float, right: RenderableType) -> RenderableType:
-    """Compose the persistent wizard-banner-left / content-right layout."""
-    grid = Table.grid(padding=(0, 4), expand=True)
-    grid.add_column(width=_BANNER_W + 1, justify="left")
-    grid.add_column(justify="left", ratio=1)
-    grid.add_row(Padding(render_frame(_ensure_grid()), (1, 0, 0, 1)), Padding(right, (2, 0, 0, 0)))
-    return grid
+def top_panel() -> RenderableType:
+    """Build the Claude-Code-style top panel with wizard identity + recent activity."""
+    username = get_username()
+    recent = load_recent(3)
 
+    # --- Left side: identity + mascot + footer ---
+    left_parts: list[RenderableType] = []
 
-# ---------------------------------------------------------------------------
-# Right-pane content per state (borderless)
-# ---------------------------------------------------------------------------
+    # Welcome line
+    welcome = Text()
+    welcome.append(f"Welcome back {username}!", style="wiz.welcome")
+    left_parts.append(welcome)
+    left_parts.append(Text(""))
 
-def splash_right() -> RenderableType:
-    """The quiet greeting shown beside the rising sun."""
-    return Group(
-        Text(_BRAND, style="wiz.accent"),
-        Text(""),
-        Text("a calmer way to question a codebase", style="wiz.dim"),
-        Text(""),
-        Text("press any key to begin", style="wiz.hint"),
+    # Wizard mascot (pixel art, centered)
+    mascot = render_frame(_ensure_grid())
+    left_parts.append(mascot)
+
+    left_parts.append(Text(""))
+
+    # Footer metadata
+    footer = Text(justify="center")
+    footer.append(f"v{__version__}", style="wiz.footer")
+    footer.append(" · ", style="wiz.footer")
+    footer.append("API Usage", style="wiz.footer")
+    footer.append(" · ", style="wiz.footer")
+    footer.append("mock tokens", style="wiz.footer")
+    left_parts.append(footer)
+
+    cwd_line = Text(justify="center")
+    cwd_line.append(f"~\\Wizard", style="wiz.footer")
+    left_parts.append(cwd_line)
+
+    left_content = Group(*left_parts)
+
+    # --- Right side: recent activity ---
+    right_parts: list[RenderableType] = []
+
+    activity_header = Text("Recent activity", style="wiz.activity")
+    right_parts.append(activity_header)
+    right_parts.append(Text(""))
+
+    if recent:
+        for entry in recent:
+            line = Text()
+            line.append(entry.display_line(), style="wiz.activity.line")
+            right_parts.append(line)
+    else:
+        right_parts.append(Text("No recent activity", style="wiz.dim"))
+
+    right_content = Group(*right_parts)
+
+    # --- Compose left+right into a split panel ---
+    grid = Table.grid(padding=(0, 3), expand=True)
+    grid.add_column(ratio=1, justify="center")
+    grid.add_column(ratio=1, justify="left")
+    grid.add_row(
+        Padding(left_content, (1, 1)),
+        Padding(right_content, (1, 1)),
+    )
+
+    # Title in the top border
+    title = Text()
+    title.append(f" wizard v{__version__} ", style="wiz.panel.title")
+
+    return Panel(
+        grid,
+        title=title,
+        title_align="left",
+        box=ROUNDED,
+        border_style="wiz.panel",
+        expand=True,
+        padding=(0, 1),
     )
 
 
-def menu_right(
+# ---------------------------------------------------------------------------
+# COMMAND BOX — single persistent bordered panel, content swaps by state
+# ---------------------------------------------------------------------------
+
+def command_box_menu(
     level: str,
     options: list[str],
     selected: int,
     family: str | None,
 ) -> RenderableType:
-    """Family or target selection list."""
+    """State A/B: command or target picker inside the command box."""
+    parts: list[RenderableType] = []
+
     if level == "family":
         heading = Text("what shall we do?", style="wiz.title")
         sub = Text("↑ ↓ to move  ·  Enter to open", style="wiz.dim")
@@ -141,43 +223,61 @@ def menu_right(
         heading = Text(f"{family}  ·  pick a target", style="wiz.title")
         sub = Text("↑ ↓ to move  ·  Enter to choose  ·  Esc to go back", style="wiz.dim")
 
+    parts.append(heading)
+    parts.append(sub)
+    parts.append(Text(""))
+
     rows = Text()
     for i, opt in enumerate(options):
         if i == selected:
-            rows.append("▸ ", style="wiz.cursor")
+            rows.append("  ▸ ", style="wiz.cursor")
             rows.append(f" {opt} ", style="wiz.selected")
         else:
-            rows.append("  ")
+            rows.append("    ")
             rows.append(opt, style="wiz.unselected")
         rows.append("\n")
 
-    return Group(Text(_BRAND, style="wiz.accent"), Text(""), heading, sub, Text(""), rows)
+    parts.append(rows)
+
+    return Panel(
+        Group(*parts),
+        box=ROUNDED,
+        border_style="wiz.panel",
+        expand=True,
+        padding=(1, 2),
+    )
 
 
-def intent_right(family: str, target: str | None) -> RenderableType:
-    """Prompt shown above the intent input box."""
+def command_box_intent(family: str, target: str | None) -> RenderableType:
+    """State C: intent input prompt inside the command box."""
     label = family if not target else f"{family} {target}"
-    return Group(
-        Text(_BRAND, style="wiz.accent"),
-        Text(""),
+
+    parts: list[RenderableType] = [
         Text("what's on your mind?", style="wiz.title"),
         Text(""),
         Text(f"about to run  ·  {label}", style="wiz.accent"),
         Text(""),
         Text("type an intent below, or leave it blank", style="wiz.dim"),
         Text("Enter to begin  ·  Esc to go back", style="wiz.hint"),
+    ]
+
+    return Panel(
+        Group(*parts),
+        box=ROUNDED,
+        border_style="wiz.panel",
+        expand=True,
+        padding=(1, 2),
     )
 
 
-def working_right(
+def command_box_working(
     snap: dict,
     bullets: list[BulletRow],
     t: float,
 ) -> RenderableType:
-    """Claude-Code-style working view: dot-lifecycle log + verb + counter."""
+    """State D: live working view inside the command box — dots + verb + counter."""
     running = snap.get("running", False)
     status = snap.get("status", "")
-    gerund = snap.get("gerund", "conjuring")
     tokens = snap.get("tokens", 0)
     cost = snap.get("cost", 0.0)
     elapsed_start = snap.get("elapsed_start", t)
@@ -188,18 +288,31 @@ def working_right(
     # --- Activity log (dot lifecycle) ---
     log = Text()
     for bullet in bullets:
-        # Dot
+        # Dot with blinking effect for running
         if bullet.status == "running":
             dot = _pulsing_dot(t)
             log.append_text(dot)
         elif bullet.status == "done":
             log.append_text(_done_dot())
-        else:  # error
+        else:
             log.append_text(_error_dot())
 
         # Step name
         name_style = "wiz.flow" if bullet.status != "error" else "wiz.err"
-        log.append(f" {bullet.step_name}\n", style=name_style)
+        log.append(f" {bullet.step_name}", style=name_style)
+
+        # Elapsed time for this step
+        if bullet.ended_at and bullet.started_at:
+            step_secs = int(bullet.ended_at - bullet.started_at)
+            if step_secs > 0:
+                log.append(f" ({step_secs}s)", style="wiz.meter")
+        elif bullet.status == "running":
+            live_secs = int(t - (bullet.started_at - (time.monotonic() - t - elapsed_start)) if bullet.started_at else 0)
+            # Show ticking seconds for running bullet
+            running_secs = max(0, int(time.monotonic() - bullet.started_at))
+            log.append(f" ({running_secs}s)", style="wiz.gerund")
+
+        log.append("\n")
 
         # Detail sub-line
         if bullet.detail:
@@ -215,7 +328,6 @@ def working_right(
 
     # --- Rotating verb line (only while running) ---
     if running and not cancelled:
-        # Cycle verb every ~500ms
         verb_idx = int(t * 2.0) % len(GERUNDS)
         current_verb = GERUNDS[verb_idx]
 
@@ -237,7 +349,6 @@ def working_right(
         counter.append(")", style="wiz.meter")
         parts.append(counter)
     elif not running:
-        # Show final status
         if status == "completed":
             final = Text("✦ done", style="wiz.ok")
         elif status == "engine_unavailable":
@@ -246,10 +357,8 @@ def working_right(
             final = Text("✦ cancelled", style="wiz.warn")
         else:
             final = Text(f"✦ {status}", style="wiz.warn")
-
         parts.append(final)
 
-        # Final counter
         elapsed = int(t - elapsed_start)
         meter = Text()
         meter.append(f"completed in {elapsed}s", style="wiz.meter")
@@ -260,11 +369,17 @@ def working_right(
         meter.append(" · mock usage", style="wiz.meter")
         parts.append(meter)
 
-    return Group(*parts)
+    return Panel(
+        Group(*parts),
+        box=ROUNDED,
+        border_style="wiz.panel",
+        expand=True,
+        padding=(1, 2),
+    )
 
 
-def result_right(status: str, report_markdown: str) -> RenderableType:
-    """Final report as markdown, badged by outcome — no border."""
+def command_box_result(status: str, report_markdown: str) -> RenderableType:
+    """State E: final report inside the command box."""
     if status == "completed":
         badge = Text("✓ complete", style="wiz.ok")
     elif status == "engine_unavailable":
@@ -290,10 +405,18 @@ def result_right(status: str, report_markdown: str) -> RenderableType:
     else:
         content = Text("No report was produced.", style="wiz.dim")
 
-    return Group(
+    parts = [
         badge,
         Text(""),
         content,
         Text(""),
         Text("Esc for menu  ·  q to quit", style="wiz.hint"),
+    ]
+
+    return Panel(
+        Group(*parts),
+        box=ROUNDED,
+        border_style="wiz.panel",
+        expand=True,
+        padding=(1, 2),
     )

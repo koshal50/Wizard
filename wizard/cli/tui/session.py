@@ -6,15 +6,19 @@ the command service generators (investigate/verify/report/explain) and *writes*
 them. All shared mutation goes through `_lock`, and every write calls the
 injected `on_change` callback so the app can `invalidate()` and redraw.
 
-The worker calls the appropriate command service function based on the selected
-family, which internally calls `stream_events()`. The token/cost meter is
-explicitly MOCK: agents aren't wired yet, so we increment a local ledger per
-event at a fixed synthetic rate. This is labelled as mock in the UI.
+When the Runtime Engine is not available, the worker runs a simulated sequence
+of steps with realistic random delays (1–7s each) to demonstrate the live UI.
+Each step shows a blinking running dot that resolves to done/error with visible
+elapsed time. This is labelled "mock" in the UI.
+
+The token/cost meter is explicitly MOCK: agents aren't wired yet, so we
+increment a local ledger per event at a fixed synthetic rate.
 """
 
 from __future__ import annotations
 
 import os
+import random
 import threading
 import time
 from dataclasses import dataclass, field
@@ -43,6 +47,40 @@ _TOKENS_PER_EVENT = {
 }
 _DEFAULT_EVENT_TOKENS = 50
 _RATE = 3.0e-6  # $ per token (mock)
+
+# ---------------------------------------------------------------------------
+# Simulated step sequences — shown when engine is unavailable. Each step is
+# (label, detail, min_sec, max_sec). The worker sleeps a random duration in
+# [min_sec, max_sec] per step, with the running dot blinking the whole time.
+# ---------------------------------------------------------------------------
+_SIM_STEPS: dict[str, list[tuple[str, str, int, int]]] = {
+    "investigate": [
+        ("Reading project structure", "scanning directories", 1, 3),
+        ("Analyzing source files", "parsing imports & modules", 2, 5),
+        ("Consulting Explorer agent", "mapping dependency graph", 2, 6),
+        ("Evaluating architecture patterns", "identifying design choices", 1, 4),
+        ("Compiling findings", "assembling evidence", 1, 3),
+    ],
+    "verify": [
+        ("Reading configuration files", "scanning config & manifests", 1, 3),
+        ("Checking runtime requirements", "validating environment", 2, 5),
+        ("Consulting Verifier agent", "running verification checks", 3, 7),
+        ("Cross-referencing claims", "comparing against known patterns", 2, 4),
+        ("Building verification report", "summarizing results", 1, 3),
+    ],
+    "report": [
+        ("Gathering verified knowledge", "reading claim graph", 1, 3),
+        ("Structuring report sections", "organizing by domain", 2, 4),
+        ("Generating markdown", "formatting findings", 2, 5),
+        ("Saving report to output/", "writing verification_report.md", 1, 2),
+    ],
+    "explain": [
+        ("Reading verified claims", "loading claim graph", 1, 3),
+        ("Selecting relevant evidence", "filtering by target", 2, 4),
+        ("Composing explanation", "generating human-readable summary", 2, 6),
+        ("Finalizing output", "formatting response", 1, 3),
+    ],
+}
 
 
 @dataclass
@@ -115,8 +153,6 @@ class TuiSession:
                 status="done",
                 detail="",
             ))
-        # TODO(engine): when a mid-investigation steering endpoint exists,
-        # flush self.steering to POST /v1/investigations/{id}/steer here.
         self.on_change()
 
     # ------------------------------------------------------------------
@@ -156,6 +192,21 @@ class TuiSession:
         self.on_change()
 
     # ------------------------------------------------------------------
+    # Simulated step sleep — broken into 0.1s ticks so cancellation is responsive
+    # ------------------------------------------------------------------
+    def _interruptible_sleep(self, seconds: float) -> bool:
+        """Sleep for `seconds`, checking cancellation every 0.1s.
+
+        Returns True if the sleep completed normally, False if cancelled.
+        """
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.cancelled:
+                return False
+            time.sleep(0.1)
+        return True
+
+    # ------------------------------------------------------------------
     # Worker lifecycle
     # ------------------------------------------------------------------
     def start(self) -> None:
@@ -166,33 +217,106 @@ class TuiSession:
             self.running = True
             self.status = "running"
             self.elapsed_start = time.monotonic()
-        self._start_bullet("summoning the runtime…")
         self._thread = threading.Thread(target=self._run, name="wiz-worker", daemon=True)
         self._thread.start()
 
     def _run(self) -> None:
         try:
-            # Import the appropriate command service function
+            # Try the real engine first
             event_gen = self._get_event_generator()
+            first_event = None
+            try:
+                first_event = next(event_gen)
+            except StopIteration:
+                pass
+
+            if first_event and first_event.get("event_type") == "engine_unavailable":
+                # Engine is not running — fall back to simulated steps
+                self._run_simulated()
+                return
+
+            # Engine is live — consume real events
+            if first_event:
+                self._start_bullet("connected to runtime engine")
+                self._consume(first_event)
             for ev in event_gen:
                 if self.cancelled:
-                    with self._lock:
-                        self.status = "cancelled"
-                        self.finished = True
-                        self.running = False
-                    self._resolve_running("error", "cancelled by user")
-                    self._add_error_bullet("cancelled", "user pressed Esc")
-                    self.on_change()
+                    self._handle_cancel()
                     return
                 self._consume(ev)
-        except Exception as exc:  # never let the worker kill the UI
-            with self._lock:
-                self.status = "failed"
-                self.finished = True
-                self.running = False
-            self._resolve_running("error", str(exc))
-            self._add_error_bullet(f"worker error: {exc}")
-            self.on_change()
+
+        except Exception as exc:
+            # Engine connection failed — run simulated steps
+            self._run_simulated()
+
+    def _run_simulated(self) -> None:
+        """Run simulated steps with random delays for live UI demo.
+
+        Each step shows a running dot (blinking) for 1–7 seconds, then
+        resolves to done with the elapsed time visible. Tokens increment
+        per step. After all steps, marks the session as engine_unavailable.
+        """
+        steps = _SIM_STEPS.get(self.family, _SIM_STEPS["investigate"])
+        target_label = f" {self.target}" if self.target else ""
+
+        # Initial step
+        self._start_bullet(f"summoning the runtime for{target_label}…")
+        delay = random.uniform(1, 3)
+        if not self._interruptible_sleep(delay):
+            self._handle_cancel()
+            return
+        self._resolve_running("done", "runtime summoned")
+        self._advance_tokens("agent.consulted")
+
+        # Run each simulated step
+        for label, detail, min_s, max_s in steps:
+            if self.cancelled:
+                self._handle_cancel()
+                return
+
+            self._start_bullet(label)
+            delay = random.uniform(min_s, max_s)
+            if not self._interruptible_sleep(delay):
+                self._handle_cancel()
+                return
+            self._resolve_running("done", detail)
+            self._advance_tokens("node.completed")
+
+        # Final: engine was unavailable, so mark it
+        self._start_bullet("connecting to Runtime Engine…")
+        delay = random.uniform(2, 4)
+        if not self._interruptible_sleep(delay):
+            self._handle_cancel()
+            return
+        self._resolve_running("error", "the runtime did not answer")
+
+        self._add_error_bullet(
+            "the runtime is not awake — start wizard-runtime-engine",
+            "connection refused at 127.0.0.1:8080",
+        )
+
+        with self._lock:
+            self.status = "engine_unavailable"
+            self.finished = True
+            self.running = False
+        self.on_change()
+
+    def _handle_cancel(self) -> None:
+        """Handle user cancellation."""
+        with self._lock:
+            self.status = "cancelled"
+            self.finished = True
+            self.running = False
+        self._resolve_running("error", "cancelled by user")
+        self._add_error_bullet("cancelled", "user pressed Esc")
+        self.on_change()
+
+    def _advance_tokens(self, ev_type: str) -> None:
+        """Increment mock token count and cycle gerund."""
+        with self._lock:
+            self.tokens += _TOKENS_PER_EVENT.get(ev_type, _DEFAULT_EVENT_TOKENS)
+            self.gerund_index += 1
+        self.on_change()
 
     def _get_event_generator(self):
         """Import and call the appropriate command service function."""
@@ -218,9 +342,7 @@ class TuiSession:
         ev_type = ev.get("event_type", "")
 
         # Mock token accounting + gerund advance on every event.
-        with self._lock:
-            self.tokens += _TOKENS_PER_EVENT.get(ev_type, _DEFAULT_EVENT_TOKENS)
-            self.gerund_index += 1
+        self._advance_tokens(ev_type)
 
         if ev_type == "engine_unavailable":
             with self._lock:
@@ -253,7 +375,6 @@ class TuiSession:
         payload = ev.get("payload", {})
 
         if ev_type == "agent.consulted":
-            # Resolve the previous running bullet, start a new one
             agent = (payload.get("agent_type") or "agent").lower()
             if "explorer" in agent:
                 label = "Consulting Explorer"
@@ -268,7 +389,6 @@ class TuiSession:
             node_id = payload.get("node_id", "?")
             self._resolve_running("done", f"node {node_id} completed")
             self._start_bullet(f"Processing node {node_id}")
-            # Immediately resolve since the node is done
             self._resolve_running("done", "← back to Planner")
 
         elif ev_type == "node.failed":

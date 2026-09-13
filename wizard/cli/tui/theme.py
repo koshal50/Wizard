@@ -80,6 +80,13 @@ WIZARD_THEME = Theme(
         "wiz.border": "#5b2d7a",         # violet panel borders
         "wiz.border.hot": "#ef5a1f",     # ember border while working
         "wiz.hint": "#6b5b95",           # keybinding hints at the footer
+        # Panel borders (ROUNDED box glyphs)
+        "wiz.panel": "#e8843c",           # amber panel border (warm, visible)
+        "wiz.panel.title": "bold #ffc94d", # gold panel title text
+        "wiz.welcome": "bold #c9b8ff",    # soft violet for welcome text
+        "wiz.activity": "#e8843c",        # amber for "Recent activity" header
+        "wiz.activity.line": "#9a8fd0",   # dim violet for activity entries
+        "wiz.footer": "#6b5b95",          # dim for footer metadata line
     }
 )
 

@@ -1,23 +1,19 @@
-"""Runtime Engine client — Step 4 of the CLI pipeline.
-
-Sends InvestigationRequests to the Runtime Engine and receives responses.
+"""Runtime Engine client — sends requests and streams events.
 
 The engine flow is: POST /v1/investigations to start, then poll
 GET /v1/investigations/{id}/events for streamed progress, and finally
 GET /v1/investigations/{id}/report once completed.
 
-This module exposes that flow two ways over the SAME polling logic:
+This module exposes:
 
     stream_events(request) -> Iterator[dict]
         A generator that yields typed event dicts as they arrive. Terminal
         events are "done" (carries final status + report + stats) and
         "engine_unavailable" (carries the connection error). Consumed by the
-        interactive TUI, which renders events live.
+        TuiSession worker thread, which renders events live.
 
-    send_request(request) -> RuntimeResponse
-        The classic command path (wizard investigate / verify / report).
-        A thin consumer of stream_events that prints each event exactly as
-        before and returns the final RuntimeResponse. Behavior unchanged.
+    RuntimeResponse
+        Dataclass for structured response data (used by TuiSession).
 """
 
 from __future__ import annotations
@@ -30,11 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Iterator
 
-from rich.console import Console
-
 from wizard.cli.models.investigation_request import InvestigationRequest
-
-console = Console()
 
 BASE_URL = "http://127.0.0.1:8080/v1/investigations"
 POLL_INTERVAL = 1.0
@@ -84,7 +76,7 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
             on a successful run.
 
     This is a generator: callers drive it with a for-loop and render each
-    event however they like (print, or push into a TUI session).
+    event however they like (push into a TUI session).
     """
     payload = _api_payload(request)
 
@@ -146,52 +138,3 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
         "report_markdown": report_data.get("report_markdown", "No report available."),
         "stats": status_data,
     }
-
-
-def send_request(request: InvestigationRequest) -> RuntimeResponse:
-    """Send an InvestigationRequest and print progress (classic command path).
-
-    Consumes stream_events and prints each event exactly as the previous
-    inline implementation did, then returns the final RuntimeResponse.
-    """
-    for ev in stream_events(request):
-        ev_type = ev.get("event_type")
-
-        if ev_type == "engine_unavailable":
-            return RuntimeResponse(
-                status="engine_unavailable",
-                message=f"Could not connect to Runtime Engine at {BASE_URL}. Is it running?",
-                data={"error": ev.get("error", "")},
-            )
-
-        if ev_type == "done":
-            state = ev.get("status", "unknown")
-            return RuntimeResponse(
-                status=state,
-                message=f"Investigation finished with status: {state}",
-                data={
-                    "request": ev.get("request", {}),
-                    "report_markdown": ev.get("report_markdown", "No report available."),
-                    "stats": ev.get("stats", {}),
-                },
-            )
-
-        payload = ev.get("payload", {})
-        if ev_type == "node.completed":
-            console.print(f"[green]+[/green] Completed node [bold]{payload.get('node_id')}[/bold]")
-        elif ev_type == "node.failed":
-            console.print(
-                f"[red]x[/red] Failed node [bold]{payload.get('node_id')}[/bold] "
-                f"({payload.get('reason', 'execution_failed')})"
-            )
-        elif ev_type == "claim.admitted":
-            console.print(
-                f"  [cyan]->[/cyan] Found evidence: {payload.get('claim_type')} -> {payload.get('key')}"
-            )
-        elif ev_type == "goal.satisfied":
-            console.print(f"[bold yellow]>> Goal Satisfied:[/bold yellow] {payload.get('goal_name')}")
-        elif ev_type == "agent.consulted":
-            console.print(f"[blue]*[/blue] Consulted Agent ({payload.get('agent_type')})")
-
-    # stream_events always ends with a terminal event; this is unreachable.
-    return RuntimeResponse(status="unknown", message="No terminal event received.")

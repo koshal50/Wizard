@@ -5,6 +5,15 @@ the current screen's content on the right. No borders — spacing and color do t
 framing so it reads calm and premium. prompt_toolkit stacks the real input box
 underneath; these views never own keyboard input.
 
+The WORKING state renders a Claude-Code-style live activity log:
+  ● Summoning the runtime…              (green dot = done)
+  ● Consulting Explorer                 (green dot = done)
+    └ Read 256 lines                    (dim sub-line)
+  ○ Verifying dependencies…             (pulsing hollow dot = running)
+
+  ✦ conjuring…
+  conjuring… (12s · 1,280 tokens · esc to interrupt)
+
 Each builder returns a Rich renderable; `render_to_ansi` rasterizes the composed
 frame to an ANSI string for a `FormattedTextControl`.
 """
@@ -21,8 +30,11 @@ from prompt_toolkit.formatted_text import ANSI
 
 import math
 import os
+import time
 
+from wizard.cli.tui.events import BulletRow
 from wizard.cli.tui.pixelart import load_pixel_grid, render_frame
+from wizard.cli.tui.session import GERUNDS
 from wizard.cli.tui.theme import EMBER_RAMP, WIZARD_THEME, ramp_at
 
 # One console, reused. truecolor so the hex ramps land exactly; force_terminal
@@ -53,38 +65,31 @@ def _ensure_grid() -> list:
 
 
 # ---------------------------------------------------------------------------
-# Ember flame — small working indicator (was in art.py)
+# Pulsing dot for running bullets
 # ---------------------------------------------------------------------------
 
-_FLAME_SHAPE = [
-    "  .o.  ",
-    " .oOo. ",
-    ".oO@Oo.",
-    ".oO@Oo.",
-    " :oOo: ",
-]
-_SHAPE_TO_RAMP = {".": 0.0, ":": 0.15, "o": 0.45, "O": 0.72, "@": 1.0}
+def _pulsing_dot(t: float) -> Text:
+    """A hollow dot ○ that pulses between dim and bright."""
+    # Oscillate intensity between 0.3 and 1.0
+    intensity = 0.65 + 0.35 * math.sin(t * 5.0)
+    # Interpolate between dim violet and bright amber
+    col = ramp_at(EMBER_RAMP, intensity)
+    return Text("○", style=col)
 
 
-def ember_frame(t: float) -> Text:
-    """Build one frame of the flickering ember flame at time `t` seconds."""
-    breath = 0.5 + 0.5 * math.sin(t * 6.0)
-    out = Text()
-    for r, line in enumerate(_FLAME_SHAPE):
-        for c, ch in enumerate(line):
-            if ch == " ":
-                out.append(" ")
-                continue
-            pos = _SHAPE_TO_RAMP[ch]
-            jitter = 0.12 * math.sin(t * 9.0 + r * 1.7 + c * 0.9)
-            intensity = min(1.0, max(0.0, pos + jitter + 0.12 * breath))
-            col = ramp_at(EMBER_RAMP, intensity)
-            glyph = "█" if intensity > 0.7 else "▓" if intensity > 0.4 else "▒"
-            out.append(glyph, style=col)
-        if r != len(_FLAME_SHAPE) - 1:
-            out.append("\n")
-    return out
+def _done_dot() -> Text:
+    """A solid green dot ● for completed steps."""
+    return Text("●", style="wiz.ok")
 
+
+def _error_dot() -> Text:
+    """A solid red dot ● for failed steps."""
+    return Text("●", style="wiz.err")
+
+
+# ---------------------------------------------------------------------------
+# Rich -> ANSI bridge
+# ---------------------------------------------------------------------------
 
 def render_to_ansi(renderable: RenderableType, width: int) -> ANSI:
     """Render a Rich renderable at `width` columns into a prompt_toolkit ANSI."""
@@ -165,61 +170,97 @@ def intent_right(family: str, target: str | None) -> RenderableType:
 
 
 def working_right(
-    gerund: str,
-    status: str,
-    running: bool,
-    activity: list,
-    tokens: int,
-    cost: float,
+    snap: dict,
+    bullets: list[BulletRow],
     t: float,
 ) -> RenderableType:
-    """Working narration: ember + gerund, flow log, and the grey meter."""
-    # Header: small ember flame beside the current gerund / status.
-    head = Table.grid(padding=(0, 2))
-    head.add_column(justify="center")
-    head.add_column(justify="left")
-    if running:
-        right = Group(
-            Text(f"{gerund}…", style="wiz.gerund"),
-            Text("the runtime is at work", style="wiz.dim"),
-        )
-        head.add_row(ember_frame(t), right)
-    else:
-        badge = "wiz.ok" if status == "completed" else "wiz.warn"
-        head.add_row(
-            Text("✦", style=badge),
-            Group(Text("done", style=badge), Text(f"status · {status}", style="wiz.dim")),
-        )
+    """Claude-Code-style working view: dot-lifecycle log + verb + counter."""
+    running = snap.get("running", False)
+    status = snap.get("status", "")
+    gerund = snap.get("gerund", "conjuring")
+    tokens = snap.get("tokens", 0)
+    cost = snap.get("cost", 0.0)
+    elapsed_start = snap.get("elapsed_start", t)
+    cancelled = snap.get("cancelled", False)
 
+    parts: list[RenderableType] = []
+
+    # --- Activity log (dot lifecycle) ---
     log = Text()
-    if not activity:
-        log.append("…", style="wiz.dim")
-    for line in activity:
-        log.append(line.text, style=line.style)
-        log.append("\n")
+    for bullet in bullets:
+        # Dot
+        if bullet.status == "running":
+            dot = _pulsing_dot(t)
+            log.append_text(dot)
+        elif bullet.status == "done":
+            log.append_text(_done_dot())
+        else:  # error
+            log.append_text(_error_dot())
 
-    return Group(
-        Text("✦ investigating", style="wiz.ember"),
-        Text(""),
-        head,
-        Text(""),
-        Text("flow", style="wiz.dim"),
-        log,
-        Text(""),
-        token_meter(tokens, cost),
-    )
+        # Step name
+        name_style = "wiz.flow" if bullet.status != "error" else "wiz.err"
+        log.append(f" {bullet.step_name}\n", style=name_style)
 
+        # Detail sub-line
+        if bullet.detail:
+            log.append("  └ ", style="wiz.dim")
+            log.append(f"{bullet.detail}\n", style="wiz.dim")
 
-def token_meter(tokens: int, cost: float, mock: bool = True) -> RenderableType:
-    """Dim grey usage strip: tokens · $cost · mock."""
-    meter = Text()
-    meter.append("tokens ", style="wiz.meter")
-    meter.append(f"{tokens:,}", style="wiz.meter.val")
-    meter.append("   ·   ", style="wiz.meter")
-    meter.append(f"${cost:.4f}", style="wiz.meter.val")
-    if mock:
-        meter.append("   ·   mock usage", style="wiz.meter")
-    return meter
+    if log.plain:
+        parts.append(log)
+    else:
+        parts.append(Text("…", style="wiz.dim"))
+
+    parts.append(Text(""))
+
+    # --- Rotating verb line (only while running) ---
+    if running and not cancelled:
+        # Cycle verb every ~500ms
+        verb_idx = int(t * 2.0) % len(GERUNDS)
+        current_verb = GERUNDS[verb_idx]
+
+        verb_line = Text()
+        verb_line.append("✦ ", style="wiz.accent")
+        verb_line.append(f"{current_verb}…", style="wiz.gerund")
+        parts.append(verb_line)
+
+        # Ticking counter line
+        elapsed = int(t - elapsed_start)
+        counter = Text()
+        counter.append(f"{current_verb}… ", style="wiz.gerund")
+        counter.append("(", style="wiz.meter")
+        counter.append(f"{elapsed}s", style="wiz.meter.val")
+        counter.append(" · ", style="wiz.meter")
+        counter.append(f"{tokens:,} tokens", style="wiz.meter.val")
+        counter.append(" · ", style="wiz.meter")
+        counter.append("esc to interrupt", style="wiz.meter")
+        counter.append(")", style="wiz.meter")
+        parts.append(counter)
+    elif not running:
+        # Show final status
+        if status == "completed":
+            final = Text("✦ done", style="wiz.ok")
+        elif status == "engine_unavailable":
+            final = Text("✦ engine unavailable", style="wiz.err")
+        elif status == "cancelled":
+            final = Text("✦ cancelled", style="wiz.warn")
+        else:
+            final = Text(f"✦ {status}", style="wiz.warn")
+
+        parts.append(final)
+
+        # Final counter
+        elapsed = int(t - elapsed_start)
+        meter = Text()
+        meter.append(f"completed in {elapsed}s", style="wiz.meter")
+        meter.append(" · ", style="wiz.meter")
+        meter.append(f"{tokens:,} tokens", style="wiz.meter.val")
+        meter.append(" · ", style="wiz.meter")
+        meter.append(f"${cost:.4f}", style="wiz.meter.val")
+        meter.append(" · mock usage", style="wiz.meter")
+        parts.append(meter)
+
+    return Group(*parts)
 
 
 def result_right(status: str, report_markdown: str) -> RenderableType:
@@ -228,6 +269,8 @@ def result_right(status: str, report_markdown: str) -> RenderableType:
         badge = Text("✓ complete", style="wiz.ok")
     elif status == "engine_unavailable":
         badge = Text("✷ engine unavailable", style="wiz.err")
+    elif status == "cancelled":
+        badge = Text("✷ cancelled", style="wiz.warn")
     else:
         badge = Text(f"● {status}", style="wiz.warn")
 
@@ -237,6 +280,11 @@ def result_right(status: str, report_markdown: str) -> RenderableType:
         content = Text(
             "The Runtime Engine at 127.0.0.1:8080 didn't respond.\n"
             "Start wizard-runtime-engine and try again.",
+            style="wiz.dim",
+        )
+    elif status == "cancelled":
+        content = Text(
+            "The investigation was cancelled before completion.",
             style="wiz.dim",
         )
     else:

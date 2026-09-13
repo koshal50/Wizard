@@ -6,7 +6,7 @@ input box stay live *during* an investigation. Rich only builds the content of
 the upper region (see widgets.py), which we rasterize to ANSI each frame.
 
 State machine:  SPLASH → MENU → INTENT → WORKING → RESULT
-A ~0.08s refresh drives the sunrise and ember animations; a background worker
+A ~0.08s refresh drives the pulsing dot and verb animations; a background worker
 (session.py) streams real engine events and calls `app.invalidate()` to redraw.
 """
 
@@ -25,13 +25,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
-from wizard.cli.models.investigation_request import (
-    InvestigationRequest,
-    RepositoryInfo,
-    RequestOptions,
-)
 from wizard.cli.parser.command_parser import COMMAND_TARGETS
-from wizard.cli.parser.intent_builder import build_intent
 from wizard.cli.tui.session import TuiSession
 from wizard.cli.tui.widgets import (
     frame,
@@ -135,16 +129,12 @@ class WizardTUI:
 
         elif self.state == WORKING:
             s = self.session
-            snap = s.snapshot() if s else {}
-            right = working_right(
-                snap.get("gerund", ""),
-                snap.get("status", ""),
-                snap.get("running", False),
-                s.snapshot_activity() if s else [],
-                snap.get("tokens", 0),
-                snap.get("cost", 0.0),
-                t,
-            )
+            if s:
+                snap = s.snapshot()
+                bullets = s.snapshot_activity()
+                right = working_right(snap, bullets, t)
+            else:
+                right = splash_right()
 
         elif self.state == RESULT:
             s = self.session
@@ -213,18 +203,25 @@ class WizardTUI:
         elif self.state == MENU and self.menu_level == "target":
             self.menu_level = "family"
             self.selected = 0
+        elif self.state == WORKING:
+            # Esc during working -> cancel the running investigation
+            s = self.session
+            if s and not s.finished:
+                with s._lock:
+                    s.cancelled = True
+            elif s and s.finished:
+                self.state = RESULT
+                self.app.layout.focus(self.body)
         elif self.state == RESULT:
             self._enter_menu()
 
     def _begin_work(self, raw_intent: str) -> None:
-        """Build the request through the existing pipeline and start streaming."""
-        intent = build_intent(self.family, self.target)  # existing contract
-        request = InvestigationRequest(
-            repository=RepositoryInfo(path=os.getcwd()),
-            intent=intent,
-            options=RequestOptions(),
+        """Build the session and start streaming via the service functions."""
+        self.session = TuiSession(
+            family=self.family,
+            target=self.target,
+            on_change=self._invalidate,
         )
-        self.session = TuiSession(request=request, on_change=self._invalidate)
         self.state = WORKING
         self.app.layout.focus(self.input)
         self.session.start()
@@ -249,7 +246,7 @@ class WizardTUI:
             self._begin_work(text)
         elif self.state == WORKING:
             s = self.session
-            if s and s.snapshot()["finished"]:
+            if s and s.finished:
                 self.state = RESULT
                 self.app.layout.focus(self.body)
             elif s:

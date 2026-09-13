@@ -1,10 +1,12 @@
 """Wizard CLI — Entry Point.
 
-Creates the Typer application, registers global options, and
-registers all command families.
+Creates the Typer application and registers the global --version option.
+The only behaviour is opening the interactive TUI when the user runs
+bare `wizard`. All command families (investigate, verify, report, explain)
+are selected from the TUI menu using keyboard navigation.
 
-This is the only file that knows about all command families.
-Individual command handlers are imported and registered here.
+This is the single entry point. No subcommands are registered — the TUI
+owns the full-screen experience.
 """
 
 from __future__ import annotations
@@ -15,13 +17,10 @@ import typer
 from rich.console import Console
 
 from wizard import __version__
-from wizard.cli.commands.investigate import investigate
-from wizard.cli.commands.verify import verify
-from wizard.cli.commands.report import report
 
 
 # ---------------------------------------------------------------------------
-# Console for styled output
+# Console for styled output (version display only)
 # ---------------------------------------------------------------------------
 console = Console()
 
@@ -34,7 +33,8 @@ app = typer.Typer(
     help=(
         "Wizard -- Intent Translation Layer.\n\n"
         "Translates user commands into structured investigation requests "
-        "for the Runtime Engine."
+        "for the Runtime Engine.\n\n"
+        "Run with no arguments to open the interactive Wizard interface."
     ),
     no_args_is_help=False,
     rich_markup_mode="rich",
@@ -75,56 +75,11 @@ def main_callback(
 
     Run with no command to open the interactive Wizard interface.
     """
-    # Bare `wizard` (no subcommand, no --version) opens the interactive TUI.
+    # Bare `wizard` (no --version) opens the interactive TUI.
     if ctx.invoked_subcommand is None:
         from wizard.cli.tui import run_tui
 
         run_tui()
-
-
-# ---------------------------------------------------------------------------
-# Register Command Families
-# ---------------------------------------------------------------------------
-# Each command family is a separate module in wizard.cli.commands/
-
-app.command(
-    name="investigate",
-    help=(
-        "[bold]Investigate[/bold] a specific aspect of a repository. "
-        "Explores the target area and explains what it finds."
-    ),
-)(investigate)
-
-app.command(
-    name="verify",
-    help=(
-        "[bold]Verify[/bold] whether a specific aspect of a repository works correctly. "
-        "Produces a confident verdict: verified, failed, or uncertain."
-    ),
-)(verify)
-
-app.command(
-    name="report",
-    help=(
-        "[bold]Generate[/bold] a Verification Report from verified knowledge. "
-        "Saves to output/ directory by default."
-    ),
-)(report)
-
-
-@app.command(
-    name="explain",
-    help="[bold]Explain[/bold] something the Runtime Engine already understands. [dim](coming soon)[/dim]",
-)
-def explain_stub(
-    target: str = typer.Argument(..., help="What to explain."),
-) -> None:
-    """Explain command — not yet implemented."""
-    console.print(
-        "[yellow]The [bold]explain[/bold] command is not yet implemented.[/yellow]\n"
-        "[dim]It will read from the verified Claim Graph and produce explanations.[/dim]"
-    )
-    raise typer.Exit(code=0)
 
 
 # ---------------------------------------------------------------------------

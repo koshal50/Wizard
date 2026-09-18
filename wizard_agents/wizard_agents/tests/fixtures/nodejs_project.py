@@ -21,5 +21,5 @@ def build_nodejs_project_explorer_input() -> ExplorerInput:
             detected_languages=["javascript", "typescript"],
             detected_frameworks=["express"],
         ),
-        available_tools=[ToolName.READ_FILE, ToolName.LIST_DIRECTORY, ToolName.SEARCH_FILES],
+        available_tools=[ToolName.READ_FILE, ToolName.LIST_TREE, ToolName.SEARCH_FILES],
     )

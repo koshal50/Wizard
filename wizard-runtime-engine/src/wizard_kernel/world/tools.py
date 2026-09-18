@@ -22,6 +22,18 @@ class ToolExecutor:
         self._repo = Path(repo_path).resolve()
         self._browser = browser  # BrowserRuntime | None — set only when browser_enabled
 
+    @property
+    def browser(self):
+        """The live browser, or None. For narration, never for a plan step.
+
+        Read by the loop when it emits a browser event, so the event can carry
+        what the page looks like at that moment. Nothing that reads this is a
+        tool: the page a viewer sees is not an Observation and cannot become a
+        claim, which is why this is a property on the executor rather than a
+        seventh entry in `_REGISTERED_TOOLS`.
+        """
+        return self._browser
+
     def execute(self, action: dict, _: str | None = None) -> dict:
         """Main dispatch called from the investigation loop."""
         tool = action.get("tool", "")

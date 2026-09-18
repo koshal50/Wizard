@@ -23,8 +23,13 @@
     --sandbox: #8fa8c8; --kernel: #5f8fd8; --flow: #e0e6ee; --error: #ff6b6b;
   }
   * { box-sizing: border-box; }
+  /* The page is exactly one viewport tall and never scrolls as a whole: the trace
+     scrolls inside its own pane. Without this the trace's rows size the grid row
+     instead, the panes grow to tens of thousands of pixels, and the browser pane's
+     frame ends up centred somewhere off-screen. */
   body { margin: 0; background: var(--bg); color: var(--text);
-         font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+         font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+         display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   header { display: flex; align-items: center; gap: 16px; padding: 10px 16px;
            background: var(--panel); border-bottom: 1px solid var(--line); }
   header h1 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: .3px; }
@@ -46,14 +51,15 @@
   .sess .kv { color: var(--dim); font-size: 11px; }
   .sess.cancelled b { color: var(--verifier); }
   main { display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-         height: calc(100vh - 118px); }
-  section { display: flex; flex-direction: column; min-width: 0; }
+         flex: 1; min-height: 0; overflow: hidden; }
+  section { display: flex; flex-direction: column; min-width: 0; min-height: 0;
+            overflow: hidden; }
   section + section { border-left: 1px solid var(--line); }
   .head { display: flex; align-items: center; gap: 10px; padding: 7px 14px;
           background: var(--panel); border-bottom: 1px solid var(--line);
           font-size: 11px; text-transform: uppercase; letter-spacing: .8px;
           color: var(--dim); }
-  .body { flex: 1; overflow-y: auto; padding: 10px 14px; }
+  .body { flex: 1; overflow-y: auto; min-height: 0; padding: 10px 14px; }
 
   /* ── left pane rows ─────────────────────────────────────────────────────── */
   .row { border-left: 2px solid var(--line); padding: 4px 0 6px 10px;
@@ -82,8 +88,8 @@
   .seq { color: #445; margin-right: 6px; }
 
   /* ── right pane ─────────────────────────────────────────────────────────── */
-  #stage { flex: 1; display: flex; align-items: center; justify-content: center;
-           background: #05080c; overflow: hidden; }
+  #stage { flex: 1; min-height: 0; display: flex; align-items: center;
+           justify-content: center; background: #05080c; overflow: hidden; }
   #frame { max-width: 100%; max-height: 100%; display: none; }
   #stagemsg { color: var(--dim); text-align: center; padding: 24px; max-width: 460px; }
   #stagemsg code { color: var(--accent); }
@@ -166,3 +172,276 @@ for (const a of AGENTS) {
   $("filters").append(l);
 }
 
+// ── small helpers ────────────────────────────────────────────────────────────
+const shortId = (id) => (id ? id.slice(0, 12) : "—");
+function pill(el, text, cls) {
+  el.textContent = text;
+  el.className = "pill" + (cls ? " " + cls : "");
+}
+
+// ── left pane: one row per trace entry ───────────────────────────────────────
+// The row's class is the agent that wrote it, so the filter checkboxes above work
+// by plain CSS class. `err` is added on top when the entry is a failure, which
+// recolours it without moving it out of its agent's filter.
+//
+// Kernel rows carry the event type in `title`, not `kind` (kind is the literal
+// "event"), so the event name is resolved once here and used by both the row and
+// the URL bar.
+const eventName = (e) => (String(e.kind) === "event" ? String(e.title) : String(e.kind));
+
+function addRow(e) {
+  const el = document.createElement("div");
+  el.className = "row " + e.agent + (String(e.kind).indexOf("error") >= 0 ? " err" : "");
+  if (hidden.has(e.agent)) el.style.display = "none";
+
+  const seq = document.createElement("span");
+  seq.className = "seq";
+  seq.textContent = "#" + e.seq;
+
+  const who = document.createElement("span");
+  who.className = "who";
+  who.textContent = e.agent + (e.inv_id ? " · " + shortId(e.inv_id) : "") +
+    (String(e.kind) === "event" ? "" : " · " + e.kind);
+
+  const title = document.createElement("span");
+  title.className = "title";
+  title.textContent = " " + e.title;
+  el.append(seq, who, title);
+
+  if (e.detail) {
+    const d = document.createElement("div");
+    d.className = "detail";
+    d.textContent = e.detail;
+    el.append(d);
+  }
+  if (e.rules && e.rules.length) {
+    const r = document.createElement("div");
+    r.className = "rules";
+    for (const line of e.rules) {
+      const d = document.createElement("div");
+      d.textContent = line;
+      r.append(d);
+    }
+    el.append(r);
+  }
+  traceEl.append(el);
+  rows++;
+  $("p-rows").textContent = rows + " rows";
+  if (autoScroll) traceEl.scrollTop = traceEl.scrollHeight;
+  updateUrlBar(e);
+}
+
+// The right pane's URL bar is driven by the kernel's own browser.* events, not by
+// anything the page infers. If no such event has arrived, it keeps saying so.
+function updateUrlBar(e) {
+  if (e.agent !== "kernel") return;
+  const name = eventName(e);
+  if (name.indexOf("browser.") !== 0) return;
+  let p;
+  try { p = JSON.parse(e.detail); } catch (_) { return; }
+  if (p && p.url) $("urlbar").textContent = name + "  " + p.url +
+    (p.title ? "  —  " + p.title : "") + (p.status ? "  [" + p.status + "]" : "");
+}
+
+// ── header + session strip + footer ──────────────────────────────────────────
+let elapsedBase = 0, elapsedAt = 0;
+
+function renderState(s) {
+  const running = s.state === "running" || s.state === "preflight";
+  pill($("p-state"),
+       running && s.phase && s.phase !== "idle" ? s.state + " · " + s.phase : s.state,
+       s.state === "failed" ? "bad" : (s.state === "done" ? "good" : (running ? "on" : "")));
+  elapsedBase = s.elapsed_s || 0;
+  elapsedAt = performance.now();
+
+  const strip = $("sessions");
+  strip.textContent = "";
+  for (const sess of (s.sessions || [])) {
+    const st = sess.status || {};
+    const d = document.createElement("div");
+    d.className = "sess" + (sess.final_state === "cancelled" || sess.deleted ? " cancelled" : "");
+    const b = document.createElement("b");
+    b.textContent = sess.label;
+    const kv = document.createElement("div");
+    kv.className = "kv";
+    kv.textContent =
+      shortId(sess.inv_id) + " · " + (sess.final_state || (sess.created ? "running…" : "–")) +
+      " · " + (st.nodes_completed != null ? st.nodes_completed : "–") + " nodes / " +
+      (st.claims_count != null ? st.claims_count : "–") + " claims" +
+      " · budget " + sess.budget +
+      (sess.browser_enabled ? " · browser" : "") +
+      (sess.has_report ? " · report" : "");
+    d.append(b, kv);
+    if (sess.error) {
+      const err = document.createElement("div");
+      err.className = "kv";
+      err.textContent = sess.error;
+      d.append(err);
+    }
+    strip.append(d);
+  }
+
+  const sf = s.surface || {};
+  $("f-surface").textContent = "surface: " + (sf.tools || 0) + " tools · " +
+    (sf.event_types || 0) + " event types · " + (sf.extractors || 0) + " extractors · " +
+    (sf.hypothesis_kinds || 0) + " hypothesis kinds";
+  const sb = s.sandbox || {};
+  $("f-sandbox").textContent = sb.runtime_class
+    ? "sandbox: " + sb.runtime_class + " · exec exit " + sb.exec_exit_code +
+      " · " + sb.processes_listed + " processes listed · " + sb.tools_driven.length +
+      " tools driven directly"
+    : "";
+  const plans = s.plans || [];
+  const checks = plans.reduce((a, p) => a + (p.mirror_checks || 0), 0);
+  const rejected = plans.reduce((a, p) => a + (p.mirror_rejections || 0), 0);
+  $("f-plans").textContent = "plans: " + plans.length + " · validator mirror " +
+    checks + " checks, " + rejected + " refused before the kernel saw them";
+
+  $("btn-start").disabled = s.state !== "idle";
+  $("btn-report").disabled = !s.report_ready;
+  done = !!s.report_ready;
+
+  ensureCast(s.primary_id);
+  if (done) settleCast();
+  else if (!s.primary_id) castNote("no browser session in this run");
+}
+
+// ── right pane: the kernel's own screencast socket ───────────────────────────
+// Pixels come from /v1/investigations/{id}/screencast, mounted by the kernel and
+// wired to world.browser's runtime — the same Chromium the agent is driving.
+//
+// The socket is attached as soon as the primary investigation exists, but the
+// browser plane only comes up when the run reaches a browser node, so the first
+// attempts are correctly refused ("no live browser for this investigation"). That
+// refusal is not hidden: the pane prints the kernel's own words and keeps retrying
+// until the plane is up, or until the run ends without it. No frames means the pane
+// says why — it never shows a stand-in image.
+let castRetry = null, castAttempts = 0;
+
+const castNote = (text) => { $("castnote").textContent = text; };
+
+function settleCast() {
+  if (castRetry) { clearTimeout(castRetry); castRetry = null; }
+  if ($("frame").src) return;              // frames arrived — leave the last one up
+  pill($("p-cast"), "screencast: no frames", "bad");
+  const el = $("stagemsg");
+  el.style.display = "";
+  el.textContent = "The run finished without streaming any frame for " +
+    (wsInv || "this investigation") + ". The browser plane is attached only while the " +
+    "agent is driving a page; " + castAttempts + " attempt(s) were refused. This pane " +
+    "shows nothing rather than a stand-in.";
+}
+
+function scheduleRetry(why) {
+  if (done) { settleCast(); return; }
+  pill($("p-cast"), "screencast: waiting for the browser plane", "on");
+  castNote(shortId(wsInv) + " · " + why + " · attempt " + castAttempts);
+  if (castRetry) clearTimeout(castRetry);
+  castRetry = setTimeout(() => {
+    castRetry = null;
+    if (done) settleCast(); else connectCast();
+  }, 1500);
+}
+
+function connectCast() {
+  const invId = wsInv;
+  if (!invId || ws || done) return;
+  castAttempts++;
+  pill($("p-cast"), "screencast: connecting", "on");
+  castNote(shortId(invId) + " · attempt " + castAttempts);
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = proto + "//" + location.host + "/v1/investigations/" + invId + "/screencast";
+  try {
+    ws = new WebSocket(url);
+  } catch (err) {
+    ws = null;
+    scheduleRetry("could not open the socket: " + err);
+    return;
+  }
+  ws.onmessage = (m) => {
+    let frame;
+    try { frame = JSON.parse(m.data); } catch (_) { return; }
+    if (frame.type === "frame" && frame.data) {
+      const img = $("frame");
+      img.src = "data:image/jpeg;base64," + frame.data;
+      img.style.display = "block";
+      $("stagemsg").style.display = "none";
+      pill($("p-cast"), "screencast: live", "good");
+      castNote(shortId(invId) + " · frames over CDP");
+    } else if (frame.type === "error") {
+      // The kernel's own words: it knows why there is no live browser yet.
+      const el = $("stagemsg");
+      el.style.display = "";
+      el.textContent = frame.message || "the kernel refused the screencast socket";
+    }
+  };
+  ws.onerror = () => { /* onclose always follows; the retry is scheduled there */ };
+  ws.onclose = () => {
+    ws = null;
+    if (!done) scheduleRetry("the browser plane is not streaming yet");
+  };
+}
+
+// Called on every state poll: attach to the primary investigation, and follow it if
+// the run ever changes which investigation owns the browser.
+function ensureCast(invId) {
+  if (!invId) return;
+  if (invId !== wsInv) {                   // switched investigation — start over
+    wsInv = invId;
+    castAttempts = 0;
+    if (castRetry) { clearTimeout(castRetry); castRetry = null; }
+    if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+    connectCast();
+  } else if (!ws && !castRetry) {
+    connectCast();
+  }
+}
+
+// ── polling ──────────────────────────────────────────────────────────────────
+// Both polls double as the viewer heartbeat: serve_live waits for one of them
+// before it creates any investigation, so the run never starts unseen.
+async function pollTrace() {
+  try {
+    const r = await fetch("/flow/trace?since_seq=" + sinceSeq, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    for (const e of j.entries) addRow(e);
+    sinceSeq = j.next_seq;
+    $("p-rows").className = "pill";
+  } catch (err) {
+    pill($("p-rows"), "trace: " + err, "bad");
+  }
+}
+
+async function pollState() {
+  try {
+    const r = await fetch("/flow/state", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    renderState(await r.json());
+  } catch (err) {
+    pill($("p-state"), "state unavailable — " + err, "bad");
+  }
+}
+
+$("btn-start").onclick = async () => {
+  $("btn-start").disabled = true;
+  try {
+    await fetch("/flow/start", { method: "POST" });
+  } catch (err) {
+    pill($("p-state"), "could not start: " + err, "bad");
+  }
+  pollState();
+};
+$("btn-report").onclick = () => window.open("/flow/report", "_blank");
+
+pollTrace();
+pollState();
+setInterval(pollTrace, 700);
+setInterval(pollState, 1200);
+setInterval(() => {
+  if (!elapsedAt) return;
+  $("p-elapsed").textContent = (elapsedBase + (performance.now() - elapsedAt) / 1000).toFixed(1) + "s";
+}, 200);
+</script>
+</body>
+</html>

@@ -14,6 +14,7 @@ as defined in cli.md:
 from __future__ import annotations
 
 from wizard.cli.models.intent import Intent
+from wizard.cli.parser.command_parser import COMMAND_TARGETS
 
 
 # ---------------------------------------------------------------------------
@@ -30,23 +31,64 @@ CONFIDENCE_THRESHOLDS: dict[str, str] = {
 }
 
 
-def build_intent(action: str, target: str | None = None) -> Intent:
+def build_intent(
+    action: str,
+    target: str | None = None,
+    targets: list[str] | None = None,
+    urls: list[str] | None = None,
+    question: str = "",
+) -> Intent:
     """Build an Intent from validated command components.
 
     Args:
         action: The command family (e.g. "investigate"). Must already be
                 validated by command_parser.validate_command().
-        target: The target string (e.g. "architecture"). May be None for
-                target-less commands like "report".
+        target: A single target (e.g. "architecture"). May be None for
+                target-less commands like "report". Kept for the many callers
+                that pass one target.
+        targets: Additional targets, from parsing the user's free text. These
+                are UNIONED with `target` rather than replacing it, and are
+                assumed already validated by intent_parser.validate_parsed —
+                any that are not valid for `action` are dropped here rather
+                than raising, because one unrecognised word in a sentence must
+                not fail an otherwise good request.
+        urls: Absolute http(s) URLs the user named. Carried as web-plane
+                targets (Intent.urls), never validated as command targets.
+        question: The user's free text, verbatim. Carried through unchanged and
+                never validated: it is not a command, it is what the user said,
+                and the Planner is the only thing entitled to read it.
 
     Returns:
         A fully constructed Intent object ready for request assembly.
+
+    Deduplication preserves order and lets the menu's target stay first, so a
+    user who selected "api" and then typed "and the api routes" investigates
+    "api" once, not twice.
     """
-    targets = [target] if target else []
+    ordered: list[str] = []
+    for candidate in ([target] if target else []) + list(targets or []):
+        if candidate and candidate not in ordered:
+            ordered.append(candidate)
+
+    valid = COMMAND_TARGETS.get(action, [])
+    if valid:
+        ordered = [t for t in ordered if t in valid]
+    elif ordered:
+        # A family that accepts no target (report) must not be handed one —
+        # validate_target raises on exactly this, so drop it here instead.
+        ordered = []
+
+    unique_urls: list[str] = []
+    for url in urls or []:
+        if url and url not in unique_urls:
+            unique_urls.append(url)
+
     confidence = CONFIDENCE_THRESHOLDS.get(action, "exploratory")
 
     return Intent(
         action=action,
-        targets=targets,
+        targets=ordered,
+        urls=unique_urls,
         confidence_threshold=confidence,
+        question=question.strip(),
     )

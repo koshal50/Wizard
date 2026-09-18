@@ -67,27 +67,41 @@ class MockLLMProvider(LLMProvider):
         goal = node.get("goal", "investigate node")
 
         available_tools = raw_input.get("available_tools") or [t.value for t in ToolName]
-        # Prefer read_file if available, otherwise take the first allowed tool.
-        selected_tool = ToolName.READ_FILE if ToolName.READ_FILE.value in available_tools else ToolName(
-            available_tools[0]
-        )
 
+        # A Planner-authored node arrives with the concrete action it was created
+        # for. Honour it: the node knows which file or command this step is about,
+        # and re-deriving that here would only replace a precise action with a
+        # generic one. Overriding would also need a reason the deterministic
+        # provider has no basis to invent.
+        planned = node.get("planned_action") or {}
+        planned_tool = planned.get("tool")
+        selected_tool: ToolName
+        parameters: Dict[str, Any]
         command = None
-        parameters: Dict[str, Any] = {}
-        if selected_tool == ToolName.EXECUTE_COMMAND:
-            command = "true"
-            parameters = {"reason": "mock placeholder command"}
-        elif selected_tool == ToolName.READ_FILE:
-            repo_meta = raw_input.get("repository_metadata") or {}
-            parameters = {"path": repo_meta.get("root_path") or "."}
-        elif selected_tool == ToolName.SEARCH_FILES:
-            parameters = {"query": goal}
-        elif selected_tool == ToolName.LIST_DIRECTORY:
-            parameters = {"path": "."}
-        elif selected_tool == ToolName.INSPECT_CONFIGURATION:
-            parameters = {"target": "default"}
-        elif selected_tool == ToolName.TRACE_EXECUTION:
-            parameters = {"entrypoint": goal}
+        if planned_tool and planned_tool in available_tools:
+            selected_tool = ToolName(planned_tool)
+            parameters = dict(planned.get("params") or {})
+            if selected_tool == ToolName.EXECUTE_COMMAND:
+                command = parameters.pop("command", None)
+        else:
+            selected_tool = (
+                ToolName.READ_FILE if ToolName.READ_FILE.value in available_tools
+                else ToolName(available_tools[0])
+            )
+            parameters = {}
+            if selected_tool == ToolName.EXECUTE_COMMAND:
+                command = "true"
+                parameters = {"reason": "mock placeholder command"}
+            elif selected_tool == ToolName.READ_FILE:
+                parameters = {"path": "."}
+            elif selected_tool == ToolName.SEARCH_FILES:
+                parameters = {"query": goal}
+            elif selected_tool == ToolName.LIST_TREE:
+                parameters = {"path": "."}
+            elif selected_tool == ToolName.INSPECT_CONFIGURATION:
+                parameters = {"target": "default"}
+            elif selected_tool == ToolName.TRACE_EXECUTION:
+                parameters = {"entrypoint": goal}
 
         route = raw_input.get("route", {})
         node_order = route.get("node_order", [node_id])
@@ -96,23 +110,39 @@ class MockLLMProvider(LLMProvider):
         if current_index + 1 < len(node_order):
             next_node = node_order[current_index + 1]
 
+        # The step's parameters must describe the same call the tool request makes,
+        # so re-attach the command that was lifted out of `parameters` above.
+        step_parameters = dict(parameters)
+        if command is not None:
+            step_parameters["command"] = command
+
         steps = [
             ExecutionStep(
                 step_number=1,
                 description=f"Use {selected_tool.value} to gather evidence for node '{node_id}'",
                 tool=selected_tool,
-                parameters=parameters,
+                parameters=step_parameters,
             )
         ]
+
+        if planned_tool and planned_tool in available_tools:
+            reasoning = (
+                f"Node '{node_id}' has goal '{goal}' and arrived with a planned action "
+                f"'{planned_tool}'. Honoured it: the node was created for this specific "
+                f"call, so re-deriving a tool here would only lose precision."
+            )
+        else:
+            reasoning = (
+                f"Node '{node_id}' has goal '{goal}' and no usable planned action. "
+                f"Selected '{selected_tool.value}' because it is available and directly "
+                f"applicable to this goal."
+            )
 
         return ExplorerOutput(
             investigation_id=raw_input["investigation_id"],
             node_id=node_id,
             purpose=f"Establish evidence toward goal: {goal}",
-            reasoning=(
-                f"Node '{node_id}' has goal '{goal}'. Selected '{selected_tool.value}' "
-                f"because it is available and directly applicable to this goal."
-            ),
+            reasoning=reasoning,
             selected_tool=selected_tool,
             parameters=parameters,
             command=command,

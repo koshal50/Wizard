@@ -27,7 +27,15 @@ class ClaimTemplate(BaseModel):
     value: Any
 
 
-NodeType = Literal["discovery", "read", "execute", "parse", "verify", "planner", "checkpoint"]
+# "browser" is a node type because driving a page is a distinct kind of
+# observation, not a flavour of reading a file: the evidence is execution-tier, the
+# extractors type it WEB, and every browser tool is exempt from dedup because the
+# same params address a page that has since changed. Naming it here — rather than
+# filing browser nodes under "read" — is what lets the graph, the report and the
+# planner talk about web evidence without special-casing a tool name.
+NodeType = Literal[
+    "discovery", "read", "execute", "parse", "verify", "browser", "planner", "checkpoint",
+]
 NodeState = Literal["waiting", "running", "complete", "failed", "blocked"]
 
 

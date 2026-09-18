@@ -18,12 +18,40 @@ class ToolName(str, Enum):
 
     This is the single source of truth for "known tools". Explorer output
     validation rejects any tool not in this enum (see app/validation).
+
+    Names must match the Runtime's own tool registry
+    (wizard_kernel/control/tool_validator.py::_ALLOWED_TOOLS) verbatim — the
+    Runtime validates what we request against that registry and rejects anything
+    it does not recognise. An earlier revision called the directory listing
+    "list_directory", which the Runtime has never accepted, so every listing
+    proposal was silently rejected and fell back to the node plan.
     """
 
     READ_FILE = "read_file"
     SEARCH_FILES = "search_files"
-    LIST_DIRECTORY = "list_directory"
+    LIST_TREE = "list_tree"
+    PATH_EXISTS = "path_exists"
     EXECUTE_COMMAND = "execute_command"
+
+    # Long-running process control — the Runtime owns process handles.
+    START_PROCESS = "start_process"
+    READ_PROCESS = "read_process"
+    KILL_PROCESS = "kill_process"
+    LIST_PROCESSES = "list_processes"
+
+    CHECK_PORT = "check_port"
+
+    # Browser actions are ordinary tools to the Runtime (world/browser).
+    BROWSER_NAVIGATE = "browser_navigate"
+    BROWSER_SNAPSHOT = "browser_snapshot"
+    BROWSER_CLICK = "browser_click"
+    BROWSER_TYPE = "browser_type"
+    BROWSER_BACK = "browser_back"
+    BROWSER_EXTRACT = "browser_extract"
+
+    # Agent-side reasoning vocabulary with no Runtime tool behind them. They are
+    # never in the `available_tools` the Runtime sends, so Explorer cannot
+    # propose them; they remain here to describe intent in reasoning artifacts.
     INSPECT_CONFIGURATION = "inspect_configuration"
     TRACE_EXECUTION = "trace_execution"
 

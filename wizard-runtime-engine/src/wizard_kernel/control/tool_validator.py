@@ -36,7 +36,7 @@ _EXEC_TOOLS = frozenset({"execute_command", "start_process"})
 # from dedup because identical params (e.g. browser_snapshot {}) address a *changed*
 # live page — deduping them would wrongly block legitimate re-observation.
 _URL_TOOLS = frozenset({"browser_navigate"})
-_BROWSER_TOOLS = frozenset({
+BROWSER_TOOLS = frozenset({
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_back", "browser_extract",
 })
@@ -46,7 +46,7 @@ _ALLOWED_TOOLS = frozenset({
     "list_tree", "read_file", "search_files",
     "execute_command", "check_port", "path_exists",
     "start_process", "read_process", "kill_process", "list_processes",
-}) | _BROWSER_TOOLS
+}) | BROWSER_TOOLS
 
 
 @dataclass
@@ -103,7 +103,7 @@ class ToolRequestValidator:
         #    Browser tools are EXCLUDED: identical params address a changed live
         #    page, so deduping them would wrongly block legitimate re-observation.
         #    Budget still guarantees termination (invariant 7).
-        if request.tool not in _BROWSER_TOOLS:
+        if request.tool not in BROWSER_TOOLS:
             fingerprint = self._fingerprint(request.tool, params)
             if fingerprint in self._seen_fingerprints:
                 return ValidationResult(

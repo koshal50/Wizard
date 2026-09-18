@@ -10,7 +10,7 @@ class ExplorerPort(Protocol):
 
 @runtime_checkable
 class VerifierPort(Protocol):
-    def assess(self, claims: list[dict]) -> VerifierAssessment: ...
+    def assess(self, claims: list[dict], investigation_id: str = "") -> VerifierAssessment: ...
 
 
 class MockExplorer:
@@ -37,10 +37,10 @@ class MockVerifier:
     def __init__(self, n_claims_threshold: int = 1) -> None:
         self._threshold = n_claims_threshold
 
-    def assess(self, claims: list[dict]) -> VerifierAssessment:
+    def assess(self, claims: list[dict], investigation_id: str = "") -> VerifierAssessment:
         sufficient = len(claims) >= self._threshold
         return VerifierAssessment(
-            investigation_id="",
+            investigation_id=investigation_id,
             assessment="overall_sufficient" if sufficient else "needs_more_work",
         )
 
@@ -63,9 +63,11 @@ class HttpVerifier:
     def __init__(self, url: str) -> None:
         self._url = url
 
-    def assess(self, claims: list[dict]) -> VerifierAssessment:
+    def assess(self, claims: list[dict], investigation_id: str = "") -> VerifierAssessment:
         import httpx
-        r = httpx.post(self._url, json={"claims": claims}, timeout=30)
+        r = httpx.post(self._url,
+                       json={"investigation_id": investigation_id, "claims": claims},
+                       timeout=30)
         r.raise_for_status()
         data = r.json()
         # Strip trust fields if agent tried to set them (invariant 3)

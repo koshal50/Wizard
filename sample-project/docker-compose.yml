@@ -1,0 +1,92 @@
+# Development stack: Postgres, the API and the Vite dev server.
+#
+#   docker compose up --build
+#
+# The source tree is bind-mounted and dependencies are installed inside the
+# containers, so this works on a machine with no local Node install. It is a
+# convenience for local development, not a production deployment recipe.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: board
+      POSTGRES_PASSWORD: board
+      POSTGRES_DB: board
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U board -d board']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  server:
+    image: node:20-alpine
+    working_dir: /workspace
+    command: >
+      sh -c "npm install --no-audit --no-fund &&
+             npm run migrate --workspace server &&
+             npm run dev --workspace server"
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgres://board:board@db:5432/board
+      DB_DRIVER: pg
+      JWT_SECRET: docker-compose-development-secret-change-me-please
+      JWT_EXPIRES_IN: 15m
+      REFRESH_TOKEN_TTL_DAYS: 30
+      BCRYPT_ROUNDS: 10
+      CORS_ORIGIN: http://localhost:5173
+      LOG_FORMAT: dev
+    ports:
+      - '4000:4000'
+    volumes:
+      - .:/workspace
+      # Keeps the image's own node_modules from being shadowed by the host's.
+      - server_node_modules:/workspace/node_modules
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  client:
+    image: node:20-alpine
+    working_dir: /workspace
+    command: >
+      sh -c "npm install --no-audit --no-fund &&
+             npm run dev --workspace client -- --host 0.0.0.0"
+    environment:
+      VITE_API_URL: http://localhost:4000/api
+    ports:
+      - '5173:5173'
+    volumes:
+      - .:/workspace
+      - client_node_modules:/workspace/client/node_modules
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:5173/ || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  pgdata:
+  server_node_modules:
+  client_node_modules:

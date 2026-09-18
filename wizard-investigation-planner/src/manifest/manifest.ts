@@ -16,6 +16,15 @@ import {
   detectStructure,
 } from "./detectors.ts";
 
+/**
+ * How many repo files ride along in the manifest. A target the user names has
+ * to be resolvable to a real path, and that check is only as good as the list
+ * it runs against — but the manifest is Tier-1 context, so it is bounded
+ * rather than exhaustive. 2000 covers every repo this has been run on while
+ * keeping the payload well under a megabyte.
+ */
+const _TREE_FILE_CAP = 2000;
+
 /** Well-known signal files the Planner cares about. */
 export const KEY_FILE_NAMES: readonly string[] = [
   "package.json",
@@ -81,8 +90,7 @@ function importantPaths(keyFiles: ManifestFile[], entryFiles: string[]): string[
   return Array.from(set);
 }
 
-export function buildManifest(scan: ScanResult): RepositoryManifest {
-  const keyFiles = collectKeyFiles(scan.files);
+export function buildManifest(scan: ScanResult): RepositoryManifest {  const keyFiles = collectKeyFiles(scan.files);
   const entryFiles = detectEntryFiles(scan.files);
   const structure = detectStructure(scan.files, scan.directories);
 
@@ -100,6 +108,7 @@ export function buildManifest(scan: ScanResult): RepositoryManifest {
     entryFiles,
     extensions: extensionHistogram(scan.files),
     projectType: detectProjectType(scan.files),
+    treeFiles: scan.files.slice(0, _TREE_FILE_CAP).map((f) => f.relativePath),
     structure: {
       directories: scan.directories.slice(0, 60),
       importantPaths: importantPaths(keyFiles, entryFiles),
@@ -132,6 +141,14 @@ export function renderManifestForPrompt(manifest: RepositoryManifest): string {
 
   const topDirs = manifest.structure.directories.slice(0, 15).join(", ");
 
+  // The file sample is what lets the Planner honour a named target. Key files
+  // alone are not enough: they are the same handful of manifests in every repo,
+  // so a plan built from them alone is identical whatever was asked.
+  const fileSample = manifest.treeFiles
+    .filter((f) => !manifest.keyFiles.some((k) => k.path === f))
+    .slice(0, 40)
+    .join(", ");
+
   return [
     `Repository: ${manifest.repositoryName}`,
     `Files: ${manifest.fileCount} files across ${manifest.directoryCount} directories`,
@@ -145,6 +162,7 @@ export function renderManifestForPrompt(manifest: RepositoryManifest): string {
     ``,
     `Entry file candidates: ${manifest.entryFiles.join(", ") || "none"}`,
     `Top directories: ${topDirs || "(flat)"}`,
+    `Other files (sample of ${manifest.treeFiles.length}): ${fileSample || "(none)"}`,
     `Dominant extensions: ${topExtensions || "none"}`,
   ].join("\n");
 }

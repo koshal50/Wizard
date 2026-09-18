@@ -102,10 +102,138 @@ class TestReportGeneration:
         kg.insert(cl, ev)
 
         md = report_module.generate(inv, graph, [obs], kg)
-        assert "Executive Summary" in md
+        assert "Verdict" in md
         assert "RUNTIME" in md
 
+    def test_a_file_read_is_not_presented_as_a_finding(self, tmp_path):
+        """The summary says what the run learned, not which files it opened.
+
+        Claims are admitted in order and every read lands at the same trust, so
+        the reads took all five summary slots and the report led with a list of
+        paths. A reader asking what the project does was told what the Runtime
+        did instead. The claim is still in the Evidence Index below — the audit
+        belongs there.
+        """
+        inv = _inv(tmp_path)
+        graph = InvestigationGraph(inv.id)
+        obs = _obs(inv.id, "node_001", tool="read_file")
+        kg = KnowledgeGraph(inv.id)
+
+        read = _claim(inv.id, "FILE_READ", "server/index.js", True)
+        kg.insert(read, _ev(read.id, [obs.id], "config_parse"))
+        tech = _claim(inv.id, "RUNTIME", "node_version", "22")
+        kg.insert(tech, _ev(tech.id, [obs.id], "execution"))
+
+        md = report_module.generate(inv, graph, [obs], kg)
+        summary = md.split("## Verdict")[1].split("---")[0]
+        assert "node_version" in summary
+        assert "server/index.js" not in summary
+        # Still reported, in the section that indexes the evidence.
+        assert "server/index.js" in md.split("## Evidence Index")[1]
+
+    def test_a_run_that_only_read_files_does_not_claim_a_confidence_problem(self, tmp_path):
+        """Reads and nothing else is not the same failure as low belief.
+
+        One message covered both, so a run that never got past looking was
+        described as one whose claims fell below the belief threshold — which
+        points the reader at the wrong thing entirely.
+        """
+        inv = _inv(tmp_path)
+        graph = InvestigationGraph(inv.id)
+        obs = _obs(inv.id, "node_001", tool="read_file")
+        kg = KnowledgeGraph(inv.id)
+
+        read = _claim(inv.id, "FILE_READ", "server/index.js", True)
+        kg.insert(read, _ev(read.id, [obs.id], "config_parse"))
+
+        md = report_module.generate(inv, graph, [obs], kg)
+        summary = md.split("## Verdict")[1].split("---")[0]
+        assert "belief threshold" not in summary
+        assert "read" in summary, summary
+
+    def test_what_the_run_did_outranks_what_it_read(self, tmp_path):
+        """A run asked to operate the app must report whether the operating worked.
+
+        Claims are admitted in plan order — every read and every page-reach
+        before the first click — so an admission-ordered summary spent all five
+        slots on the manifest parses and the URL it navigated to, and the
+        browser's account of pressing the sign-in button arrived after the cut.
+        The reader got a report whose headline was `PACKAGE name` and which
+        never mentioned that the sign-in had been attempted at all.
+        """
+        inv = _inv(tmp_path)
+        graph = InvestigationGraph(inv.id)
+        obs = _obs(inv.id, "node_001", tool="browser_click")
+        kg = KnowledgeGraph(inv.id)
+
+        # Admitted first: six read/parse claims, all above threshold, which is
+        # more than the summary has room for.
+        for i in range(6):
+            c = _claim(inv.id, "PACKAGE", f"field_{i}", f"value_{i}")
+            kg.insert(c, _ev(c.id, [obs.id], "config_parse"))
+        pressed = _claim(inv.id, "INTERACTION", "effect:role=button[name=\"Sign in\"]",
+                         "unchanged")
+        kg.insert(pressed, _ev(pressed.id, [obs.id], "execution"))
+
+        md = report_module.generate(inv, graph, [obs], kg)
+        summary = md.split("## Verdict")[1].split("---")[0]
+        assert "Sign in" in summary, summary
+
+    def test_one_finding_is_not_reported_once_per_sighting(self, tmp_path):
+        """Re-observing a claim does not make it five findings.
+
+        Every browser action re-reports where the page is, so a five-step
+        interaction files five `WEB current_url` claims at the top trust. Listed
+        separately they took every summary slot between them and the summary
+        became one sentence said five times. The Evidence Index keeps all five,
+        which is where an audit of when the page was read belongs.
+        """
+        inv = _inv(tmp_path)
+        graph = InvestigationGraph(inv.id)
+        obs = _obs(inv.id, "node_001")
+        kg = KnowledgeGraph(inv.id)
+
+        for _ in range(5):
+            c = _claim(inv.id, "WEB", "current_url", "http://localhost:5173/login")
+            kg.insert(c, _ev(c.id, [obs.id], "execution"))
+        other = _claim(inv.id, "INTERACTION", "interacted:role=button", True)
+        kg.insert(other, _ev(other.id, [obs.id], "execution"))
+
+        md = report_module.generate(inv, graph, [obs], kg)
+        summary = md.split("## Verdict")[1].split("---")[0]
+        assert summary.count("current_url") == 1, summary
+        assert "interacted:role=button" in summary, summary
+
+    def test_what_happened_outranks_that_something_happened(self, tmp_path):
+        """The click's outcome must survive a run of types, not fall off the end.
+
+        Every control touched files one `interacted:<control> = True` claim
+        alongside the claims that say what the touch did. Arrival order put the
+        bookkeeping first, so the two typed fields filled the summary and the
+        press of the submit button — the only claim in the run that says whether
+        any of it worked — was the sixth row and never printed.
+        """
+        inv = _inv(tmp_path)
+        graph = InvestigationGraph(inv.id)
+        obs = _obs(inv.id, "node_001", tool="browser_click")
+        kg = KnowledgeGraph(inv.id)
+
+        for field in ("Email", "Password"):
+            touched = _claim(inv.id, "INTERACTION", f"interacted:{field}", True)
+            kg.insert(touched, _ev(touched.id, [obs.id], "execution"))
+            value = _claim(inv.id, "INTERACTION", f"field_value:{field}", "x")
+            kg.insert(value, _ev(value.id, [obs.id], "execution"))
+        submit = _claim(inv.id, "INTERACTION", "effect:submit", "unchanged")
+        kg.insert(submit, _ev(submit.id, [obs.id], "execution"))
+
+        md = report_module.generate(inv, graph, [obs], kg)
+        summary = md.split("## Verdict")[1].split("---")[0]
+        assert "effect:submit" in summary, summary
+        # Still recorded — the Evidence Index is where every claim appears.
+        assert "interacted:Email" in md.split("## Evidence Index")[1]
+
     def test_report_has_technologies_section(self, tmp_path):
+
         inv = _inv(tmp_path)
         graph = InvestigationGraph(inv.id)
         obs = _obs(inv.id, "node_001")

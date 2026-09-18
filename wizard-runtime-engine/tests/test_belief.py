@@ -135,6 +135,10 @@ class TestKnowledgeGraph:
         assert "_evidence" not in summary
 
     def test_persist_writes_json(self, tmp_path, monkeypatch):
+        # This test is about the *fallback* root — `<cwd>/.wizard` when
+        # WIZARD_DATA_DIR says nothing — so it has to say that, rather than rely
+        # on the variable happening to be unset in the environment it runs in.
+        monkeypatch.delenv("WIZARD_DATA_DIR", raising=False)
         monkeypatch.chdir(tmp_path)
         kg = KnowledgeGraph("inv_persist")
         claim = Claim(id="cl_p01", investigation_id="inv_persist",

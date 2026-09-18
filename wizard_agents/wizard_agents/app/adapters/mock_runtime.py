@@ -32,7 +32,7 @@ class MockRuntimeExecutor(RuntimeExecutor):
         canned = {
             ToolName.READ_FILE: {"content": "# mock file contents"},
             ToolName.SEARCH_FILES: {"matches": []},
-            ToolName.LIST_DIRECTORY: {"entries": []},
+            ToolName.LIST_TREE: {"entries": []},
             ToolName.EXECUTE_COMMAND: {"stdout": "", "stderr": "", "exit_code": 0},
             ToolName.INSPECT_CONFIGURATION: {"config": {}},
             ToolName.TRACE_EXECUTION: {"trace": []},

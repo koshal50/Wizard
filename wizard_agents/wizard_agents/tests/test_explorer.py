@@ -36,7 +36,7 @@ def test_route_handling_sets_next_node(mock_llm, python_project_explorer_input):
 def test_available_tool_selection_respects_restricted_list(mock_llm, nodejs_project_explorer_input):
     agent = ExplorerAgent(mock_llm)
     output = agent.investigate(nodejs_project_explorer_input)
-    assert output.selected_tool in {ToolName.READ_FILE, ToolName.LIST_DIRECTORY}
+    assert output.selected_tool in {ToolName.READ_FILE, ToolName.LIST_TREE}
 
 
 def test_invalid_tool_in_output_is_rejected(python_project_explorer_input):

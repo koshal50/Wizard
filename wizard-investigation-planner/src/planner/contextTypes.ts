@@ -15,6 +15,21 @@ export interface ManifestSummary {
   keyFiles: string[];
   entryFiles: string[];
   projectType: string;
+  /** Every file the scan saw, so a named target can be resolved to real paths. */
+  treeFiles: string[];
+  /**
+   * The command family: "investigate" | "verify" | "explain" | "report".
+   *
+   * Not the user's words. This field was documented as "the question the user
+   * asked" and has never held one — the Runtime's request contract types it as
+   * that literal union. The question is `question` below; conflating the two is
+   * what made `explain` a subject to go and read.
+   */
+  intent: string;
+  /** The question the user asked, verbatim. Empty when they typed none. */
+  question: string;
+  /** The things the user named, verbatim. */
+  targets: string[];
 }
 
 import type { PlannerContext } from "../core/types.ts";

@@ -35,8 +35,13 @@ export class InvestigationPlanner {
     this.escalation = new EscalationPlanner(llm, logger);
   }
 
-  planTechnologies(manifest: RepositoryManifest): Promise<TechnologyPlan> {
-    return this.technology.plan(manifest);
+  planTechnologies(
+    manifest: RepositoryManifest,
+    intent = "",
+    targets: string[] = [],
+    question = "",
+  ): Promise<TechnologyPlan> {
+    return this.technology.plan(manifest, intent, targets, question);
   }
 
   planNext(built: BuiltContext, opts: ValidationOptions): Promise<ValidatedBatch> {

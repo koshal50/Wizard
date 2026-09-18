@@ -22,6 +22,7 @@ import { createProviderFromEnv } from "../llm/providerFactory.ts";
 import { createLogger } from "../util/logger.ts";
 import type { ValidationOptions } from "../planner/PlannerValidator.ts";
 import type { PlannerContext, UserIntent, EscalationContext, InvestigationNodeType } from "../core/types.ts";
+import { operatesSurface } from "../planner/goalPolicy.ts";
 import {
   manifestFromWire,
   proposalsToWire,
@@ -97,6 +98,40 @@ function heuristicFrom(o: Json): Record<string, unknown> {
     priorityFiles: pickArr(o, "priority_files", "priorityFiles").filter((x) => typeof x === "string"),
     fileObservationIds: (pick(o, "file_observation_ids", "fileObservationIds") as Json) ?? {},
     parsedObservationIds: (pick(o, "parsed_observation_ids", "parsedObservationIds") as Json) ?? {},
+    // Reads that are already in the Runtime's graph awaiting their turn. Distinct
+    // from the file index above, which lists what has already run: proposing one
+    // of these again produces a node the Runtime refuses to add, because the
+    // first copy has not executed yet and will supply the same evidence.
+    queuedReadPaths: pickArr(o, "queued_read_paths", "queuedReadPaths").filter((x) => typeof x === "string"),
+    // Browser facts, mirroring allowExecution above: the Runtime states what the
+    // plane can reach, and the provider decides whether more browsing is warranted.
+    browserEnabled: pick(o, "browser_enabled", "browserEnabled") === true,
+    allowedDomains: pickArr(o, "allowed_domains", "allowedDomains").filter((x) => typeof x === "string"),
+    browserTargets: pickArr(o, "browser_targets", "browserTargets").filter((x) => typeof x === "string"),
+    visitedUrls: pickArr(o, "visited_urls", "visitedUrls").filter((x) => typeof x === "string"),
+    // What the current page OFFERS, not just that it was visited. `visited_urls`
+    // names a page; a control's role and accessible name exist only in the
+    // observation of the page that offered it, so without these the provider can
+    // name a URL and not a single thing on it — which is the whole difference
+    // between proposing a navigate and proposing an interaction.
+    pageUrl: pickStr(o, "page_url", "pageUrl") ?? "",
+    pageControls: pickArr(o, "page_controls", "pageControls").filter(
+      (c): c is Json => typeof c === "object" && c !== null,
+    ),
+    // Pressed already. Browser tools are exempt from the Runtime's duplicate
+    // dedup, so a provider that cannot see this proposes the same fill on every
+    // call and each repeat re-types over what the first one set.
+    interactedSelectors: pickArr(o, "interacted_selectors", "interactedSelectors")
+      .filter((x): x is string => typeof x === "string"),
+    // The user's own words again, this time for the ongoing phase. The initial
+    // plan settles which goals exist; a goal the initial plan missed can only be
+    // recovered later if the phase that runs later can still see the question.
+    intent: pickStr(o, "intent", "user_intent") ?? "",
+    // The sentence the user typed, distinct from `intent` above: that key is the
+    // command FAMILY, one of four verbs, and reading a family as the user's words
+    // is what once turned `explain` into a subject to go and read.
+    question: pickStr(o, "question") ?? "",
+    targets: stringTargetsFrom(o),
   };
 }
 
@@ -125,10 +160,49 @@ function plannerContextFrom(o: Json, heuristic: Record<string, unknown>): Planne
 
 // ── Endpoint handlers ────────────────────────────────────────────────────────
 
+/** URLs the Runtime named as targets, but only when it says a browser plane exists.
+ * A URL target with no browser plane is just a string — planning a navigation the
+ * Runtime would refuse (fail-closed egress) would burn budget to learn nothing. */
+function browserTargetsFrom(body: Json): string[] {
+  if (pick(body, "browser_enabled", "browserEnabled") !== true) return [];
+  return pickArr(body, "targets")
+    .filter((t): t is string => typeof t === "string")
+    .filter((t) => t.startsWith("http://") || t.startsWith("https://"));
+}
+
+/** Every target the Runtime named, URLs included.
+ *
+ * Distinct from browserTargetsFrom, which is the egress-guarded subset: a target
+ * like "auth" needs no browser plane to be worth investigating, and filtering to
+ * URLs here is what left a non-URL target with no effect on the plan at all. */
+function stringTargetsFrom(body: Json): string[] {
+  return pickArr(body, "targets").filter((t): t is string => typeof t === "string");
+}
+
 async function handleInitial(body: Json): Promise<unknown> {
   const manifest = manifestFromWire((body.manifest ?? {}) as WireManifest);
-  const plan = await planner.planTechnologies(manifest);
-  return technologyPlanToWire(plan);
+  // The Runtime sends intent, targets and question on every initial call; this
+  // handler used to read only the manifest out of the body, so two
+  // investigations of one repository planned identically however different the
+  // question was.
+  //
+  // `intent` is the command family and `question` is what the user typed. They
+  // are separate keys because they are separate things: reading the family as
+  // the user's words is what turned `explain` into a subject to go and read.
+  const question = pickStr(body, "question") ?? "";
+  const targets = stringTargetsFrom(body);
+  const intent = pickStr(body, "intent", "user_intent") ?? "";
+  const plan = await planner.planTechnologies(manifest, intent, targets, question);
+  // Whether the request asks for the application to be OPERATED rather than read
+  // is decided once, in planner/goalPolicy.ts, and read from there by both this
+  // edge and the ongoing-plan rule that writes the script. An edge deciding it
+  // separately is how a plan declares an "Operate Web Surface" goal that nothing
+  // then plans the steps to satisfy.
+  return technologyPlanToWire(
+    plan,
+    browserTargetsFrom(body),
+    operatesSurface(question, targets, intent),
+  );
 }
 
 async function handleNext(body: Json): Promise<unknown> {

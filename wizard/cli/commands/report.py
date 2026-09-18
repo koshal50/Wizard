@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Iterator
 
 from wizard.cli.parser.intent_builder import build_intent
+from wizard.cli.parser.intent_parser import parse_intent
 from wizard.cli.models.investigation_request import (
     InvestigationRequest,
     RepositoryInfo,
@@ -40,30 +41,46 @@ from wizard.cli.runtime_client.client import stream_events
 def report(
     repo_path: str | None = None,
     options: RequestOptions | None = None,
+    intent_text: str = "",
 ) -> Iterator[dict]:
     """Run the report pipeline, yielding engine events.
 
     Called by the TUI session when the user selects report from the menu.
     Report has no target — it generates from existing verified knowledge.
+    A URL may still be typed, and is carried through: a report about a
+    repository that serves a page is a report about both planes.
 
     Args:
         repo_path: Absolute path to the repository. Defaults to cwd.
-        options: Execution options. Defaults to RequestOptions().
+        options: Execution options. Defaults to RequestOptions.from_env().
+        intent_text: The user's free text, if any. No target is read from it —
+            report accepts no command target, so named targets are dropped —
+            but the URLs are carried through, and the sentence itself travels
+            as `question` so the Planner can read what was asked.
 
     Yields:
         Engine event dicts from stream_events().
     """
     repo_path = repo_path or os.getcwd()
-    options = options or RequestOptions()
+    options = options or RequestOptions.from_env()
+
+    # Step 1: Command Parsing -- a URL is readable from the text; a command
+    # target is not, because report accepts none (validate_target enforces it).
+    parsed = parse_intent(intent_text, "report", menu_target=None)
 
     # Step 2: Intent Construction -- Build the Intent
-    intent = build_intent(action="report", target=None)
+    intent = build_intent(
+        action="report",
+        target=None,
+        urls=list(parsed.urls),
+        question=intent_text,
+    )
 
     # Step 3: Investigation Request Assembly -- Package everything
     request = InvestigationRequest(
         repository=RepositoryInfo(path=repo_path),
         intent=intent,
-        options=options,
+        options=options.for_urls(intent.urls),
     )
 
     # Step 4: Runtime Engine Communication -- Stream events

@@ -32,6 +32,16 @@ class InvestigationNode(BaseModel):
     goal: str = Field(..., min_length=1, description="What this node is trying to establish")
     description: Optional[str] = None
     depends_on: List[str] = Field(default_factory=list, description="node_ids that must complete first")
+    planned_action: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "The action the Planner already attached to this node, as "
+            "{'tool': str, 'params': {...}} — present when Runtime forwards a "
+            "Planner-authored node. Explorer may honour it or override it, but "
+            "should only override with a reason: the Planner usually knows which "
+            "concrete tool this node needs."
+        ),
+    )
 
 
 class Route(BaseModel):

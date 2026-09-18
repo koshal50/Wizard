@@ -65,7 +65,7 @@ from pathlib import Path
 from typing import Any, get_args
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, PlainTextResponse
 
 # ── The kernel: contracts ─────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ from wizard_kernel.control.hypothesis import MatchResult
 from wizard_kernel.control.priority import next_ready
 from wizard_kernel.control.tool_validator import (
     ToolRequestValidator, ValidationResult,
-    _ALLOWED_TOOLS, _BROWSER_TOOLS, _EXEC_TOOLS, _PATH_TOOLS, _URL_TOOLS,
+    _ALLOWED_TOOLS, BROWSER_TOOLS, _EXEC_TOOLS, _PATH_TOOLS, _URL_TOOLS,
 )
 from wizard_kernel.session import events as kernel_events
 from wizard_kernel.storage import fs_store
@@ -148,7 +148,7 @@ KERNEL_SURFACE: dict[str, Any] = {
     "source_weights": dict(kernel_trust.SOURCE_WEIGHTS),
     "prior_uncertainty_u0": kernel_trust.U0,
     "validator_allowed": tuple(sorted(_ALLOWED_TOOLS)),
-    "validator_browser": tuple(sorted(_BROWSER_TOOLS)),
+    "validator_browser": tuple(sorted(BROWSER_TOOLS)),
     "validator_path": tuple(sorted(_PATH_TOOLS)),
     "validator_url": tuple(sorted(_URL_TOOLS)),
     "validator_exec": tuple(sorted(_EXEC_TOOLS)),
@@ -331,27 +331,41 @@ class SandboxProbe:
 SANDBOX = SandboxProbe()
 
 
-def _probe_docker() -> str:
-    """Is the Docker runtime usable here? Reported, never silently substituted."""
+def _probe_docker(mode: str = "local_dev") -> str:
+    """Is Docker required for this run, and is it usable if so?
+
+    This line reads like a failure and is not one. `local_dev` — the default —
+    runs real subprocesses on this machine and never touches Docker, so a CLI
+    with no daemon behind it costs nothing. It is reported because a capability
+    the user might believe they have should be visible either way, and because
+    the opposite mistake (believing `docker` mode is in force when it is not)
+    is worse: it would mean claiming isolation the run does not have.
+
+    So the line leads with whether docker is REQUIRED, and says why it is or is
+    not usable — never a bare "docker: failed".
+    """
+    from wizard_kernel.world.sandbox import docker_status
     from wizard_kernel.world.sandbox.docker import _DEFAULT_IMAGE
-    import subprocess
-    try:
-        r = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"],
-                           capture_output=True, text=True, timeout=8)
-        if r.returncode == 0 and r.stdout.strip():
-            return f"docker server {r.stdout.strip()} (image {_DEFAULT_IMAGE})"
-        return f"docker CLI present but no server ({(r.stderr or '').strip()[:60]})"
-    except FileNotFoundError:
-        return "docker CLI not installed — DockerSandboxRuntime unavailable here"
-    except Exception as exc:  # noqa: BLE001
-        return f"docker probe failed: {type(exc).__name__}: {exc}"
+
+    required = mode == "docker"
+    usable, why = docker_status()
+
+    if required and not usable:
+        return f"REQUIRED (mode=docker) but unreachable: {why}"
+    if required:
+        return f"REQUIRED (mode=docker) and available: {why} (image {_DEFAULT_IMAGE})"
+    if usable:
+        return (f"NOT REQUIRED (mode={mode}); available anyway: {why} "
+                f"(image {_DEFAULT_IMAGE})")
+    return (f"NOT REQUIRED (mode={mode}); this run never invokes Docker. "
+            f"Unreachable here: {why}. Set sandbox_mode='docker' to require it instead.")
 
 
 def sandbox_preflight(mode: str = "local_dev") -> SandboxProbe:
     """Drive the sandbox and the tool executor directly, then report what happened."""
     p = SANDBOX
     p.mode = mode
-    p.docker_available = _probe_docker()
+    p.docker_available = _probe_docker(mode)
     sandbox: SandboxRuntime = get_sandbox(mode)
     p.runtime_class = type(sandbox).__name__
     TRACE.add("", "sandbox", "sandbox.acquired",
@@ -453,7 +467,10 @@ def repository_precheck() -> dict:
         out["valid"] = False
         out["error"] = f"{type(exc).__name__}: {exc}"
         return out
-    manifest = kernel_scanner.scan("inv_precheck", CFG.repo_path)
+    # scan(repo_path, investigation_id) — that order. Swapping them walks the
+    # literal path "inv_precheck", which does not exist, and reports a 104-file
+    # repository as empty.
+    manifest = kernel_scanner.scan(CFG.repo_path, "inv_precheck")
     out.update(files=manifest.total_files, dirs=manifest.total_dirs,
                key_files=list(manifest.key_files),
                top_extensions=dict(sorted(manifest.extensions.items(),
@@ -692,6 +709,23 @@ def phase_d_nodes() -> list[InvestigationNode]:
         mknode("d2_snapshot_home", "parse", "browser_snapshot", {}, H_ALWAYS,
                depends_on=["d1_navigate_home"],
                success=("WEB_SNAPSHOT", "home_accessibility_tree", True)),
+        # ── leaf: the egress boundary, settled before the surface is exercised ──
+        # 127.0.0.1/localhost is the whole allowlist, so the validator's
+        # _validate_url must refuse this before Chromium is asked to do anything.
+        # Both the Explorer's request and the kernel's fallback are rejected — the
+        # intended outcome, and why this is a leaf.
+        #
+        # It hangs off d2 rather than off the last node of the phase because the
+        # kernel stops the moment every goal is satisfied (control/loop.py), and
+        # d12 is what closes the browser goal — so a boundary probe placed after
+        # d12 is never reached, and the check that reads it passes on an empty
+        # graph. Settling it early also asks the boundary question in the right
+        # order: can this agent leave the host at all, before it does a phase of
+        # work on the assumption that it cannot.
+        mknode("d13_blocked_egress", "execute", "browser_navigate",
+               {"url": "https://example.org/must-be-blocked"}, H_ALWAYS,
+               depends_on=["d2_snapshot_home"],
+               success=("WEB_EGRESS", "offsite_navigation_allowed", True)),
         mknode("d3_click_detail", "execute", "browser_click", {"selector": "#to-detail"},
                H_ALWAYS, depends_on=["d2_snapshot_home"],
                success=("WEB_CLICK", "followed_detail_link", True)),
@@ -723,16 +757,6 @@ def phase_d_nodes() -> list[InvestigationNode]:
                {"url": f"{base}/v1/investigations"}, H_ALWAYS,
                depends_on=["d11_extract_result"],
                success=("WEB_SELF", "kernel_api_surface_rendered", True)),
-
-        # ── leaf ───────────────────────────────────────────────────────────────
-        # 127.0.0.1/localhost is the whole allowlist, so the validator's
-        # _validate_url must refuse this before Chromium is asked to do anything.
-        # Both the Explorer's request and the kernel's fallback are rejected — the
-        # intended outcome, and why this is a leaf.
-        mknode("d13_blocked_egress", "execute", "browser_navigate",
-               {"url": "https://example.org/must-be-blocked"}, H_ALWAYS,
-               depends_on=[D_LAST],
-               success=("WEB_EGRESS", "offsite_navigation_allowed", True)),
     ]
 
 
@@ -762,7 +786,7 @@ GOALS_BASE: list[GoalDefinition] = [
                    required_claim_types=["FILESYSTEM"]),
     GoalDefinition(name="Execution Plane Verified",
                    required_claim_types=["EXEC_STDOUT", "EXEC_INTERPRETER",
-                                        "EXEC_PACKAGER", "PORT_OPEN"],
+                                        "PORT_OPEN"],
                    requires_execution_evidence=True),
     GoalDefinition(name="Command Exit Codes Observed",
                    required_claim_types=["EXECUTION"],
@@ -808,6 +832,12 @@ class PlanState:
     browser: bool
     allowed_domains: list[str]
     emitted: set[str] = field(default_factory=set)
+    # `emitted` means "this phase has been decided about" — either released to the
+    # kernel, or deliberately gated off (a browser_only phase in a session with no
+    # browser plane). `released` is the narrower fact: the phase's nodes were actually
+    # handed over. Keeping them apart is what lets the report say which phases a
+    # session really ran rather than treating a skip as a delivery.
+    released: set[str] = field(default_factory=set)
     interpreted: set[str] = field(default_factory=set)
     # A mirror of the kernel's validator: same class, same arguments. The Explorer
     # runs its request through this BEFORE answering, so the trace records the
@@ -828,6 +858,7 @@ class PlanState:
         return {"inv_id": self.inv_id, "browser": self.browser,
                 "allowed_domains": self.allowed_domains,
                 "phases_emitted": sorted(self.emitted),
+                "phases_released": sorted(self.released),
                 "interpreted_nodes": sorted(self.interpreted),
                 "mirror_checks": self.mirror_checks,
                 "mirror_rejections": self.mirror_rejections}
@@ -995,6 +1026,7 @@ def plan_next(body: dict) -> dict:
 
         nodes = phase.emit()
         st.emitted.add(phase.name)
+        st.released.add(phase.name)
         spine = [n.id for n in nodes
                  if n.hypothesis.kind != HypothesisKind.manual_escalate]
         TRACE.add(
@@ -1547,7 +1579,9 @@ def _request_for(role: str) -> InvestigationRequest:
     uvicorn app."""
     base = CFG.base
     common = dict(
-        planner_url=f"{base}/plan",
+        # Bare origin: HttpPlanner._post appends "/plan/initial" itself, so a base
+        # carrying "/plan" would post to "/plan/plan/initial" and 404.
+        planner_url=base,
         agent_explorer_url=f"{base}/agent/explorer",
         agent_verifier_url=f"{base}/agent/verifier",
         sandbox_mode="local_dev",
@@ -1578,9 +1612,17 @@ class FlowRun:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self.state: str = "idle"        # idle | preflight | running | done | failed
+        # `state` is the coarse lifecycle; `phase` is which stage of the run is
+        # executing right now. serve_live prints it as a progress tick and the
+        # dashboard's header shows it, so both read the same string rather than
+        # each guessing from the trace.
+        self.phase: str = "idle"
         self.sessions: list[Session] = []
         self.started_at: float = 0.0
         self.finished_at: float = 0.0
+        # Set in _drive's finally, whichever way the run ended. Lets a caller block
+        # on completion instead of polling `state`.
+        self.finished = threading.Event()
         self.error: str = ""
         self.terminal_report: str = ""
         self.precheck: dict = {}
@@ -1599,6 +1641,7 @@ class FlowRun:
                                             daemon=True)
             self.started_at = time.time()
             self.state = "preflight"
+            self.phase = "preflight — sandbox and repository"
             self._thread.start()
             return True
 
@@ -1610,25 +1653,39 @@ class FlowRun:
     def primary(self) -> Session | None:
         return next((s for s in self.sessions if s.role == "primary"), None)
 
+    @property
+    def started(self) -> bool:
+        """True once a run has been attempted. Same question as `state != "idle"`,
+        without the caller having to know the state names."""
+        return self.started_at > 0
+
     # ── the run ──────────────────────────────────────────────────────────────
 
     def _drive(self) -> None:
         try:
             self._preflight()
             self.state = "running"
+            self.phase = "creating three real investigations"
             self._create_sessions()
+            self.phase = "deleting one mid-flight"
             self._cancel_one()
+            self.phase = "polling the kernel until every session is terminal"
             self._await_terminal()
+            self.phase = "collecting the kernel's own reports"
             self._collect_reports()
+            self.phase = "building the terminal report"
             self.terminal_report = build_terminal_report(self)
             self.state = "done"
+            self.phase = "done"
         except Exception as exc:  # noqa: BLE001 — the driver reports, it never dies silently
             self.error = f"{type(exc).__name__}: {exc}"
             self.state = "failed"
+            self.phase = "failed"
             TRACE.add("", "flow", "error", "flow driver failed", self.error)
             self.terminal_report = build_terminal_report(self)
         finally:
             self.finished_at = time.time()
+            self.finished.set()
 
     def _preflight(self) -> None:
         TRACE.add("", "flow", "phase", "preflight",
@@ -1742,6 +1799,7 @@ class FlowRun:
     def as_dict(self) -> dict:
         return {
             "state": self.state,
+            "phase": self.phase,
             "error": self.error,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -1938,7 +1996,8 @@ def _report_agent_section(run: FlowRun, primary: Session | None, files: Session 
                 if rejected else ""))
     for p in PLANS.all():
         d = p.as_dict()
-        L.append(f"   plan[{d['inv_id'][:12]}]: phases={d['phases_emitted']} "
+        L.append(f"   plan[{d['inv_id'][:12]}]: released={d['phases_released']} "
+                 f"handled={d['phases_emitted']} "
                  f"interpreted={d['interpreted_nodes']} "
                  f"mirror={d['mirror_checks']} checks/{d['mirror_rejections']} rejected")
 
@@ -1960,14 +2019,19 @@ def _report_agent_section(run: FlowRun, primary: Session | None, files: Session 
           f"{[(e.get('payload') or {}).get('node_id') for e in unintended] or 'none'}")
 
     # Phase release is evidence-gated, so the non-browser session must never see D.
+    # These compare phase NAMES (`emitted`/`released` store "D browser", not "D") and
+    # ask about `released` rather than `emitted`: a browser_only phase in a session
+    # without a browser plane is marked emitted-but-gated, which is precisely the
+    # outcome these two checks are meant to tell apart.
+    d_phase = next(p.name for p in PHASES if p.browser_only)
     files_plan = PLANS.get(files.inv_id) if files and files.inv_id else None
-    check(bool(files_plan and "D" not in files_plan.emitted),
+    check(bool(files_plan and d_phase not in files_plan.released),
           "phase D was withheld from the non-browser session",
-          f"emitted={sorted(files_plan.emitted) if files_plan else 'n/a'}")
+          f"released={sorted(files_plan.released) if files_plan else 'n/a'}")
     primary_plan = PLANS.get(primary.inv_id) if primary and primary.inv_id else None
-    check(bool(primary_plan and {"A", "B", "C", "D"} <= primary_plan.emitted),
+    check(bool(primary_plan and {p.name for p in PHASES} <= primary_plan.released),
           "all four phases were released to the browser session",
-          f"emitted={sorted(primary_plan.emitted) if primary_plan else 'n/a'}")
+          f"released={sorted(primary_plan.released) if primary_plan else 'n/a'}")
     check(bool(primary_plan and primary_plan.interpreted),
           "planner.interpret minted nodes from runtime-only values",
           f"interpreted={sorted(primary_plan.interpreted) if primary_plan else 'n/a'}")
@@ -2019,11 +2083,23 @@ def _report_browser_section(primary: Session | None, check) -> list[str]:
     check("WEB" in claims,
           "belief.extractors read the browser payloads (bare WEB claim type)",
           f"{'WEB present' if 'WEB' in claims else 'no WEB claim — extractor path broken'}")
-    check("WEB_EGRESS" not in claims,
+    # Absence of a WEB_EGRESS claim is not on its own evidence that the boundary
+    # held: a node that never ran also admits nothing. So this requires both halves
+    # — the egress node was actually attempted AND was refused — and says which half
+    # is missing when it fails.
+    egress_refusals = [e for e in _events_of(primary, kernel_events.ToolRejected)
+                       if (e.get("payload") or {}).get("node_id") == "d13_blocked_egress"]
+    if "WEB_EGRESS" in claims:
+        egress_note = "example.org navigation SUCCEEDED — the allowlist did not hold"
+    elif not egress_refusals:
+        egress_note = ("d13_blocked_egress never attempted a navigation — no rejection "
+                       "was recorded, so this proves nothing about the allowlist")
+    else:
+        egress_note = (f"d13_blocked_egress refused {len(egress_refusals)}x, "
+                       f"no WEB_EGRESS claim admitted")
+    check("WEB_EGRESS" not in claims and bool(egress_refusals),
           "the off-host navigation was refused (fail-closed egress held)",
-          "d13_blocked_egress admitted no WEB_EGRESS claim"
-          if "WEB_EGRESS" not in claims else
-          "example.org navigation SUCCEEDED — the allowlist did not hold")
+          egress_note)
     check(any(f"/v1/investigations" in u for u in urls),
           "the agent's browser rendered the kernel's own API surface",
           f"urls={urls[-1:] or 'none'}")
@@ -2077,8 +2153,11 @@ def _report_belief_section(run: FlowRun, primary: Session | None,
           f"files goals={sorted(fgoals)}")
 
     # Deliberate negative controls: their claims must exist and score 0.0, which is
-    # why they sit outside every goal's required set.
-    negatives = {"FS_ABSENT", "PORT_CLOSED"}
+    # why they sit outside every goal's required set. There are three of them —
+    # b3_packager (pip cannot import as a module), a6_absent_path_probe (a phantom
+    # path) and b5_port_closed_control (a discarded port) — and each one is required
+    # to be a contradict-only claim, so all three belong here.
+    negatives = {"FS_ABSENT", "PORT_CLOSED", "EXEC_PACKAGER"}
     check(negatives <= ptypes,
           "contradicting evidence from the negative-control nodes was admitted",
           f"present={sorted(negatives & ptypes)} "
@@ -2091,5 +2170,97 @@ def _report_belief_section(run: FlowRun, primary: Session | None,
     check(len(reports) >= 2, "the kernel generated its own verification reports",
           f"{len(reports)} report.generated events")
     return L
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECTION 9 — the dashboard surface
+# ══════════════════════════════════════════════════════════════════════════════
+# serve_live.py mounts this alongside the three agent routers, so the browser, the
+# kernel and both agent planes are one process on one port. The dashboard is a thin
+# viewer: it polls TRACE for the agent stream and RUN for the kernel's state, and it
+# attaches to the kernel's OWN screencast socket for pixels
+# (GET /v1/investigations/{id}/live, WS /v1/investigations/{id}/screencast — mounted
+# by create_app(), routed by api/routes_browser.py to world.browser's runtime).
+#
+# Nothing here invents progress. Every value returned is read off the objects the
+# run itself writes, and the two endpoints the dashboard polls every second are also
+# the heartbeat the conductor waits on before starting the investigations.
+
+flow_router = APIRouter(prefix="/flow", tags=["flow"])
+
+_DASHBOARD_HTML = HERE / "flow_dashboard.html"
+
+
+@flow_router.get("", response_class=HTMLResponse)
+def dashboard() -> HTMLResponse:
+    """The page itself. A missing file is a 500 naming the path, never a blank page."""
+    try:
+        return HTMLResponse(_DASHBOARD_HTML.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return HTMLResponse(
+            f"<h1>dashboard unavailable</h1><p>{_DASHBOARD_HTML} does not exist.</p>",
+            status_code=500)
+
+
+@flow_router.get("/state")
+def flow_state() -> dict:
+    """Everything the header, the session strip and the footer render.
+
+    Polling this counts as a viewer heartbeat: serve_live holds the run until
+    someone is watching, and either poll is evidence that someone is."""
+    TRACE.mark_viewer()
+    return {**RUN.as_dict(), "surface": _surface_summary()}
+
+
+@flow_router.get("/trace")
+def flow_trace(since_seq: int = 0, inv_id: str = "") -> dict:
+    """The left pane. One append-only sequence across every agent and the kernel —
+    `since_seq` is global, so a client that filters by `inv_id` still advances
+    correctly when other sessions are also writing."""
+    TRACE.mark_viewer()
+    entries = TRACE.since(since_seq, inv_id or None)
+    return {
+        "entries": [e.as_dict() for e in entries],
+        "next_seq": entries[-1].seq if entries else since_seq,
+        "state": RUN.state,
+        "phase": RUN.phase,
+    }
+
+
+@flow_router.post("/start")
+def flow_start() -> dict:
+    """Start the run from the dashboard's button.
+
+    Idempotent by construction — FlowRun.start() refuses a second concurrent run,
+    so this and serve_live's own call cannot race into two."""
+    started = RUN.start()
+    TRACE.add("", "flow", "note",
+              "run started from the dashboard" if started
+              else "start ignored — a run is already in flight, or has already ended")
+    return {"started": started, "state": RUN.state, "phase": RUN.phase}
+
+
+@flow_router.get("/report")
+def flow_report() -> PlainTextResponse:
+    """The terminal verification report, as printed. 404 until it exists — the
+    dashboard disables the button on `report_ready`, so this is the honest answer
+    for anyone who asks early rather than an empty 200."""
+    if not RUN.terminal_report:
+        raise HTTPException(404, detail=f"no report yet (state={RUN.state}, "
+                                       f"phase={RUN.phase})")
+    return PlainTextResponse(RUN.terminal_report)
+
+
+def _surface_summary() -> dict:
+    """The kernel surface the verification report measures coverage against, in the
+    shape the footer prints. Counted from KERNEL_SURFACE, which is itself read out of
+    wizard_kernel at import — so the footer cannot drift from what the kernel exposes."""
+    return {
+        "tools": len(KERNEL_SURFACE["tools"]),
+        "event_types": len(KERNEL_SURFACE["event_types"]),
+        "extractors": len(KERNEL_SURFACE["extractor_obs_types"]),
+        "hypothesis_kinds": len(KERNEL_SURFACE["hypothesis_kinds"]),
+        "node_types": len(KERNEL_SURFACE["node_types"]),
+    }
+
 
 __FLOW_APPEND_MARKER__ = True

@@ -14,6 +14,12 @@ class Investigation:
     intent: str
     targets: list[str]
     options: dict
+    # What the user typed, verbatim, when they typed anything. Held beside
+    # `intent` (the command family) rather than folded into it because the two
+    # are different inputs, and because this one is never validated — it is the
+    # Planner's to read, not the kernel's to interpret. Defaulted so an
+    # investigation persisted before this field existed still restores.
+    question: str = ""
     state: LifecycleState = LifecycleState.created
     budget_total: int = 40
     budget_remaining: int = 40

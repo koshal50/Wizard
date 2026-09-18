@@ -79,7 +79,7 @@ Explorer may only request tools Runtime has declared available via
 `ExplorerInput.available_tools`. The canonical tool list and their
 expected parameters live in `app/explorer/tools.py`:
 
-`read_file`, `search_files`, `list_directory`, `execute_command`,
+`read_file`, `search_files`, `list_tree`, `execute_command`,
 `inspect_configuration`, `trace_execution`.
 
 These are **requests only** — Explorer's tool registry module contains no

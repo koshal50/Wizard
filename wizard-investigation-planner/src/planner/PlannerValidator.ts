@@ -72,6 +72,20 @@ export function validateProposal(
     if (!safe.ok) return `unsafe discovery directory: ${safe.reason}`;
   }
 
+  // Browser proposals need no repo-path check — they address a URL, not a file —
+  // and the URL is deliberately NOT re-validated against an allowlist here. The
+  // Planner has no allowlist to check against; the Runtime's ToolRequestValidator
+  // owns egress and re-checks every URL at execution time, fail-closed. Duplicating
+  // a weaker version of that check here would imply this side were a boundary.
+  if (action.type === "browser") {
+    if (action.tool === "navigate" && !action.url) {
+      return "browser navigate proposal has no url";
+    }
+    if ((action.tool === "click" || action.tool === "type") && !action.selector) {
+      return `browser ${action.tool} proposal has no selector`;
+    }
+  }
+
   return null;
 }
 

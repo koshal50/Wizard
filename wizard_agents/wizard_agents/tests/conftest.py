@@ -69,7 +69,7 @@ def nodejs_project_explorer_input() -> ExplorerInput:
         repository_metadata=RepositoryMetadata(
             root_path="/repo", detected_languages=["javascript"], detected_frameworks=["express"]
         ),
-        available_tools=[ToolName.READ_FILE, ToolName.LIST_DIRECTORY],
+        available_tools=[ToolName.READ_FILE, ToolName.LIST_TREE],
     )
 
 

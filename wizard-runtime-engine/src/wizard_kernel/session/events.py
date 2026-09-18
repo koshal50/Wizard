@@ -7,6 +7,14 @@ If a listener raises, the exception is caught and logged; it never crashes the l
 
 CLI/WebSocket integration: call `bus.subscribe_all(fn)` to receive every event.
 Call `bus.get_recent_events(since_seq)` to poll events since a given sequence number.
+
+`claim.admitted` carries the claim's `value` as well as its type and key, and it
+added it late. Type and key alone cannot tell a finding from a repeat of one:
+every browser step re-reads the page's url and title, so a five-step interaction
+filed eight `WEB current_url` events, and a viewer that had only the key could
+not tell that the seventh was the same fact as the first. With the value, a
+viewer can fold the repeats and keep the one line that changed — which is the
+line worth reading, and the only one that was ever news.
 """
 from __future__ import annotations
 
@@ -20,15 +28,20 @@ log = logging.getLogger(__name__)
 # Typed event names — add here as new phases are implemented
 InvestigationStarted = "investigation.started"
 StateTransitioned    = "investigation.state_changed"
+NodeStarted          = "node.started"        # the step is BEGINNING — see note
 NodeCompleted        = "node.completed"
 NodeFailed           = "node.failed"
-ClaimAdmitted        = "claim.admitted"
+ClaimAdmitted        = "claim.admitted"       # carries type, key AND value — see note
 GoalSatisfied        = "goal.satisfied"
 BudgetLow            = "budget.low"
 BudgetExhausted      = "budget.exhausted"
 ReportGenerated      = "report.generated"
+InvestigationIncomplete = "investigation.incomplete"  # ended with goals still open
 AgentConsulted       = "agent.consulted"
+AgentAssessed        = "agent.assessed"       # the Verifier's verdict, recorded
+SeamsResolved        = "seams.resolved"       # which impl each port got (real vs mock)
 ToolRejected         = "tool.rejected"
+PlannerNodeSkipped   = "planner.node_skipped"  # a proposed node repeated one already queued
 AgentDecided         = "agent.decided"        # B8: the decision itself (not browser-specific)
 BrowserNavigated     = "browser.navigated"    # narration plane — discrete browser events
 BrowserActed         = "browser.acted"

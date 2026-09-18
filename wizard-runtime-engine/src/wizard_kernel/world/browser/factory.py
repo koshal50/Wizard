@@ -25,15 +25,29 @@ log = logging.getLogger(__name__)
 def get_browser(options: dict) -> BrowserRuntime:
     backend = options.get("browser_backend", "local")
     cdp_url = options.get("browser_cdp_url")
+    # Only the local backend honours this: a browser reached over CDP belongs to
+    # whoever is hosting it, and its window (if it has one) is their decision.
+    headless = options.get("browser_headless", True)
+    # The egress allowlist reaches the page itself, not just the navigate tool.
+    # A click that follows a link, a form that posts to another origin, a page
+    # that fetches a third-party script — none of those are `browser_navigate`,
+    # and all of them leave the host just the same. Guarding only the tool left
+    # the boundary open the moment the run could press anything.
+    allowed_domains = list(options.get("allowed_domains") or [])
 
     if backend == "cdp_url":
-        return BrowserRuntime(backend="cdp_url", cdp_url=cdp_url)
+        return BrowserRuntime(backend="cdp_url", cdp_url=cdp_url,
+                              allowed_domains=allowed_domains)
     if backend == "container":
         if cdp_url:
-            return BrowserRuntime(backend="cdp_url", cdp_url=cdp_url)
+            return BrowserRuntime(backend="cdp_url", cdp_url=cdp_url,
+                                  allowed_domains=allowed_domains)
         log.warning(
             "browser_backend 'container' without browser_cdp_url — container "
             "orchestration is deferred (see architecture §10.1); launching a local browser"
         )
-        return BrowserRuntime(backend="local")
-    return BrowserRuntime(backend="local")
+        return BrowserRuntime(backend="local", headless=headless,
+                              allowed_domains=allowed_domains)
+    return BrowserRuntime(backend="local", headless=headless,
+                          allowed_domains=allowed_domains)
+

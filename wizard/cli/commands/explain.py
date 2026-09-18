@@ -32,6 +32,7 @@ from typing import Iterator
 
 from wizard.cli.parser.command_parser import validate_target
 from wizard.cli.parser.intent_builder import build_intent
+from wizard.cli.parser.intent_parser import parse_intent, validate_parsed
 from wizard.cli.models.investigation_request import (
     InvestigationRequest,
     RepositoryInfo,
@@ -44,6 +45,7 @@ def explain(
     target: str,
     repo_path: str | None = None,
     options: RequestOptions | None = None,
+    intent_text: str = "",
 ) -> Iterator[dict]:
     """Run the explain pipeline, yielding engine events.
 
@@ -51,27 +53,38 @@ def explain(
     Validation errors raise CommandValidationError (caller handles display).
 
     Args:
-        target: What to explain (e.g. "runtime", "architecture").
+        target: What to explain (e.g. "runtime", "architecture"). May be empty
+            when the user typed their intent instead of picking a target.
         repo_path: Absolute path to the repository. Defaults to cwd.
-        options: Execution options. Defaults to RequestOptions().
+        options: Execution options. Defaults to RequestOptions.from_env().
+        intent_text: The user's free text, if any. Parsed deterministically
+            into extra targets and browser URLs; see intent_parser.
 
     Yields:
         Engine event dicts from stream_events().
     """
     repo_path = repo_path or os.getcwd()
-    options = options or RequestOptions()
+    options = options or RequestOptions.from_env()
 
-    # Step 1: Command Parsing -- Validate the target
-    validate_target("explain", target)
+    # Step 1: Command Parsing -- merge the menu's target with the free text,
+    # then validate.
+    parsed = parse_intent(intent_text, "explain", menu_target=target or None)
+    validate_parsed(parsed)
+    validate_target("explain", parsed.targets[0])
 
     # Step 2: Intent Construction -- Build the Intent
-    intent = build_intent(action="explain", target=target)
+    intent = build_intent(
+        action="explain",
+        targets=list(parsed.targets),
+        urls=list(parsed.urls),
+        question=intent_text,
+    )
 
     # Step 3: Investigation Request Assembly -- Package everything
     request = InvestigationRequest(
         repository=RepositoryInfo(path=repo_path),
         intent=intent,
-        options=options,
+        options=options.for_urls(intent.urls),
     )
 
     # Step 4: Runtime Engine Communication -- Stream events

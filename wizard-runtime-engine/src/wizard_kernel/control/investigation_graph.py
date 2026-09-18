@@ -62,3 +62,62 @@ class InvestigationGraph:
             "investigation_graph.json",
             [n.model_dump() for n in self._nodes.values()],
         )
+
+    # ── Live read view ────────────────────────────────────────────────────────
+
+    def frontier(self, limit: int = 8) -> dict:
+        """What the investigation is doing now, and what it will do next.
+
+        `persist()` only runs once, when the loop is already over, so mid-run the
+        graph exists nowhere a surface can read. This is the live view: the node
+        currently in ``running``, and the nodes still ``waiting``. It is a
+        best-effort snapshot, not a consistent read — the loop thread rebinds
+        dict entries (`_nodes[id] = node.model_copy(...)`) while this iterates, so
+        a reader can observe two nodes mid-transition. That is the right trade for
+        a progress view, and it is why nothing authoritative is derived from it.
+        """
+        nodes = list(self._nodes.values())
+        running = [n for n in nodes if n.state == "running"]
+        waiting = [n for n in nodes if n.state == "waiting"]
+        return {
+            "now": _node_view(running[0]) if running else None,
+            "next": [_node_view(n) for n in waiting[:limit]],
+            "counts": {
+                "waiting": len(waiting),
+                "running": len(running),
+                "complete": sum(1 for n in nodes if n.state == "complete"),
+                "failed": sum(1 for n in nodes if n.state == "failed"),
+            },
+        }
+
+
+def _node_view(node: InvestigationNode) -> dict:
+    """The fields a viewer needs to say what a node is about to do."""
+    action = node.action or {}
+    return {
+        "node_id": node.id,
+        "type": node.type,
+        "tool": action.get("tool"),
+        "params": action.get("params", {}),
+        "goal_id": node.goal_id,
+        "state": node.state,
+    }
+
+
+# ── Per-investigation registry ────────────────────────────────────────────────
+# The loop owns its graph on a worker thread; the API runs on the server's. A
+# surface that wants to show the current frontier therefore needs a handle on the
+# live object, and this is the same registry pattern the browser subsystem uses
+# (world/browser/__init__.py) for the same reason. Invariant 6 holds: one graph
+# per investigation, keyed by id, never shared between runs.
+
+_GRAPHS: dict[str, InvestigationGraph] = {}
+
+
+def register_graph(inv_id: str, graph: InvestigationGraph) -> None:
+    _GRAPHS[inv_id] = graph
+
+
+def get_graph(inv_id: str) -> InvestigationGraph | None:
+    return _GRAPHS.get(inv_id)
+

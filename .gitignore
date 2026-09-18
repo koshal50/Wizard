@@ -1,10 +1,14 @@
 # Wizard — repository ignore rules
 
-# Leftover runtime-engine working directory on this branch: virtualenv,
-# caches, compiled bytecode, and investigation output. The engine SOURCE
-# lives on other branches; on this branch this directory is NOT tracked and
-# must never be committed.
-wizard-runtime-engine/
+# Runtime-engine working files: virtualenv, caches, compiled bytecode, and
+# investigation output. The engine SOURCE under wizard-runtime-engine/src is
+# tracked and is packaged by the root pyproject.toml, so it must NOT be ignored
+# wholesale — a blanket `wizard-runtime-engine/` here would silently swallow
+# every new kernel file. Only the artifacts below are ignored; each is also
+# covered by the global rules further down.
+wizard-runtime-engine/.venv/
+wizard-runtime-engine/.wizard/
+wizard-runtime-engine/output/
 
 # Python bytecode / caches
 __pycache__/
@@ -25,6 +29,10 @@ dist/
 
 # Runtime investigation output written by the engine
 .wizard/
+
+# Reports written by the CLI (wizard/cli/commands/report.py) and the TUI's
+# history file — both land in output/ at whatever directory wizard was run from.
+output/
 
 # Local environment / secrets (keep .env.example, ignore the real .env)
 .env

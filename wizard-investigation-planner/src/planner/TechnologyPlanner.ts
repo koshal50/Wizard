@@ -15,7 +15,12 @@ import { buildTechnologyPlanPrompt } from "./prompts.ts";
 import type { ManifestSummary } from "./contextTypes.ts";
 import { technologyPlanSchema } from "./schemas.ts";
 
-export function toManifestSummary(manifest: RepositoryManifest): ManifestSummary {
+export function toManifestSummary(
+  manifest: RepositoryManifest,
+  intent = "",
+  targets: string[] = [],
+  question = "",
+): ManifestSummary {
   return {
     languages: manifest.languages,
     frameworks: manifest.frameworks,
@@ -25,6 +30,10 @@ export function toManifestSummary(manifest: RepositoryManifest): ManifestSummary
     keyFiles: manifest.keyFiles.map((k) => k.path),
     entryFiles: manifest.entryFiles,
     projectType: manifest.projectType,
+    treeFiles: manifest.treeFiles,
+    intent,
+    question,
+    targets,
   };
 }
 
@@ -37,8 +46,26 @@ export class TechnologyPlanner {
     this.logger = logger;
   }
 
-  async plan(manifest: RepositoryManifest): Promise<TechnologyPlan> {
-    const request = buildTechnologyPlanPrompt(renderManifestForPrompt(manifest), toManifestSummary(manifest));
+  /**
+   * The INITIAL plan: which technologies are here, and what to verify first.
+   *
+   * `intent` and `targets` and `question` are everything that differs between
+   * two investigations of the same repository. The manifest says what the repo
+   * *is*; the intent says which command was run, the targets say what the
+   * command was aimed at, and the question is what the user typed when they
+   * typed anything. Dropping them — which is what this method used to do, since
+   * it took only the manifest — made the plan a pure function of the
+   * repository, so asking for the auth flow and asking for the test suite
+   * produced byte-for-byte identical plans, goals, nodes and commands.
+   */
+  async plan(
+    manifest: RepositoryManifest,
+    intent = "",
+    targets: string[] = [],
+    question = "",
+  ): Promise<TechnologyPlan> {
+    const summary = toManifestSummary(manifest, intent, targets, question);
+    const request = buildTechnologyPlanPrompt(renderManifestForPrompt(manifest), summary);
     const result = await this.llm.generateStructured(request, technologyPlanSchema);
     if (!result.ok) {
       this.logger.warn("planner.technology.failed", { provider: result.provider, errors: result.errors });
@@ -47,6 +74,8 @@ export class TechnologyPlanner {
     this.logger.info("planner.technology.planned", {
       provider: result.provider,
       count: result.value.technologies.length,
+      intent,
+      targets,
     });
     return result.value;
   }

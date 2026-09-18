@@ -93,6 +93,7 @@ export type InvestigationNodeType =
   | "execute"
   | "parse"
   | "verify"
+  | "browser"
   | "synthesize"
   | "planner"
   | "checkpoint";
@@ -180,12 +181,30 @@ export interface CheckpointAction {
   goalId: GoalId;
 }
 
+/**
+ * A browser action. `tool` names the discrete Runtime browser tool, because the
+ * page is observed in steps that answer different questions — navigate proves the
+ * host answered, snapshot says what is on the page, extract says what it says.
+ *
+ * The Runtime owns whether a browser plane exists at all (`browser_enabled`) and
+ * re-checks every URL against its own egress allowlist before executing, so a
+ * proposal here is a proposal to browse, never permission to.
+ */
+export interface BrowserAction {
+  type: "browser";
+  tool: "navigate" | "snapshot" | "extract" | "back" | "click" | "type";
+  url?: string;
+  selector?: string;
+  text?: string;
+}
+
 export type NodeAction =
   | DiscoveryAction
   | ReadAction
   | ExecuteAction
   | ParseAction
   | VerifyAction
+  | BrowserAction
   | SynthesizeAction
   | PlannerAction
   | CheckpointAction;

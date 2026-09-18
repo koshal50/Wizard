@@ -18,6 +18,8 @@
 import { randomUUID } from "node:crypto";
 import type { ClaimTemplate, NodeAction, PlannerNodeProposal, TechnologyPlan } from "../core/types.ts";
 import type { RepositoryManifest } from "../manifest/types.ts";
+import { goalEvidenceFor } from "../planner/goalPolicy.ts";
+import { newNodeId } from "../planner/interactionScript.ts";
 
 // ── Wire shapes (snake_case; match the Pydantic models) ──────────────────────
 
@@ -124,14 +126,22 @@ export function manifestFromWire(m: WireManifest): RepositoryManifest {
     entryFiles: [],
     extensions: m.extensions ?? {},
     projectType: "unknown",
-    structure: { directories: m.directory_tree ?? [], importantPaths: [], folders: [], applications: [] },
+    // The kernel's `directory_tree` is a list of *files* — world/scanner.py
+    // appends `rel_file` for every file it walks past. It used to be mapped
+    // into `structure.directories`, which meant the one field that claims to
+    // list directories held file paths, and there was no field at all holding
+    // the file list. Reading a named target is the thing that needed the
+    // latter, so it is named for what it is here; the kernel sends no
+    // directory list to put in the former.
+    treeFiles: m.directory_tree ?? [],
+    structure: { directories: [], importantPaths: [], folders: [], applications: [] },
   };
 }
 
 // ── Node id + action/hypothesis/claim mapping ────────────────────────────────
 
 export function nodeId(): string {
-  return `node_${randomUUID().replace(/-/g, "").slice(0, 6)}`;
+  return newNodeId();
 }
 
 /**
@@ -153,6 +163,20 @@ function actionToWire(a: NodeAction): { tool: string; params: Record<string, unk
     }
     case "discovery":
       return { tool: "search_files", params: { pattern: a.pattern, glob: a.directory ? `${a.directory}/**/*` : "**/*" } };
+    case "browser":
+      // The kernel's browser tools take no arguments beyond the ones named here
+      // (world/tools.py): snapshot/extract/back are nullary. Sending only the
+      // parameters the tool actually reads keeps the validator's structural check
+      // meaningful instead of passing extra keys through it.
+      switch (a.tool) {
+        case "navigate": return { tool: "browser_navigate", params: { url: a.url } };
+        case "click":    return { tool: "browser_click", params: { selector: a.selector } };
+        case "type":     return { tool: "browser_type", params: { selector: a.selector, text: a.text ?? "" } };
+        case "snapshot": return { tool: "browser_snapshot", params: {} };
+        case "extract":  return { tool: "browser_extract", params: {} };
+        case "back":     return { tool: "browser_back", params: {} };
+        default:         return null;
+      }
     default:
       return null;
   }
@@ -161,6 +185,11 @@ function actionToWire(a: NodeAction): { tool: string; params: Record<string, unk
 function hypothesisFor(a: NodeAction): WireHypothesis {
   // execute → deterministic exit-code check (exit 0 = success); read/discovery
   // always produce an observation, so success is structural.
+  // browser → always_success for the same reason: a browser action always yields an
+  // observation, and the WEB claims come from the kernel's extractors reading it,
+  // not from this node's own success template. `http_status` would look stricter
+  // but never fires — it reads payload.status_code, while a navigation result
+  // carries its status at payload.data.status.
   return a.type === "execute"
     ? { kind: "exit_code_in", success_values: [0] }
     : { kind: "always_success" };
@@ -171,6 +200,7 @@ function actionKey(a: NodeAction): string {
     case "read": return a.filePath;
     case "execute": return a.command;
     case "discovery": return a.pattern;
+    case "browser": return a.tool === "navigate" ? (a.url ?? "browser") : `browser:${a.tool}`;
     default: return a.type;
   }
 }
@@ -208,16 +238,23 @@ export function proposalsToWire(proposals: PlannerNodeProposal[]): WireNode[] {
 // same claim-type vocabulary as the kernel's MockPlanner (RUNTIME / PACKAGE /
 // DEPLOYMENT / FILESYSTEM). This mapping is the one contract detail to confirm
 // with the Runtime team; the SHAPE matches contracts/plan.py exactly.
+//
+// Every claim type named here must be one the kernel's extractors can actually
+// produce (belief/extractors.py), from an action the plan can actually propose.
+// A goal whose evidence cannot exist is unsatisfiable by construction, and it
+// reads identically to a goal the run failed to prove — see the container note
+// below. `FILE_READ` is in that vocabulary too: it is what a read node asserts
+// through its own on_success template, and the loop admits it through the
+// EvidenceEngine like any other claim (loop.py, the expected_success case).
 
-function goalDefFor(name: string): WireGoalDefinition {
-  const n = name.toLowerCase();
-  let required_claim_types: string[] = [];
-  let requires_execution_evidence = false;
-  if (/runtime/.test(n)) { required_claim_types = ["RUNTIME"]; requires_execution_evidence = true; }
-  else if (/depend|package/.test(n)) { required_claim_types = ["PACKAGE"]; }
-  else if (/container|docker|deploy/.test(n)) { required_claim_types = ["DEPLOYMENT"]; requires_execution_evidence = true; }
-  else if (/investigate|repository|filesystem/.test(n)) { required_claim_types = ["FILESYSTEM"]; }
-  return { name, required_claim_types, belief_threshold: 0.6, requires_execution_evidence };
+export function goalDefFor(name: string): WireGoalDefinition {
+  const evidence = goalEvidenceFor(name);
+  return {
+    name,
+    required_claim_types: evidence.required_claim_types,
+    belief_threshold: 0.6,
+    requires_execution_evidence: evidence.requires_execution_evidence,
+  };
 }
 
 function seedReadNode(path: string): WireNode {
@@ -234,7 +271,45 @@ function seedReadNode(path: string): WireNode {
   };
 }
 
-export function technologyPlanToWire(plan: TechnologyPlan): WireTechnologyPlan {
+/**
+ * The initial browser frontier: navigate → snapshot → extract, chained.
+ *
+ * Three nodes rather than one because each yields different WEB claims from the
+ * kernel's extractors: navigate gives current_url / http_status:<url> / page_title,
+ * snapshot gives a11y_node_count, extract gives has_text_content. A single navigate
+ * would leave the "Verify Web Surface" goal permanently open — the kernel's goal
+ * engine counts claim types, and one navigation produces only some of them.
+ */
+export function browserSeedNodes(url: string): WireNode[] {
+  const nav = nodeId();
+  const snap = nodeId();
+  return [
+    {
+      id: nav, type: "browser",
+      action: { tool: "browser_navigate", params: { url } },
+      hypothesis: { kind: "always_success" },
+      on_success: null, on_failure: null, depends_on: [], parent_id: null, goal_id: "goal_web",
+    },
+    {
+      id: snap, type: "browser",
+      action: { tool: "browser_snapshot", params: {} },
+      hypothesis: { kind: "always_success" },
+      on_success: null, on_failure: null, depends_on: [nav], parent_id: null, goal_id: "goal_web",
+    },
+    {
+      id: nodeId(), type: "browser",
+      action: { tool: "browser_extract", params: {} },
+      hypothesis: { kind: "always_success" },
+      on_success: null, on_failure: null, depends_on: [snap], parent_id: null, goal_id: "goal_web",
+    },
+  ];
+}
+
+export function technologyPlanToWire(
+  plan: TechnologyPlan,
+  browserTargets: string[] = [],
+  operatesSurface = false,
+): WireTechnologyPlan {
   const technologies: WireTechnologyEntry[] = plan.technologies.map((t) => ({
     name: t.name,
     confidence: t.confidence,
@@ -253,6 +328,46 @@ export function technologyPlanToWire(plan: TechnologyPlan): WireTechnologyPlan {
       seen.add(f);
       seed_nodes.push(seedReadNode(f));
     }
+  }
+
+  // A named URL is a target with no files behind it, so it contributes no priority
+  // file and would otherwise seed nothing at all. The browser target is a Runtime
+  // capability, so this only happens when a plane actually exists — the caller
+  // passes browserTargets only when browser_enabled is true.
+  if (browserTargets.length > 0) {
+    // Seeded browser nodes are only meaningful if a goal requires WEB claims;
+    // otherwise they run, admit evidence, and close nothing. The heuristic provider
+    // declares this technology itself, but a real-LLM provider may not, so the edge
+    // guarantees the two halves agree rather than trusting the provider to.
+    const hasWebGoal = technologies.some((t) =>
+      t.initial_goals.some((g) => g.required_claim_types.includes("WEB")));
+    if (!hasWebGoal) {
+      // "Verify Web Surface" is closed by reaching a page; "Operate Web Surface"
+      // only by acting on one, because the kernel types an interaction's claims
+      // INTERACTION and a navigate produces none. Both are declared when the
+      // request asks for the app to be operated, and the second is what stops the
+      // run finishing the moment the page loads — which is exactly what it did
+      // while reaching a page was the only thing a browser goal could ask for.
+      //
+      // Filtered against what the plan already carries: the provider attaches a
+      // requested goal to the plan's primary technology before this edge runs, so
+      // pushing both unconditionally would declare "Operate Web Surface" twice —
+      // two goals one piece of evidence closes, and a report that says a thing
+      // was proved twice.
+      const carried = new Set<string>();
+      for (const t of technologies) for (const g of t.initial_goals) carried.add(g.name);
+      const wanted = operatesSurface
+        ? ["Verify Web Surface", "Operate Web Surface"]
+        : ["Verify Web Surface"];
+      technologies.push({
+        name: "Web",
+        confidence: "high",
+        signals: browserTargets.map((u) => `target: ${u}`),
+        initial_goals: wanted.filter((n) => !carried.has(n)).map(goalDefFor),
+        priority_files: [],
+      });
+    }
+    seed_nodes.push(...browserSeedNodes(browserTargets[0]!));
   }
 
   return { technologies, seed_nodes };

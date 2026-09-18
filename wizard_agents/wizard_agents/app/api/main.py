@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.routes_explorer import router as explorer_router
 from app.api.routes_health import router as health_router
+from app.api.routes_runtime import router as runtime_router
 from app.api.routes_verification import router as verification_router
 
 app = FastAPI(
@@ -16,3 +17,5 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(explorer_router)
 app.include_router(verification_router)
+# The Runtime's own seam (/agent/explorer, /agent/verifier) — see routes_runtime.
+app.include_router(runtime_router)

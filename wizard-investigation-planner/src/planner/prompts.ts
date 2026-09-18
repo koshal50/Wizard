@@ -28,10 +28,12 @@ export function buildTechnologyPlanPrompt(
   manifestText: string,
   manifestSummary: ManifestSummary,
 ): LLMRequest {
+  const question = questionBlock(manifestSummary);
   const prompt = [
     "Given this repository manifest (Tier-1 context only), identify the technologies",
     "present and, for each, the initial verification goals and the highest-priority",
     "files to inspect.",
+    ...question,
     "",
     "MANIFEST:",
     manifestText,
@@ -49,6 +51,43 @@ export function buildTechnologyPlanPrompt(
     context: { manifest: manifestSummary },
     temperature: 0,
   };
+}
+
+/**
+ * What the user asked for, rendered for the prompt.
+ *
+ * The manifest is identical for every investigation of a repository; this block
+ * is the only part of the initial prompt that differs between them. Omitting it
+ * is what let a plan ignore the question entirely.
+ *
+ * The command and the question are two lines because they are two facts. The
+ * command says what kind of answer is wanted — an investigation may run things
+ * to understand them, a report may not run anything at all — and the question
+ * says what it is about. Rendering the command as "what the user wants to know"
+ * is what this used to do, and "explain" is not something anyone wants to know.
+ */
+function questionBlock(summary: ManifestSummary): string[] {
+  const lines: string[] = [];
+  if (summary.intent.trim()) {
+    lines.push("", `COMMAND: ${summary.intent.trim()}`);
+  }
+  if (summary.question.trim()) {
+    lines.push(`THE USER'S QUESTION, VERBATIM: ${summary.question.trim()}`);
+  }
+  if (summary.targets.length > 0) {
+    lines.push(
+      `NAMED TARGETS: ${summary.targets.join(", ")}`,
+      "Treat each named target as a subject to investigate, and resolve it to",
+      "concrete files from the file list below (`priorityFiles`).",
+    );
+  }
+  if (lines.length > 0) {
+    lines.push(
+      "Every goal you propose must be answerable by evidence this repository can",
+      "actually yield: a file that exists, a command that runs, a page that loads.",
+    );
+  }
+  return lines;
 }
 
 // ── 2. Ongoing plan (fill the current goal's gaps) ────────────────────────────

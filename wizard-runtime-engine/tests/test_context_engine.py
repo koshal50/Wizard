@@ -300,7 +300,12 @@ def test_loop_emits_context_supplied_end_to_end():
     from wizard_kernel.session.manager import InvestigationManager
 
     manager = InvestigationManager()
-    req = InvestigationRequest(repository_path="/tmp", intent="verify", targets=["runtime"],
+    # `investigate architecture`, not `verify runtime`: this test is about the
+    # Context Engine being driven, so it needs a run that reaches its nodes. The
+    # older request completed only because the built-in planner ignored the
+    # target and planned a read-only goal instead — the run reported success for
+    # a question it had answered differently.
+    req = InvestigationRequest(repository_path="/tmp", intent="investigate", targets=[],
                                options={"budget": 5, "sandbox_mode": "local_dev"})
     inv = manager.create(req)
     kernel_loop.run(inv, manager, MockPlanner())

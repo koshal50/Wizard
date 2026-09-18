@@ -20,7 +20,12 @@ from wizard_kernel.storage import fs_store
 log = logging.getLogger(__name__)
 
 # States that signal an investigation is done — persist immediately on these
-_TERMINAL_STATES = {LifecycleState.completed, LifecycleState.failed, LifecycleState.cancelled}
+_TERMINAL_STATES = {
+    LifecycleState.completed,
+    LifecycleState.incomplete,
+    LifecycleState.failed,
+    LifecycleState.cancelled,
+}
 
 
 class InvestigationManager:
@@ -38,6 +43,7 @@ class InvestigationManager:
             intent=req.intent,
             targets=list(req.targets),
             options=req.options.model_dump(),
+            question=req.question,
             budget_total=req.options.budget,
             budget_remaining=req.options.budget,
         )
@@ -53,11 +59,29 @@ class InvestigationManager:
     def update(self, inv_id: str, **kwargs) -> None:
         with self._lock:
             inv = self._store[inv_id]
+            # Terminal states are absorbing: once an investigation has completed,
+            # failed or been cancelled, no later writer may move it again.
+            #
+            # Without this, a cancel and the loop's own completion are a race whose
+            # loser is silently overwritten — a client that cancels an investigation
+            # that happens to be finishing is told "cancelled", then polls and is
+            # told "completed". Whichever transition lands first is the answer.
+            #
+            # The refusal covers the whole update, not just the state: a caller
+            # passing state + last_event wants the transition, so applying only the
+            # last_event would leave a completed investigation recorded as
+            # "cancelled by user".
+            new_state = kwargs.get("state")
+            if (inv.state in _TERMINAL_STATES
+                    and new_state is not None
+                    and new_state != inv.state):
+                log.info("investigation %s is already %s; refusing transition to %s",
+                         inv_id, inv.state, new_state)
+                return
             for k, v in kwargs.items():
                 setattr(inv, k, v)
             inv.updated_at = datetime.now(timezone.utc)
             # Persist only on terminal transitions — avoids excessive disk I/O
-            new_state = kwargs.get("state")
             if new_state in _TERMINAL_STATES:
                 _persist(inv)
 

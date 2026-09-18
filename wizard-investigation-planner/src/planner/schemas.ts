@@ -74,12 +74,21 @@ const checkpointAction = object({
   goalId: string({ minLength: 1 }),
 });
 
+const browserAction = object({
+  type: enum_(["browser"] as const),
+  tool: enum_(["navigate", "snapshot", "extract", "back", "click", "type"] as const),
+  url: string({ minLength: 1 }).optional(),
+  selector: string({ minLength: 1 }).optional(),
+  text: string().optional(),
+});
+
 export const nodeActionSchema: Schema<NodeAction> = taggedUnion<NodeAction>("type", {
   discovery: discoveryAction,
   read: readAction,
   execute: executeAction,
   parse: parseAction,
   verify: verifyAction,
+  browser: browserAction,
   synthesize: synthesizeAction,
   planner: plannerAction,
   checkpoint: checkpointAction,
@@ -108,6 +117,7 @@ const nodeTypeSchema = enum_([
   "execute",
   "parse",
   "verify",
+  "browser",
   "synthesize",
   "planner",
   "checkpoint",

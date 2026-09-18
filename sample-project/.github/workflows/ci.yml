@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+
+# A package-lock.json covering both workspaces is committed at the repo root,
+# so the jobs install with `npm ci`: it installs exactly the locked tree and
+# fails if package.json and the lockfile disagree.
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  server:
+    name: Server (lint, test, migrate)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: board
+          POSTGRES_PASSWORD: board
+          POSTGRES_DB: board
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U board -d board"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: .
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+        env:
+          NODE_ENV: test
+          DB_DRIVER: memory
+          JWT_SECRET: ci-only-secret-that-is-long-enough-to-pass-validation
+          BCRYPT_ROUNDS: '4'
+
+      # The suites run against the in-memory adapter, so apply the real schema
+      # against the Postgres service too — otherwise SQL drift goes unnoticed.
+      - name: Apply migrations against Postgres
+        run: npm run migrate
+        env:
+          NODE_ENV: test
+          DB_DRIVER: pg
+          DATABASE_URL: postgres://board:board@localhost:5432/board
+          JWT_SECRET: ci-only-secret-that-is-long-enough-to-pass-validation
+
+  client:
+    name: Client (lint, test, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install dependencies
+        working-directory: .
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: http://localhost:4000/api
+
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dist
+          path: client/dist
+          if-no-files-found: error
+          retention-days: 7

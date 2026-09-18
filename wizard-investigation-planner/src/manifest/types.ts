@@ -41,6 +41,19 @@ export interface RepositoryManifest {
 
   projectType: string;
 
+  /**
+   * Every file the scan saw, relative to the root (bounded — this is Tier-1
+   * context, not a filesystem dump).
+   *
+   * This is what lets a *named target* resolve to something readable. The user
+   * may say "investigate auth" and the plan has to turn that into concrete
+   * paths; without a file list the only targets that could ever be honoured
+   * were the handful of signal files the scan flags as `keyFiles`, so every
+   * run read the same three manifests and nothing the user actually asked
+   * about.
+   */
+  treeFiles: string[];
+
   structure: {
     directories: string[];
     importantPaths: string[];

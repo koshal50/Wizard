@@ -68,6 +68,11 @@ WIZARD_THEME = Theme(
         "wiz.ember": "bold #ef5a1f",     # ember red-orange
         "wiz.gerund": "italic #ffb347",  # the moving gerund word
         "wiz.flow": "#c9b8ff",           # flow narration lines
+        # The actor column on the left of each flow line. A cool slate, chosen
+        # to sit outside every status colour used on the line itself — green,
+        # amber, red and teal all mean something specific about what happened,
+        # and a role that borrowed one of them would read as a verdict.
+        "wiz.role": "#7f9fd0",
         # Status semantics
         "wiz.ok": "bold #7ee081",        # goal satisfied / node ok (soft green)
         "wiz.warn": "bold #ffb347",      # caution / uncertain

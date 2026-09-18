@@ -21,6 +21,22 @@ _SAFE_ENV: frozenset[str] = frozenset({
 })
 
 
+def _safe_env() -> dict[str, str]:
+    """The ambient environment reduced to the variables a command needs to run.
+
+    The comparison is case-insensitive on purpose. Windows upper-cases the keys
+    of ``os.environ``, so a whitelist entry spelled "SystemRoot" never matches
+    the key the platform hands back ("SYSTEMROOT") — while "COMSPEC", spelled
+    upper-case on both sides, survives by luck. Dropping SystemRoot is not a
+    cosmetic loss: without it a process cannot create a listening socket, so
+    every test that binds a port dies with `listen UNKNOWN: unknown error`,
+    inside the sandbox only. The investigation then reports a working project as
+    broken, and the fault is in here rather than in the project.
+    """
+    wanted = {name.upper() for name in _SAFE_ENV}
+    return {k: v for k, v in os.environ.items() if k.upper() in wanted}
+
+
 class _BackgroundHandle:
     """Internal state for one background process."""
     def __init__(self, handle_id: str, proc: subprocess.Popen,
@@ -100,7 +116,7 @@ class LocalProcessRuntime:
     def exec(self, command: str, cwd: str = ".", timeout_sec: int = 30) -> CommandResult:
         assert self._workspace, "call start() first"
         work_cwd = self._safe_cwd(cwd)
-        env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV}
+        env = _safe_env()
         t0 = time.monotonic()
         kwargs: dict = {}
         if sys.platform != "win32":
@@ -109,7 +125,16 @@ class LocalProcessRuntime:
             proc = subprocess.Popen(
                 command, shell=True, cwd=work_cwd,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, env=env, **kwargs
+                # Command output is arbitrary bytes, and the locale codec is not
+                # a decoder for it: on Windows the default is cp1252, which
+                # raises on the UTF-8 box-drawing and tick characters that test
+                # runners emit by default. The reader thread died mid-read,
+                # communicate() came back as (None, None), and the failure
+                # surfaced as "'NoneType' object is not subscriptable" — a
+                # message about this file, reported as the project's error. A
+                # replacement character in a log is a far smaller loss than
+                # losing the log.
+                encoding="utf-8", errors="replace", env=env, **kwargs
             )
             try:
                 stdout, stderr = proc.communicate(timeout=timeout_sec)
@@ -159,14 +184,16 @@ class LocalProcessRuntime:
         Returns immediately with a handle. Use read_process_output() to poll output."""
         assert self._workspace, "call start() first"
         work_cwd = self._safe_cwd(cwd)
-        env = {k: v for k, v in os.environ.items() if k in _SAFE_ENV}
+        env = _safe_env()
         kwargs: dict = {}
         if sys.platform != "win32":
             kwargs["start_new_session"] = True
         proc = subprocess.Popen(
             command, shell=True, cwd=work_cwd, env=env,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1, **kwargs
+            # Same decoder as exec(): a background server logs UTF-8 too, and a
+            # reader thread that dies on it would silently stop capturing.
+            encoding="utf-8", errors="replace", bufsize=1, **kwargs
         )
         handle_id = f"proc_{uuid.uuid4().hex[:8]}"
         self._bg[handle_id] = _BackgroundHandle(handle_id, proc, command, str(work_cwd))

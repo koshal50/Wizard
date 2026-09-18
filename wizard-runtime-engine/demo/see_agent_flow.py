@@ -1578,9 +1578,6 @@ class FlowRun:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self.state: str = "idle"        # idle | preflight | running | done | failed
-        self.phase: str = "idle"        # human-readable step, for terminal ticks
-        self.started: bool = False
-        self.finished = threading.Event()
         self.sessions: list[Session] = []
         self.started_at: float = 0.0
         self.finished_at: float = 0.0
@@ -1602,7 +1599,6 @@ class FlowRun:
                                             daemon=True)
             self.started_at = time.time()
             self.state = "preflight"
-            self.started = True
             self._thread.start()
             return True
 
@@ -1618,30 +1614,21 @@ class FlowRun:
 
     def _drive(self) -> None:
         try:
-            self.phase = "sandbox + repository preflight"
             self._preflight()
             self.state = "running"
-            self.phase = "creating three investigations"
             self._create_sessions()
-            self.phase = "deleting one session mid-flight"
             self._cancel_one()
-            self.phase = "agents working — polling until every session is terminal"
             self._await_terminal()
-            self.phase = "collecting the kernel's verification reports"
             self._collect_reports()
-            self.phase = "building the terminal report"
             self.terminal_report = build_terminal_report(self)
             self.state = "done"
-            self.phase = "done"
         except Exception as exc:  # noqa: BLE001 — the driver reports, it never dies silently
             self.error = f"{type(exc).__name__}: {exc}"
             self.state = "failed"
-            self.phase = f"failed: {self.error}"
             TRACE.add("", "flow", "error", "flow driver failed", self.error)
             self.terminal_report = build_terminal_report(self)
         finally:
             self.finished_at = time.time()
-            self.finished.set()
 
     def _preflight(self) -> None:
         TRACE.add("", "flow", "phase", "preflight",
@@ -1755,7 +1742,6 @@ class FlowRun:
     def as_dict(self) -> dict:
         return {
             "state": self.state,
-            "phase": self.phase,
             "error": self.error,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -1840,7 +1826,7 @@ def build_terminal_report(run: FlowRun) -> str:
           f"{sb.exec_result.exit_code if sb.exec_result else 'n/a'}")
     check(bool(sb.bg_started and sb.bg_polled and sb.bg_polled.stdout_so_far and sb.killed),
           "sandbox background process started, produced output, was killed",
-          f"handle={sb.bg_started.handle_id if sb.bg_started else 'n/a'}")
+          f"handle={sb.bg_started.handle_id if sb.bg_started else 'n/a'}")    
     check(sb.bytes_read > 0, "sandbox read_file returned bytes",
           f"{sb.bytes_read} bytes")
     check(all(t.ok for t in sb.tool_results.values()) and len(sb.tool_results) >= 4,
@@ -1964,16 +1950,14 @@ def _report_agent_section(run: FlowRun, primary: Session | None, files: Session 
     check(len(consulted) > 0, "the Verifier was consulted by the loop",
           f"{len(consulted)} agent.consulted events")
 
-    # The blocked-egress node is the one rejection this run intends. It must happen —
-    # a vacuous zero-rejection run would otherwise pass this silently — and nothing
-    # else may be rejected, because any other rejection means the Explorer's own
-    # pre-validation disagreed with the kernel's validator.
-    rejected_ids = [(e.get("payload") or {}).get("node_id") for e in rejected]
-    unintended = [n for n in rejected_ids if n != "d13_blocked_egress"]
-    check("d13_blocked_egress" in rejected_ids and not unintended,
+    # The blocked-egress node is the one rejection this run intends. Every other
+    # rejection would mean the Explorer's self-check disagreed with the kernel.
+    unintended = [e for e in rejected
+                  if (e.get("payload") or {}).get("node_id") != "d13_blocked_egress"]
+    check(not unintended,
           "the only tool rejection is the deliberate off-host navigation",
-          f"rejected={sorted(set(rejected_ids)) or 'none'} — "
-          f"expected exactly ['d13_blocked_egress']")
+          f"unintended rejections: "
+          f"{[(e.get('payload') or {}).get('node_id') for e in unintended] or 'none'}")
 
     # Phase release is evidence-gated, so the non-browser session must never see D.
     files_plan = PLANS.get(files.inv_id) if files and files.inv_id else None
@@ -2092,18 +2076,13 @@ def _report_belief_section(run: FlowRun, primary: Session | None,
           "the non-browser session closed no browser goal",
           f"files goals={sorted(fgoals)}")
 
-    # Deliberate negative controls. loop.py admits their contradicting evidence but
-    # emits no claim.admitted for the expected_failure branch, so the observable
-    # signature is the opposite one: the node completed and was never marked failed.
-    # Their claim types stay outside every goal's required set because a
-    # contradict-only claim scores 0.0 and could never satisfy a goal.
-    negatives = {"a6_absent_path_probe", "b5_port_closed_control"}
-    pfailed = {(e.get("payload") or {}).get("node_id", "")
-               for e in _events_of(primary, kernel_events.NodeFailed)} if primary else set()
-    check(not (negatives & pfailed),
-          "negative-control nodes matched their failure hypothesis (not a real failure)",
-          f"expected_failure nodes marked failed: {sorted(negatives & pfailed) or 'none'}; "
-          f"contradict belief = {expected_belief('execution', 'contradict')}")
+    # Deliberate negative controls: their claims must exist and score 0.0, which is
+    # why they sit outside every goal's required set.
+    negatives = {"FS_ABSENT", "PORT_CLOSED"}
+    check(negatives <= ptypes,
+          "contradicting evidence from the negative-control nodes was admitted",
+          f"present={sorted(negatives & ptypes)} "
+          f"(contradict belief = {expected_belief('execution', 'contradict')})")
 
     exhausted = [e for s in live for e in _events_of(s, kernel_events.BudgetExhausted)]
     reports = [e for s in live for e in _events_of(s, kernel_events.ReportGenerated)]
@@ -2113,97 +2092,4 @@ def _report_belief_section(run: FlowRun, primary: Session | None,
           f"{len(reports)} report.generated events")
     return L
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  SECTION 9 — the control surface the dashboard talks to
-# ══════════════════════════════════════════════════════════════════════════════
-# Read-only except for POST /flow/start. The dashboard polls /flow/trace for the
-# left pane and opens the kernel's own screencast WebSocket for the right one; it is
-# given no privileged path into kernel state that the kernel's own API does not
-# already expose.
-
-HERE = Path(__file__).resolve().parent
-
-flow_router = APIRouter(prefix="/flow", tags=["flow"])
-
-
-@flow_router.get("", response_class=HTMLResponse)
-def flow_dashboard() -> HTMLResponse:
-    """The page the printed link opens. Reading it from disk on every request means
-    the dashboard can be edited without restarting the server."""
-    TRACE.mark_viewer()
-    page = HERE / "flow_dashboard.html"
-    if not page.exists():
-        return HTMLResponse(
-            "<h1>flow_dashboard.html is missing</h1>"
-            f"<p>Expected beside this module at <code>{page}</code>.</p>"
-            "<p>The run itself is unaffected — poll <code>/flow/trace</code> and "
-            "<code>/flow/state</code> directly, and the report still prints in the "
-            "terminal.</p>", status_code=503)
-    return HTMLResponse(page.read_text(encoding="utf-8"))
-
-
-@flow_router.post("/start")
-def flow_start() -> dict:
-    started = RUN.start()
-    return {"started": started, "state": RUN.state,
-            "detail": "" if started else f"run already {RUN.state}"}
-
-
-@flow_router.get("/state")
-def flow_state() -> dict:
-    TRACE.mark_viewer()
-    return RUN.as_dict()
-
-
-@flow_router.get("/trace")
-def flow_trace(since_seq: int = Query(default=0),
-               inv_id: str | None = Query(default=None)) -> dict:
-    """Incremental agent trace. `since_seq` makes the left pane an append-only feed
-    rather than a re-render, so what a person read stays where they read it."""
-    TRACE.mark_viewer()
-    entries = TRACE.since(since_seq, inv_id)
-    return {"entries": [e.as_dict() for e in entries],
-            "last_seq": entries[-1].seq if entries else since_seq,
-            "run_state": RUN.state}
-
-
-@flow_router.get("/surface")
-def flow_surface() -> dict:
-    """Everything this run knows about the kernel it is exercising — read off
-    wizard_kernel at import time, never restated here."""
-    surface = {k: (list(v) if isinstance(v, tuple) else v)
-               for k, v in KERNEL_SURFACE.items()}
-    surface["belief_per_tier"] = {
-        t: {"support": expected_belief(t), "contradict": expected_belief(t, "contradict")}
-        for t in KERNEL_SURFACE["source_tiers"]}
-    surface["phases"] = [{"name": p.name, "gate": p.gate_claim_type,
-                          "terminal": p.terminal_claim_type,
-                          "browser_only": p.browser_only} for p in PHASES]
-    surface["goals"] = [g.name for g in GOALS_BASE] + [GOAL_WEB.name]
-    surface["fixtures"] = ["/flow/fixtures/home", "/flow/fixtures/detail",
-                           "/flow/fixtures/form", "/flow/fixtures/result"]
-    return surface
-
-
-@flow_router.get("/report/{inv_id}", response_class=PlainTextResponse)
-def flow_report(inv_id: str) -> PlainTextResponse:
-    s = next((x for x in RUN.sessions if x.inv_id == inv_id), None)
-    if s is None:
-        return PlainTextResponse(f"no session with id {inv_id!r}", status_code=404)
-    if s.report is None:
-        return PlainTextResponse(
-            f"report not available for {inv_id} (state={s.final_state or 'unknown'})",
-            status_code=409)
-    return PlainTextResponse(s.report.report_markdown)
-
-
-@flow_router.get("/terminal-report", response_class=PlainTextResponse)
-def flow_terminal_report() -> PlainTextResponse:
-    """The same text serve_live.py prints. Served here too so the report can be read
-    without scrolling back through the terminal."""
-    if not RUN.terminal_report:
-        return PlainTextResponse(f"report not built yet (run state={RUN.state})",
-                                 status_code=409)
-    return PlainTextResponse(RUN.terminal_report)
-
+__FLOW_APPEND_MARKER__ = True

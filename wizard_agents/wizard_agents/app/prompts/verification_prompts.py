@@ -22,6 +22,7 @@ Rules you must follow:
 - Flag any claim with contradicting evidence as a contradiction, and list
   it as unresolved rather than supported.
 - Flag claims with no evidence at all as missing evidence.
+- Include every supplied claim_id in `reviewed_claims`.
 - `report_markdown` must be a complete, well-formed Markdown document
   summarizing your findings, suitable for direct inclusion in
   verification_report.md.

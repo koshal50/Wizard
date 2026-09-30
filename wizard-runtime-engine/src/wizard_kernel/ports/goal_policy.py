@@ -73,31 +73,31 @@ NO_EVIDENCE = GoalEvidence([], False)
 #: before `web` for the same reason — "Operate Web Surface" contains "Web", and
 #: reaching a page and operating it are two goals closed by two different pieces
 #: of evidence.
-_ROUTES: list[tuple[re.Pattern[str], GoalEvidence]] = [
-    (re.compile(r"^inspect\b"), GoalEvidence([FILE_READ], False)),
-    (re.compile(r"^operate\b"), GoalEvidence([INTERACTION], True)),
-    (re.compile(r"web|browser|http"), GoalEvidence([WEB], False)),
-    (re.compile(r"runtime"), GoalEvidence([RUNTIME], True)),
-    (re.compile(r"depend|package"), GoalEvidence([PACKAGE], False)),
-    # No execution requirement: containerisation is *declared* by a file, and the
-    # kernel's DEPLOYMENT claims come from reading a Dockerfile or a compose
-    # file. Demanding execution evidence as well made the goal unsatisfiable by
-    # construction — the evidence it asked for is not the kind that can exist.
-    (re.compile(r"container|docker|deploy"), GoalEvidence([DEPLOYMENT], False)),
-    # Tests are only really verified by running them. A file-tier TESTING claim
-    # (a pytest section in pyproject.toml) says the suite is *configured*, which
-    # is not what "verify the tests" asks.
-    (re.compile(r"test|spec|coverage"), GoalEvidence([TESTING], True)),
-    (re.compile(r"investigate|repository|filesystem"), GoalEvidence([FILESYSTEM], False)),
-]
-
-
 def goal_evidence_for(name: str) -> GoalEvidence:
     """The evidence a goal named `name` is closed by."""
     lowered = name.lower()
-    for pattern, evidence in _ROUTES:
-        if pattern.search(lowered):
-            return evidence
+    if re.match(r"^inspect\b", lowered):
+        return GoalEvidence([FILE_READ], False)
+    if re.match(r"^operate\b", lowered):
+        return GoalEvidence([WEB, INTERACTION], True)
+    if re.search(r"container|docker|deploy", lowered):
+        execution = bool(re.search(r"\b(execute|run|start|launch|up|bring up)\b", lowered))
+        return GoalEvidence([DEPLOYMENT], execution)
+    if re.search(r"web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b", lowered):
+        required = [WEB]
+        if re.search(r"after auth|authenticate|log ?in|sign ?in|submit|click|fill", lowered):
+            required.append(INTERACTION)
+        if re.search(r"\b(start|launch|run|execute|compile|build|listen|serve)\b", lowered):
+            required.append(RUNTIME)
+        return GoalEvidence(required, True)
+    if re.search(r"runtime|server|listen|port|compile|build|\bdev\b|\bstart\b|\blaunch\b|\bexecute\b|\brespond", lowered):
+        return GoalEvidence([RUNTIME], True)
+    if re.search(r"depend|package", lowered):
+        return GoalEvidence([PACKAGE], False)
+    if re.search(r"test|spec|coverage", lowered):
+        return GoalEvidence([TESTING], True)
+    if re.search(r"investigate|repository|filesystem", lowered):
+        return GoalEvidence([FILESYSTEM], False)
     return NO_EVIDENCE
 
 

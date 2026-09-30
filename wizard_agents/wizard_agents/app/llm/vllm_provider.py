@@ -14,20 +14,24 @@ Config (env vars, never hard-coded secrets):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any, Dict, Optional, Type, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
 from app.llm.base import LLMError, LLMProvider
+from app.llm.cerebras_gate import CerebrasRateGate, retry_after_seconds
 
 T = TypeVar("T", bound=BaseModel)
 
 DEFAULT_BASE_URL = "http://localhost:8000"
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+_LOG = logging.getLogger(__name__)
 
 
 class VLLMProvider(LLMProvider):
@@ -48,6 +52,7 @@ class VLLMProvider(LLMProvider):
                 "served by your vLLM instance (e.g. 'Qwen/Qwen2.5-7B-Instruct')."
             )
         self._timeout = timeout
+        self._cerebras_gate = CerebrasRateGate() if urlparse(self._base_url).hostname == "api.cerebras.ai" else None
 
     @property
     def name(self) -> str:
@@ -59,7 +64,7 @@ class VLLMProvider(LLMProvider):
         user_prompt: str,
         response_model: Type[T],
         *,
-        max_tokens: int = 2000,
+        max_tokens: int = 1024,
         temperature: float = 0.0,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> T:
@@ -72,7 +77,7 @@ class VLLMProvider(LLMProvider):
         )
         payload = {
             "model": self._model,
-            "max_tokens": max_tokens,
+            "max_completion_tokens": max_tokens,
             "temperature": temperature,
             "messages": [
                 {"role": "system", "content": full_system},
@@ -81,16 +86,50 @@ class VLLMProvider(LLMProvider):
             "response_format": {"type": "json_object"},
         }
 
-        try:
-            response = httpx.post(
-                f"{self._base_url}/v1/chat/completions",
-                json=payload,
-                timeout=self._timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except Exception as exc:  # noqa: BLE001 - surface any HTTP/network failure uniformly
-            raise LLMError(f"vLLM API call failed: {exc}") from exc
+        api_key = os.environ.get("OPENAI_API_KEY")
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        for attempt in range(2 if self._cerebras_gate else 1):
+            if self._cerebras_gate:
+                self._cerebras_gate.acquire()
+            try:
+                response = httpx.post(
+                    f"{self._base_url}/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=self._timeout,
+                )
+            except Exception as exc:  # noqa: BLE001 - surface any HTTP/network failure uniformly
+                raise LLMError(f"vLLM API call failed: {exc}") from exc
+            if response.status_code == 429 and self._cerebras_gate:
+                wait = retry_after_seconds(response.headers)
+                self._cerebras_gate.defer(wait)
+                if attempt == 0:
+                    _LOG.info('{"event":"provider_retry_wait","provider":"cerebras","wait_seconds":%.3f}', wait)
+                    _LOG.info('{"event":"provider_retry","provider":"cerebras","attempt":1}')
+                    continue
+                _LOG.warning('{"event":"provider_429","provider":"cerebras","retry_exhausted":true}')
+            try:
+                response.raise_for_status()
+                data = response.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                response = exc.response
+                body = re.sub(
+                    r"(?i)(authorization|(?:cerebras|openai|groq)?[_ -]?api[_ -]?key|token|secret|password)(\s*[=:]\s*)[^,}\s]+",
+                    r"\1\2[REDACTED]",
+                    response.text[:2000],
+                )
+                safe_headers = {
+                    key: value for key, value in response.headers.items()
+                    if key.lower() == "retry-after"
+                    or "ratelimit" in key.lower()
+                    or key.lower() in ("request-id", "x-request-id")
+                }
+                raise LLMError(
+                    f"vLLM API HTTP {response.status_code}: {body}; rate-limit headers={safe_headers}"
+                ) from exc
+            except Exception as exc:  # noqa: BLE001 - surface any HTTP/network failure uniformly
+                raise LLMError(f"vLLM API call failed: {exc}") from exc
 
         try:
             raw_text = data["choices"][0]["message"]["content"].strip()

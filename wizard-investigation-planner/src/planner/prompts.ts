@@ -39,7 +39,7 @@ export function buildTechnologyPlanPrompt(
     manifestText,
     "",
     "Return JSON of the form:",
-    `{"technologies":[{"name":string,"confidence":"high"|"medium"|"low","signals":string[],"initialGoals":string[],"priorityFiles":string[]}]}`,
+    `{"technologies":[{"name":"technology name","confidence":"medium","signals":["manifest signal"],"initialGoals":["initial verification goal"],"priorityFiles":["path/to/file"]}]}`,
     "",
     JSON_ONLY,
   ].join("\n");
@@ -127,7 +127,7 @@ export function buildOngoingPlanPrompt(
     "when a runtime fact genuinely requires running something.",
     "",
     "Return JSON of the form:",
-    `{"nodes":[{"type":...,"action":{...},"hypothesis":string,"successClaim":{"type":string,"value":string},"failureClaim":{"type":string,"value":string}}],"rationale":string}`,
+    `{"nodes":[{"type":"read","action":{"type":"read","filePath":"package.json"},"hypothesis":"Inspect the project start configuration."}],"rationale":"Inspect startup configuration."}`,
     "",
     JSON_ONLY,
   ].join("\n");

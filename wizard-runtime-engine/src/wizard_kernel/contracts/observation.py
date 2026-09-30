@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict
 ObsType = Literal[
     "filesystem", "file_content", "command_result",
     "search_hits", "port_check", "path_check",
-    "page_content", "browser_action",
+    "page_content", "browser_action", "agent_failure",
 ]
 
 

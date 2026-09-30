@@ -68,7 +68,7 @@ export class TechnologyPlanner {
     const request = buildTechnologyPlanPrompt(renderManifestForPrompt(manifest), summary);
     const result = await this.llm.generateStructured(request, technologyPlanSchema);
     if (!result.ok) {
-      this.logger.warn("planner.technology.failed", { provider: result.provider, errors: result.errors });
+      this.logger.warn("planner.technology.failed", { provider: result.provider, errors: result.errors, raw: result.errors.some((error) => error.startsWith("openai: HTTP ")) ? result.raw : undefined });
       return { technologies: [] };
     }
     this.logger.info("planner.technology.planned", {

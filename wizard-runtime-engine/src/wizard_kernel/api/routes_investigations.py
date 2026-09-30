@@ -10,6 +10,7 @@ from wizard_kernel.ports.planner import get_planner
 from wizard_kernel.control import loop as kernel_loop
 from wizard_kernel.control.investigation_graph import get_graph
 from wizard_kernel.world.sandbox import docker_status
+from wizard_kernel.ports.goal_policy import names_operation_for
 
 # The tools that put a page on screen. A node that ran one of these and reached
 # `complete` is proof the browser opened something, which is what separates "the
@@ -61,6 +62,14 @@ def create_investigation(
                 f"reachable: {why}. Start Docker Desktop and retry, or drop the "
                 f"docker mode to use the default local_dev sandbox."
             ))
+
+    # A request that explicitly asks to operate a UI opts into its existing
+    # browser plane. Keep navigation fail-closed: absent a caller allowlist,
+    # only local development hosts are permitted.
+    if names_operation_for(req.intent, req.targets, req.question):
+        req.options.browser_enabled = True
+        if not req.options.allowed_domains:
+            req.options.allowed_domains = ["localhost", "127.0.0.1"]
 
     inv = manager.create(req)
     # manager.create() persists meta.json — no duplicate write here

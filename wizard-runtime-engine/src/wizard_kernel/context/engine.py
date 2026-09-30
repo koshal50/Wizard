@@ -81,7 +81,7 @@ class ContextEngine:
         node_id = node.id if node is not None else "global"
 
         # The packet is the agent contract — cheap, deterministic — always built.
-        packet = self._build_packet(agent_type, inv, node, goals, kg, budget)
+        packet = self._build_packet(agent_type, inv, node, goals, kg, budget, obs_store)
 
         # 1. Cache check (sections are the expensive part; they were already
         #    intercepted + fitted when stored).
@@ -123,9 +123,9 @@ class ContextEngine:
     # and planner packagers land when their call sites are migrated — the seam is
     # explicit rather than silently returning empty context.
 
-    def _build_packet(self, agent_type, inv, node, goals, kg, budget) -> dict:
+    def _build_packet(self, agent_type, inv, node, goals, kg, budget, obs_store) -> dict:
         if agent_type == "explorer":
-            return self.packager.build_explorer_packet(inv, node, goals, kg, budget)
+            return self.packager.build_explorer_packet(inv, node, goals, kg, budget, obs_store)
         raise NotImplementedError(f"context packet for {agent_type!r} not built yet")
 
     def _build_sections(self, agent_type, inv, node, goals, kg, budget, obs_store):

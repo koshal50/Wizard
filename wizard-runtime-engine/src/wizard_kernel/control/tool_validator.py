@@ -59,8 +59,10 @@ class ValidationResult:
 class ToolRequestValidator:
     """Per-investigation validator. Holds dedup state — never shared across investigations."""
 
-    def __init__(self, workspace_root: str, allowed_domains: list[str] | None = None) -> None:
+    def __init__(self, workspace_root: str, allowed_domains: list[str] | None = None,
+                 browser_enabled: bool = False) -> None:
         self._root = Path(workspace_root).resolve()
+        self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
         # Fail-closed egress allowlist for browser_navigate. Empty → block all navigation.
@@ -75,6 +77,9 @@ class ToolRequestValidator:
                 valid=False,
                 reason=f"Unknown tool {request.tool!r}. Agent requested a non-existent tool.",
             )
+
+        if request.tool in BROWSER_TOOLS and not self._browser_enabled:
+            return ValidationResult(valid=False, reason="Browser tools are disabled for this investigation.")
 
         # 2. Budget fast-path: if budget is already 0, reject before any I/O
         if budget_remaining <= 0:

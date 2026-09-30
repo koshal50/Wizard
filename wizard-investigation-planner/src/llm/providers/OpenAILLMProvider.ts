@@ -11,6 +11,7 @@ import { safeParse } from "../../validation/schema.ts";
 import type { LLMProvider, LLMRequest, LLMResult } from "../LLMProvider.ts";
 import { llmErr, llmOk } from "../LLMProvider.ts";
 import { extractJson } from "../extractJson.ts";
+import { CerebrasRateGate, retryAfterMs } from "./CerebrasRateGate.ts";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -28,6 +29,7 @@ const DEFAULT_BASE_URL = "https://api.openai.com";
 export class OpenAILLMProvider implements LLMProvider {
   readonly name = "openai";
   private readonly cfg: Required<Omit<OpenAIConfig, "fetchImpl">> & { fetchImpl: FetchLike };
+  private readonly cerebrasGate: CerebrasRateGate | undefined;
 
   constructor(config: OpenAIConfig) {
     this.cfg = {
@@ -37,6 +39,9 @@ export class OpenAILLMProvider implements LLMProvider {
       timeoutMs: config.timeoutMs ?? 60000,
       fetchImpl: config.fetchImpl ?? ((globalThis.fetch as unknown) as FetchLike),
     };
+    this.cerebrasGate = new URL(this.cfg.baseUrl).hostname === "api.cerebras.ai"
+      ? new CerebrasRateGate()
+      : undefined;
   }
 
   async generateStructured<T>(request: LLMRequest, schema: Schema<T>): Promise<LLMResult<T>> {
@@ -49,29 +54,54 @@ export class OpenAILLMProvider implements LLMProvider {
     const body = {
       model: this.cfg.model,
       temperature: request.temperature ?? 0,
-      max_tokens: request.maxTokens ?? 2048,
+      max_completion_tokens: 1024,
       response_format: { type: "json_object" },
       messages,
     };
 
-    let response: Response;
-    try {
-      response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.cfg.apiKey}`,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.cfg.timeoutMs),
-      });
-    } catch (e) {
-      return llmErr<T>([`openai: request failed: ${(e as Error).message}`], "", this.name);
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < (this.cerebrasGate ? 2 : 1); attempt++) {
+      if (this.cerebrasGate) await this.cerebrasGate.acquire();
+      try {
+        response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.cfg.apiKey}`,
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(this.cfg.timeoutMs),
+        });
+      } catch (e) {
+        return llmErr<T>([`openai: request failed: ${(e as Error).message}`], "", this.name);
+      }
+      if (response.status === 429 && this.cerebrasGate) {
+        const waitMs = retryAfterMs(response.headers);
+        this.cerebrasGate.defer(waitMs);
+        if (attempt === 0) {
+          console.warn(JSON.stringify({ event: "provider_429", provider: "cerebras", retry: true }));
+          console.info(JSON.stringify({ event: "provider_retry_wait", provider: "cerebras", wait_ms: waitMs }));
+          console.info(JSON.stringify({ event: "provider_retry", provider: "cerebras", attempt: 1 }));
+          continue;
+        }
+        console.warn(JSON.stringify({ event: "provider_429", provider: "cerebras", retry_exhausted: true }));
+      }
+      break;
     }
 
+    if (!response) return llmErr<T>(["openai: request failed without a response"], "", this.name);
     if (!response.ok) {
       const text = await safeText(response);
-      return llmErr<T>([`openai: HTTP ${response.status}`], text, this.name);
+      const safeHeaders = ["retry-after", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens", "x-request-id"]
+        .map((name) => {
+          const value = response!.headers.get(name);
+          return value ? `${name}=${value}` : undefined;
+        })
+        .filter(Boolean)
+        .join(", ");
+      return llmErr<T>([
+        `openai: HTTP ${response.status}${safeHeaders ? `; ${safeHeaders}` : ""}`,
+      ], redactProviderBody(text), this.name);
     }
 
     const payload = (await safeJson(response)) as
@@ -87,6 +117,13 @@ export class OpenAILLMProvider implements LLMProvider {
     if (!parsed.ok) return llmErr<T>(parsed.errors, text, this.name);
     return llmOk<T>(parsed.value, text, this.name);
   }
+}
+
+function redactProviderBody(text: string): string {
+  return text.slice(0, 2000).replace(
+    /("?(?:authorization|(?:cerebras|openai|groq)?[_ -]?api[_ -]?key|token|secret|password)"?\s*[:=]\s*"?)[^",}\s]+/gi,
+    "$1[REDACTED]",
+  );
 }
 
 async function safeText(res: Response): Promise<string> {

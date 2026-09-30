@@ -22,6 +22,7 @@ kernel invariant 3, the same boundary _build_explorer_context already enforced.
 """
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from wizard_kernel.context.sections import ContextSection
@@ -61,6 +62,7 @@ class Packager:
         goals: "GoalEngine",
         kg: "KnowledgeGraph",
         budget: "BudgetManager",
+        obs_store: "ObservationStore | None" = None,
     ) -> dict:
         """The trust-stripped context dict handed to the Explorer Agent.
 
@@ -72,6 +74,7 @@ class Packager:
             "investigation_id": inv.id,
             "intent": inv.intent,
             "targets": inv.targets,
+            "browser_enabled": bool(inv.options.get("browser_enabled")),
             "current_node": {
                 "id": node.id,
                 "type": node.type,
@@ -84,6 +87,20 @@ class Packager:
             ],
             "kg_summary": kg.summary(),
             "remaining_budget": budget.remaining,
+            "previous_actions": [
+                {
+                    "node_id": obs.node_id,
+                    "tool": obs.source_tool,
+                    "parameters": (obs.payload or {}).get("meta") or {},
+                    "outcome": json.dumps(
+                        {key: (obs.payload or {})[key] for key in ("ok", "data", "error", "stdout", "stderr", "exit_code") if key in (obs.payload or {})},
+                        default=str,
+                        ensure_ascii=False,
+                    )[:4000],
+                    "succeeded": (obs.payload or {}).get("ok"),
+                }
+                for obs in (obs_store.all() if obs_store else [])[-_RECENT_OBS_N:]
+            ],
         }
 
     # ── Explorer: the modular section view (KV cache / budget / audit) ──────────
@@ -95,7 +112,7 @@ class Packager:
         goals: "GoalEngine",
         kg: "KnowledgeGraph",
         budget: "BudgetManager",
-        obs_store: "ObservationStore",
+        obs_store: "ObservationStore | None" = None,
     ) -> list[ContextSection]:
         """Project the same state into priority-ranked ContextSections.
 
@@ -106,7 +123,7 @@ class Packager:
         volatile observation/failure sections); it is read-only.
         """
         summary = kg.summary()
-        observations = obs_store.all()
+        observations = obs_store.all() if obs_store else []
         return [
             ContextSection(
                 id="system_instructions", priority=100, scope="all_agents",

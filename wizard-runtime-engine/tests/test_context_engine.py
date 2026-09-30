@@ -80,7 +80,8 @@ def test_packet_is_the_trust_stripped_contract():
     # Exact key set the agents consume — no more (invariant 3).
     assert set(packet) == {
         "investigation_id", "intent", "targets", "current_node",
-        "active_goals", "kg_summary", "remaining_budget",
+        "active_goals", "kg_summary", "remaining_budget", "browser_enabled",
+        "previous_actions",
     }
     assert packet["current_node"] == {"id": "n1", "type": "read",
                                       "action": node.action, "goal_id": "g1"}

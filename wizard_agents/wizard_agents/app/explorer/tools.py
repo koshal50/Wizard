@@ -100,7 +100,7 @@ TOOL_REGISTRY: Dict[ToolName, ToolDescriptor] = {
     ToolName.BROWSER_EXTRACT: ToolDescriptor(
         ToolName.BROWSER_EXTRACT,
         "Extract structured content from the current page.",
-        ["selector"],
+        [],
     ),
     ToolName.INSPECT_CONFIGURATION: ToolDescriptor(
         ToolName.INSPECT_CONFIGURATION,

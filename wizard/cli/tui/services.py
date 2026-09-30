@@ -70,6 +70,7 @@ class ServiceSpec:
     health_path: str
     cwd: str
     argv: tuple[str, ...] | None
+    env: dict[str, str] | None = None
     needs: tuple[str, ...] = ()
     why_unstartable: str = ""
 
@@ -115,6 +116,19 @@ def _python() -> str:
     return sys.executable
 
 
+def _kernel_python() -> str:
+    """Use the Runtime Engine environment when it exists.
+
+    The CLI may be installed with a different interpreter from the Runtime's
+    optional browser dependencies. Keep Planner/agent startup on the CLI
+    interpreter, but launch the kernel with its existing project environment.
+    """
+    venv_python = repo_root() / "wizard-runtime-engine" / ".venv" / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    return str(venv_python) if venv_python.is_file() else _python()
+
+
 def build_specs(root: Path | None = None) -> list[ServiceSpec]:
     """The three services, resolved against this checkout.
 
@@ -126,6 +140,34 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
     """
     root = root or repo_root()
     node = shutil.which("node")
+    cerebras_key = os.environ.get("CEREBRAS_KEY", "")
+    if not cerebras_key:
+        try:
+            cerebras_key = next(
+                (value.strip().strip("\"'") for line in (root / ".env").read_text(encoding="utf-8").splitlines()
+                 for name, sep, value in [line.partition("=")] if sep and name.strip() == "CEREBRAS_KEY"),
+                "",
+            )
+        except OSError:
+            pass
+    planner_env = os.environ.copy()
+    planner_env.update({
+        "LLM_PROVIDER": "openai",
+        "LLM_MODEL": "gpt-oss-120b",
+        "LLM_BASE_URL": "https://api.cerebras.ai",
+        "WIZARD_CEREBRAS_GATE_DB": str(root / ".wizard" / "cerebras-rate-gate.sqlite3"),
+    })
+    if cerebras_key:
+        planner_env["OPENAI_API_KEY"] = cerebras_key
+    agents_env = os.environ.copy()
+    agents_env.update({
+        "WIZARD_LLM_PROVIDER": "vllm",
+        "WIZARD_LLM_MODEL": "gpt-oss-120b",
+        "WIZARD_LLM_BASE_URL": "https://api.cerebras.ai",
+        "WIZARD_CEREBRAS_GATE_DB": str(root / ".wizard" / "cerebras-rate-gate.sqlite3"),
+    })
+    if cerebras_key:
+        agents_env["OPENAI_API_KEY"] = cerebras_key
 
     return [
         ServiceSpec(
@@ -134,8 +176,9 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
             port=8080,
             health_path="/health",
             cwd=str(root / "wizard-runtime-engine"),
-            argv=(_python(), "-m", "uvicorn", "wizard_kernel.main:app",
+            argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
                   "--host", "127.0.0.1", "--port", "8080"),
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", ""))))},
             needs=("uvicorn",),
             why_unstartable="uvicorn is not importable by this interpreter",
         ),
@@ -146,6 +189,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
             health_path="/health",
             cwd=str(root / "wizard-investigation-planner"),
             argv=(node, "--experimental-strip-types", "src/http/server.ts") if node else None,
+            env=planner_env,
             needs=("node",),
             why_unstartable="node is not on PATH",
         ),
@@ -161,6 +205,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
             cwd=str(root / "wizard_agents" / "wizard_agents"),
             argv=(_python(), "-m", "uvicorn", "app.api.main:app",
                   "--host", "127.0.0.1", "--port", "8100"),
+            env=agents_env,
             needs=("uvicorn",),
             why_unstartable="uvicorn is not importable by this interpreter",
         ),
@@ -256,6 +301,7 @@ def _spawn(spec: ServiceSpec, log_dir: Path) -> "subprocess.Popen | None":
             cwd=spec.cwd,
             stdout=handle,
             stderr=subprocess.STDOUT,
+            env=spec.env,
             # Its own process group, so Ctrl-C in the TUI does not race the
             # child's own shutdown, and terminate() below reaches the whole
             # tree (uvicorn spawns workers).
@@ -423,7 +469,19 @@ def ensure_chromium() -> str:
     # The binaries without the package that drives them are no use, and a cache
     # left behind by an uninstalled Playwright would otherwise read as ready.
     # find_spec imports nothing and starts nothing, so it stays silent.
-    if importlib.util.find_spec("playwright") is None:
+    kernel_python = _kernel_python()
+    if kernel_python == sys.executable:
+        playwright_available = importlib.util.find_spec("playwright") is not None
+    else:
+        try:
+            probe = subprocess.run(
+                [kernel_python, "-c", "import importlib.util; raise SystemExit(importlib.util.find_spec('playwright') is None)"],
+                capture_output=True, timeout=10,
+            )
+            playwright_available = probe.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            playwright_available = False
+    if not playwright_available:
         return ("[x] Chromium (Playwright browser)  unavailable  "
                 "the playwright package is not importable by this interpreter")
 
@@ -434,7 +492,7 @@ def ensure_chromium() -> str:
           "(one time, ~150 MB)...", flush=True)
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"],
+            [kernel_python, "-m", "playwright", "install", "chromium"],
             capture_output=True, text=True, timeout=900,
         )
     except (OSError, subprocess.SubprocessError) as exc:

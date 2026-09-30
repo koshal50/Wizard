@@ -67,9 +67,9 @@ class GoalEngine:
 
         req_types = set(goal.required_claim_types)
         if not req_types:
-            # A goal with no required types is automatically satisfied
-            self.mark_satisfied(goal_id)
-            return True
+            # Missing proof requirements are not proof.
+            goal.progress = 0.0
+            return False
 
         satisfied_types: set[str] = set()
         for claim in kg.all_claims():

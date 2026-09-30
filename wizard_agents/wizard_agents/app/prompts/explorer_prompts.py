@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 from app.contracts.explorer import ExplorerInput
+from app.explorer.tools import describe_tools
 
 EXPLORER_SYSTEM_PROMPT = """\
 You are the Explorer Agent inside the Wizard investigation system.
@@ -28,8 +29,14 @@ that JSON object.
 
 
 def build_explorer_user_prompt(explorer_input: ExplorerInput) -> str:
+    tool_details = [
+        {"name": tool.name.value, "description": tool.description, "expected_parameters": tool.expected_parameters}
+        for tool in describe_tools(explorer_input.available_tools)
+    ]
     return (
         "Investigation node to plan for:\n"
         f"{json.dumps(explorer_input.model_dump(mode='json'), indent=2)}\n\n"
+        f"Available tool details:\n{json.dumps(tool_details, indent=2)}\n\n"
+        "For the selected tool, include its expected parameters in `parameters`, using values from `current_node.planned_action` when available. Do not omit expected parameters.\n\n"
         "Produce an ExplorerOutput JSON object for this node."
     )

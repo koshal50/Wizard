@@ -62,39 +62,28 @@ export interface GoalEvidence {
  * produce, from an action the plan can actually propose. A goal whose evidence
  * cannot exist is unsatisfiable by construction.
  */
-const ROUTES: ReadonlyArray<{ match: RegExp; evidence: GoalEvidence }> = [
-  { match: /^inspect\b/, evidence: { required_claim_types: ["FILE_READ"], requires_execution_evidence: false } },
-  // Before the web route, because "Operate Web Surface" contains "Web" and only
-  // the prefix test keeps it from being routed as the read-the-page goal it is
-  // the opposite of. INTERACTION is a claim type a navigate cannot produce: the
-  // kernel's browser extractor types `interacted:<selector>` and
-  // `effect:<selector>` that way, so reaching a page and operating it are two
-  // goals closed by two different pieces of evidence — and a run that reaches a
-  // page and stops can no longer report that it did what was asked.
-  { match: /^operate\b/, evidence: { required_claim_types: ["INTERACTION"], requires_execution_evidence: true } },
-  { match: /web|browser|http/, evidence: { required_claim_types: ["WEB"], requires_execution_evidence: false } },
-  { match: /runtime/, evidence: { required_claim_types: ["RUNTIME"], requires_execution_evidence: true } },
-  { match: /depend|package/, evidence: { required_claim_types: ["PACKAGE"], requires_execution_evidence: false } },
-  // No execution requirement: containerisation is *declared* by a file, and the
-  // kernel's DEPLOYMENT claims come from reading a Dockerfile or a compose file.
-  // Demanding execution evidence as well made the goal unsatisfiable by
-  // construction — the evidence it asked for is not the kind that can exist.
-  { match: /container|docker|deploy/, evidence: { required_claim_types: ["DEPLOYMENT"], requires_execution_evidence: false } },
-  // Tests are only really verified by running them. A file-tier TESTING claim (a
-  // pytest section in pyproject.toml) says the suite is *configured*, which is
-  // not what "verify the tests" asks.
-  { match: /test|spec|coverage/, evidence: { required_claim_types: ["TESTING"], requires_execution_evidence: true } },
-  { match: /investigate|repository|filesystem/, evidence: { required_claim_types: ["FILESYSTEM"], requires_execution_evidence: false } },
-];
-
 /** A goal nothing routes: it exists to be reported on, not to be proven. */
 const NO_EVIDENCE: GoalEvidence = { required_claim_types: [], requires_execution_evidence: false };
 
 export function goalEvidenceFor(name: string): GoalEvidence {
   const n = name.toLowerCase();
-  for (const route of ROUTES) {
-    if (route.match.test(n)) return route.evidence;
+  if (/^inspect\b/.test(n)) return { required_claim_types: ["FILE_READ"], requires_execution_evidence: false };
+  if (/^operate\b/.test(n)) return { required_claim_types: ["WEB", "INTERACTION"], requires_execution_evidence: true };
+  if (/container|docker|deploy/.test(n)) {
+    return { required_claim_types: ["DEPLOYMENT"], requires_execution_evidence: /\b(execute|run|start|launch|up|bring up)\b/.test(n) };
   }
+  if (/web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b/.test(n)) {
+    const required = ["WEB"];
+    if (/after auth|authenticate|log ?in|sign ?in|submit|click|fill/.test(n)) required.push("INTERACTION");
+    if (/\b(start|launch|run|execute|compile|build|listen|serve)\b/.test(n)) required.push("RUNTIME");
+    return { required_claim_types: required, requires_execution_evidence: true };
+  }
+  if (/runtime|server|listen|port|compile|build|\bdev\b|\bstart\b|\blaunch\b|\bexecute\b|\brespond/.test(n)) {
+    return { required_claim_types: ["RUNTIME"], requires_execution_evidence: true };
+  }
+  if (/depend|package/.test(n)) return { required_claim_types: ["PACKAGE"], requires_execution_evidence: false };
+  if (/test|spec|coverage/.test(n)) return { required_claim_types: ["TESTING"], requires_execution_evidence: true };
+  if (/investigate|repository|filesystem/.test(n)) return { required_claim_types: ["FILESYSTEM"], requires_execution_evidence: false };
   return NO_EVIDENCE;
 }
 

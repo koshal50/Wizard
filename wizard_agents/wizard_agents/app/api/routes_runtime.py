@@ -138,8 +138,11 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
         known_claims=[],
         context=f"intent={packet.get('intent')} targets={packet.get('targets')}",
         missing_evidence=[],
-        previous_actions=[],
-        available_tools=RUNTIME_TOOLS,
+        previous_actions=packet.get("previous_actions") or [],
+        available_tools=[
+            tool for tool in RUNTIME_TOOLS
+            if packet.get("browser_enabled") or not tool.value.startswith("browser_")
+        ],
         repository_metadata=RepositoryMetadata(notes=str(packet.get("kg_summary") or "")),
         execution_budget=ExecutionBudget(
             max_steps=1,

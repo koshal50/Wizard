@@ -15,6 +15,8 @@ class _FakeResponse:
     def __init__(self, payload: dict, status: int = 200) -> None:
         self._payload = payload
         self._status = status
+        self.status_code = status
+        self.headers = {"x-request-id": "req-test"}
 
     def raise_for_status(self) -> None:
         if self._status >= 400:
@@ -26,7 +28,7 @@ class _FakeResponse:
 
 def _content(obj: dict) -> dict:
     """Build an OpenAI-compatible chat.completions payload."""
-    return {"choices": [{"message": {"content": json.dumps(obj)}}]}
+    return {"choices": [{"message": {"content": json.dumps(obj)}, "finish_reason": "stop"}]}
 
 
 @pytest.fixture()
@@ -39,16 +41,7 @@ def _explorer_output_dict() -> dict:
     return ExplorerOutput(
         investigation_id="inv-1",
         node_id="n1",
-        purpose="p",
-        reasoning="r",
-        selected_tool="read_file",
-        parameters={"path": "."},
-        execution_steps=[
-            {"step_number": 1, "description": "read", "tool": "read_file", "parameters": {"path": "."}}
-        ],
-        expected_observation="obs",
-        success_condition="ok",
-        failure_condition="fail",
+        tool_request={"tool": "read_file", "parameters": {"path": "."}},
     ).model_dump(mode="json")
 
 
@@ -61,7 +54,7 @@ def test_requires_model(monkeypatch):
 def test_generate_structured_success(monkeypatch, vllm_env):
     captured = {}
 
-    def fake_post(url, json, timeout):  # noqa: A002 - match httpx signature
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
         captured["url"] = url
         captured["json"] = json
         return _FakeResponse(_content(_explorer_output_dict()))
@@ -77,12 +70,68 @@ def test_generate_structured_success(monkeypatch, vllm_env):
     assert captured["url"] == "http://vllm.local:8000/v1/chat/completions"
     assert captured["json"]["model"] == "test/open-model"
     assert captured["json"]["messages"][1]["content"] == "user"
-    # schema is injected into the system message
-    assert "JSON Schema" in captured["json"]["messages"][0]["content"]
+    assert captured["json"]["response_format"]["type"] == "json_object"
+
+
+def test_explorer_requests_strict_canonical_toolrequest_schema(monkeypatch, vllm_env):
+    captured = {}
+
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
+        captured.update(json)
+        return _FakeResponse(_content(_explorer_output_dict()))
+
+    monkeypatch.setattr("app.llm.vllm_provider.httpx.post", fake_post)
+    metadata = {
+        "strict_json_schema": True,
+        "reasoning_effort": "low",
+        "max_completion_tokens": 2048,
+        "input": {"available_tools": ["read_file", "check_port"]},
+        "tool_parameter_schema": {
+            "read_file": {"path": "string", "max_bytes": "integer"},
+            "check_port": {"port": "integer", "host": "string"},
+        },
+    }
+    provider = VLLMProvider()
+
+    class _Gate:
+        def acquire(self):
+            pass
+
+    provider._cerebras_gate = _Gate()
+    provider._model = "gpt-oss-120b"
+    provider.generate_structured("system", "user", ExplorerOutput, metadata=metadata)
+
+    request_format = captured["response_format"]
+    assert request_format["type"] == "json_schema"
+    assert request_format["json_schema"]["strict"] is True
+    schema = request_format["json_schema"]["schema"]
+    assert schema["additionalProperties"] is False
+    check_port = next(branch for branch in schema["properties"]["tool_request"]["anyOf"]
+                      if branch["properties"]["tool"]["enum"] == ["check_port"])
+    assert set(check_port["properties"]["parameters"]["properties"]) == {"port", "host"}
+    assert set(check_port["properties"]["parameters"]["required"]) == {"port", "host"}
+    assert check_port["properties"]["parameters"]["additionalProperties"] is False
+    assert captured["max_completion_tokens"] == 2048
+    assert captured["reasoning_effort"] == "low"
+    assert "JSON Schema" not in captured["messages"][0]["content"]
+
+
+def test_incomplete_strict_response_reports_finish_reason_without_repair(monkeypatch, vllm_env):
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
+        return _FakeResponse({"choices": [{"message": {"content": '{"tool":"start_process","parameters":{'},
+                                   "finish_reason": "length"}], "usage": {"completion_tokens": 1024}})
+
+    monkeypatch.setattr("app.llm.vllm_provider.httpx.post", fake_post)
+    with pytest.raises(LLMError, match="finish_reason=length"):
+        VLLMProvider().generate_structured(
+            "s", "u", ExplorerOutput,
+            metadata={"strict_json_schema": True, "input": {"available_tools": ["start_process"]},
+                      "tool_parameter_schema": {"start_process": {"command": "string"}}},
+        )
 
 
 def test_http_failure_raises_llm_error(monkeypatch, vllm_env):
-    def fake_post(url, json, timeout):  # noqa: A002
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
         raise httpx.ConnectError("refused")
 
     monkeypatch.setattr("app.llm.vllm_provider.httpx.post", fake_post)
@@ -91,7 +140,7 @@ def test_http_failure_raises_llm_error(monkeypatch, vllm_env):
 
 
 def test_invalid_json_raises_llm_error(monkeypatch, vllm_env):
-    def fake_post(url, json, timeout):  # noqa: A002
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
         return _FakeResponse({"choices": [{"message": {"content": "not json"}}]})
 
     monkeypatch.setattr("app.llm.vllm_provider.httpx.post", fake_post)
@@ -105,7 +154,7 @@ def test_full_flow_through_explorer_agent(monkeypatch, vllm_env, python_project_
     valid["investigation_id"] = python_project_explorer_input.investigation_id
     valid["node_id"] = python_project_explorer_input.current_node.node_id
 
-    def fake_post(url, json, timeout):  # noqa: A002
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
         return _FakeResponse(_content(valid))
 
     monkeypatch.setattr("app.llm.vllm_provider.httpx.post", fake_post)

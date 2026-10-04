@@ -20,6 +20,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from wizard_kernel.contracts.agent import ToolRequest
 
@@ -35,7 +36,7 @@ _EXEC_TOOLS = frozenset({"execute_command", "start_process"})
 # (the egress analog of the path-traversal guard); ALL browser tools are excluded
 # from dedup because identical params (e.g. browser_snapshot {}) address a *changed*
 # live page — deduping them would wrongly block legitimate re-observation.
-_URL_TOOLS = frozenset({"browser_navigate"})
+_URL_TOOLS = frozenset({"browser_navigate", "http_request"})
 BROWSER_TOOLS = frozenset({
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_back", "browser_extract",
@@ -45,7 +46,7 @@ BROWSER_TOOLS = frozenset({
 _ALLOWED_TOOLS = frozenset({
     "list_tree", "read_file", "search_files",
     "execute_command", "check_port", "path_exists",
-    "start_process", "read_process", "kill_process", "list_processes",
+    "start_process", "read_process", "kill_process", "list_processes", "http_request",
 }) | BROWSER_TOOLS
 
 
@@ -65,58 +66,107 @@ class ToolRequestValidator:
         self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
+        self._rejected_fingerprints: set[str] = set()
         # Fail-closed egress allowlist for browser_navigate. Empty → block all navigation.
         self._allowed_domains = tuple(allowed_domains or ())
+        # Runtime observations, not agent assertions, advance resource state.
+        self._reachable_local_endpoints: set[tuple[str, int]] = set()
+        self._browser_navigated = False
+
+    def record_execution(self, tool: str, params: dict, payload: dict) -> None:
+        """Advance prerequisites only from successful executor results."""
+        data = payload.get("data") or {}
+        if tool == "check_port" and payload.get("ok") and data.get("active"):
+            host = str(data.get("host", params.get("host", "localhost"))).lower()
+            port = data.get("port", params.get("port"))
+            if isinstance(port, int):
+                endpoint = (self._endpoint_host(host), port)
+                if endpoint not in self._reachable_local_endpoints:
+                    self._reachable_local_endpoints.add(endpoint)
+                    self._rejected_fingerprints.clear()
+        elif tool == "browser_navigate" and payload.get("ok"):
+            self._browser_navigated = True
+            self._rejected_fingerprints.clear()
+        elif tool in BROWSER_TOOLS:
+            if payload.get("ok"):
+                self._rejected_fingerprints.clear()
+            else:
+                # Do not spend another model decision on an identical browser
+                # action after a real executor failure. A successful state
+                # change clears this through the branches above.
+                self._rejected_fingerprints.add(self._fingerprint(tool, params))
 
     def validate(self, request: ToolRequest, budget_remaining: int) -> ValidationResult:
         """Run all checks. Returns a ValidationResult with valid=True on pass."""
 
+        raw_fingerprint = self._fingerprint(request.tool, request.parameters)
+        if raw_fingerprint in self._rejected_fingerprints:
+            return ValidationResult(valid=False, reason="Duplicate rejected ToolRequest; choose a different action.")
+
+        def reject(reason: str) -> ValidationResult:
+            self._rejected_fingerprints.add(raw_fingerprint)
+            return ValidationResult(valid=False, reason=reason)
+
         # 1. Tool existence check
         if request.tool not in _ALLOWED_TOOLS:
-            return ValidationResult(
-                valid=False,
-                reason=f"Unknown tool {request.tool!r}. Agent requested a non-existent tool.",
-            )
+            return reject(f"Unknown tool {request.tool!r}. Agent requested a non-existent tool.")
 
         if request.tool in BROWSER_TOOLS and not self._browser_enabled:
-            return ValidationResult(valid=False, reason="Browser tools are disabled for this investigation.")
+            return reject("Browser tools are disabled for this investigation.")
 
         # 2. Budget fast-path: if budget is already 0, reject before any I/O
         if budget_remaining <= 0:
-            return ValidationResult(valid=False, reason="Budget exhausted — no more executions allowed.")
+            return reject("Budget exhausted — no more executions allowed.")
 
         # 3. Path traversal guard for tools that accept paths
         params = dict(request.parameters)
         if request.tool in _PATH_TOOLS:
             result = self._validate_path(params)
             if not result.valid:
-                return result
+                return reject(result.reason)
             params = result.sanitised_params  # use the resolved, safe params
 
-        # 3b. URL egress guard for browser navigation (analog of path traversal)
+        # 3b. Egress guard for browser and direct HTTP requests.
         if request.tool in _URL_TOOLS:
             url_result = self._validate_url(params)
             if not url_result.valid:
-                return url_result
+                return reject(url_result.reason)
+            if self._is_loopback_url(params.get("url", "")):
+                parsed = urlsplit(params["url"])
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                endpoint = (self._endpoint_host(parsed.hostname or ""), port)
+                if endpoint not in self._reachable_local_endpoints:
+                    return reject(
+                        "RESOURCE_NOT_READY: local target has no successful Runtime reachability observation; "
+                        "discover its endpoint and verify it with check_port before navigation or HTTP."
+                    )
+
+        if request.tool in BROWSER_TOOLS - {"browser_navigate"} and not self._browser_navigated:
+            return reject("BROWSER_NOT_READY: a successful browser navigation is required before page actions.")
 
         # 4. Structural validation — required parameters present
         struct_result = self._validate_structure(request.tool, params)
         if not struct_result.valid:
-            return struct_result
+            return reject(struct_result.reason)
 
         # 5. Duplicate detection — fingerprint (tool + canonical params).
         #    Browser tools are EXCLUDED: identical params address a changed live
         #    page, so deduping them would wrongly block legitimate re-observation.
         #    Budget still guarantees termination (invariant 7).
-        if request.tool not in BROWSER_TOOLS:
+        repeatable_observation = request.tool in BROWSER_TOOLS | {
+            "read_process", "check_port", "list_processes",
+        } or (
+            request.tool == "http_request"
+            and str(params.get("method", "GET")).upper() in {"GET", "HEAD"}
+        )
+        if not repeatable_observation:
             fingerprint = self._fingerprint(request.tool, params)
             if fingerprint in self._seen_fingerprints:
-                return ValidationResult(
-                    valid=False,
-                    reason=(
+                return reject(
+                    (
                         f"Duplicate request: {request.tool!r} with identical parameters has already "
                         "been executed in this investigation. Agent may be in a cycle."
-                    ),
+                    )
                 )
             self._seen_fingerprints.add(fingerprint)
 
@@ -164,13 +214,13 @@ class ToolRequestValidator:
         if parsed.scheme not in ("http", "https"):
             return ValidationResult(
                 valid=False,
-                reason=f"Disallowed URL scheme {parsed.scheme!r}: only http/https may be navigated.",
+                reason=f"Disallowed URL scheme {parsed.scheme!r}: only http/https is allowed.",
             )
         host = (parsed.hostname or "").lower()
         if not self._allowed_domains:
             return ValidationResult(
                 valid=False,
-                reason="Navigation blocked: allowed_domains is empty (fail-closed egress policy).",
+                reason="Request blocked: allowed_domains is empty (fail-closed egress policy).",
             )
         for domain in self._allowed_domains:
             d = domain.lower().lstrip(".")
@@ -178,7 +228,7 @@ class ToolRequestValidator:
                 return ValidationResult(valid=True, sanitised_params=params)
         return ValidationResult(
             valid=False,
-            reason=f"Navigation to {host!r} blocked: not in allowed_domains {list(self._allowed_domains)}.",
+            reason=f"Request to {host!r} blocked: not in allowed_domains {list(self._allowed_domains)}.",
         )
 
     def _validate_structure(self, tool: str, params: dict) -> ValidationResult:
@@ -200,6 +250,8 @@ class ToolRequestValidator:
             required = {"selector": str}
         elif tool == "browser_type":
             required = {"selector": str, "text": str}
+        elif tool == "http_request":
+            required = {"url": str}
 
         for param_name, param_type in required.items():
             if param_name not in params:
@@ -215,6 +267,15 @@ class ToolRequestValidator:
                         f"{param_type.__name__}, got {type(params[param_name]).__name__}."
                     ),
                 )
+        if tool == "http_request":
+            method = str(params.get("method", "GET")).upper()
+            if method not in {"GET", "HEAD", "POST"}:
+                return ValidationResult(valid=False, reason="http_request method must be GET, HEAD, or POST.")
+            if "body" in params and not isinstance(params["body"], str):
+                return ValidationResult(valid=False, reason="http_request body must be a string.")
+            params["method"] = method
+            if len(params.get("body", "")) > 8192:
+                return ValidationResult(valid=False, reason="http_request body exceeds 8192 characters.")
         return ValidationResult(valid=True, sanitised_params=params)
 
     @staticmethod
@@ -222,3 +283,14 @@ class ToolRequestValidator:
         """Stable fingerprint of (tool, params) for dedup. Order-independent on dict keys."""
         canonical = json.dumps({"tool": tool, "params": params}, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()
+
+    @staticmethod
+    def _is_loopback_url(url: str) -> bool:
+        parsed = urlsplit(url)
+        host = (parsed.hostname or "").lower()
+        return host == "localhost" or host.endswith(".localhost") or host in {"127.0.0.1", "::1"}
+
+    @staticmethod
+    def _endpoint_host(host: str) -> str:
+        lowered = host.lower()
+        return "loopback" if lowered == "localhost" or lowered.endswith(".localhost") or lowered in {"127.0.0.1", "::1"} else lowered

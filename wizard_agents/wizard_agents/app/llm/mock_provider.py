@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Type, TypeVar
 
 from pydantic import BaseModel
 
-from app.contracts.common import ExecutionStep, ToolName
+from app.contracts.common import ToolName
 from app.contracts.explorer import ExplorerOutput
 from app.contracts.verification import Severity, VerificationFinding, VerificationOutput
 from app.llm.base import LLMError, LLMProvider
@@ -77,12 +77,9 @@ class MockLLMProvider(LLMProvider):
         planned_tool = planned.get("tool")
         selected_tool: ToolName
         parameters: Dict[str, Any]
-        command = None
         if planned_tool and planned_tool in available_tools:
             selected_tool = ToolName(planned_tool)
             parameters = dict(planned.get("params") or {})
-            if selected_tool == ToolName.EXECUTE_COMMAND:
-                command = parameters.pop("command", None)
         else:
             selected_tool = (
                 ToolName.READ_FILE if ToolName.READ_FILE.value in available_tools
@@ -90,8 +87,7 @@ class MockLLMProvider(LLMProvider):
             )
             parameters = {}
             if selected_tool == ToolName.EXECUTE_COMMAND:
-                command = "true"
-                parameters = {"reason": "mock placeholder command"}
+                parameters = {"command": "true"}
             elif selected_tool == ToolName.READ_FILE:
                 parameters = {"path": "."}
             elif selected_tool == ToolName.SEARCH_FILES:
@@ -103,55 +99,10 @@ class MockLLMProvider(LLMProvider):
             elif selected_tool == ToolName.TRACE_EXECUTION:
                 parameters = {"entrypoint": goal}
 
-        route = raw_input.get("route", {})
-        node_order = route.get("node_order", [node_id])
-        current_index = route.get("current_index", 0)
-        next_node = None
-        if current_index + 1 < len(node_order):
-            next_node = node_order[current_index + 1]
-
-        # The step's parameters must describe the same call the tool request makes,
-        # so re-attach the command that was lifted out of `parameters` above.
-        step_parameters = dict(parameters)
-        if command is not None:
-            step_parameters["command"] = command
-
-        steps = [
-            ExecutionStep(
-                step_number=1,
-                description=f"Use {selected_tool.value} to gather evidence for node '{node_id}'",
-                tool=selected_tool,
-                parameters=step_parameters,
-            )
-        ]
-
-        if planned_tool and planned_tool in available_tools:
-            reasoning = (
-                f"Node '{node_id}' has goal '{goal}' and arrived with a planned action "
-                f"'{planned_tool}'. Honoured it: the node was created for this specific "
-                f"call, so re-deriving a tool here would only lose precision."
-            )
-        else:
-            reasoning = (
-                f"Node '{node_id}' has goal '{goal}' and no usable planned action. "
-                f"Selected '{selected_tool.value}' because it is available and directly "
-                f"applicable to this goal."
-            )
-
         return ExplorerOutput(
             investigation_id=raw_input["investigation_id"],
             node_id=node_id,
-            purpose=f"Establish evidence toward goal: {goal}",
-            reasoning=reasoning,
-            selected_tool=selected_tool,
-            parameters=parameters,
-            command=command,
-            execution_steps=steps,
-            expected_observation=f"Evidence relevant to: {goal}",
-            success_condition=f"Runtime returns data addressing: {goal}",
-            failure_condition="Tool execution fails, times out, or returns no relevant data",
-            next_node=next_node,
-            fallback="Escalate to Planner for an alternate node or tool if this plan fails",
+            tool_request={"tool": selected_tool, "parameters": parameters},
         )
 
     # -- Verification ---------------------------------------------------

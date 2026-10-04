@@ -21,6 +21,7 @@ configured with (InvestigationOptions.agent_explorer_url / agent_verifier_url).
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -66,6 +67,7 @@ RUNTIME_TOOLS: List[ToolName] = [
     ToolName.KILL_PROCESS,
     ToolName.LIST_PROCESSES,
     ToolName.CHECK_PORT,
+    ToolName.HTTP_REQUEST,
     ToolName.BROWSER_NAVIGATE,
     ToolName.BROWSER_SNAPSHOT,
     ToolName.BROWSER_CLICK,
@@ -104,9 +106,11 @@ def _goal_text(packet: Dict[str, Any]) -> str:
     """
     node = packet.get("current_node") or {}
     goal_id = node.get("goal_id")
-    for g in packet.get("active_goals") or []:
-        if goal_id is not None and g.get("id") == goal_id:
-            return g.get("name") or "investigate node"
+    active_goals = packet.get("active_goals") or []
+    selected = next((g for g in active_goals if goal_id is not None and g.get("id") == goal_id),
+                    active_goals[0] if active_goals else None)
+    if selected:
+        return selected.get("name") or "investigate node"
     if packet.get("targets"):
         return f"investigate {'/'.join(str(t) for t in packet['targets'])}"
     return f"investigate {node.get('type') or 'node'}"
@@ -127,6 +131,23 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
     )
 
     budget = packet.get("remaining_budget")
+    active_goals = packet.get("active_goals") or []
+    active_goal = next((g for g in active_goals
+                        if node.get("goal_id") is not None
+                        and g.get("id") == node.get("goal_id")),
+                       active_goals[0] if active_goals else None)
+    evidence_context = ""
+    missing_evidence: list[str] = []
+    if active_goal:
+        required = active_goal.get("required_evidence") or []
+        completed = active_goal.get("completed_evidence") or []
+        missing_evidence = active_goal.get("missing_evidence") or []
+        evidence_context = (
+            f"\nACTIVE GOAL: {active_goal.get('name', '')}"
+            f"\nREQUIRED EVIDENCE: {', '.join(required) or '(none declared)'}"
+            f"\nCOMPLETED EVIDENCE: {', '.join(completed) or '(none yet)'}"
+            f"\nMISSING EVIDENCE: {', '.join(missing_evidence) or '(none)'}"
+        )
     return ExplorerInput(
         investigation_id=investigation_id,
         current_node=current,
@@ -134,14 +155,17 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
         # Route requires current_node.node_id to appear in node_order.
         route=Route(node_order=[node_id], current_index=0),
         nodes=[current],
-        active_goals=[g.get("name", "") for g in packet.get("active_goals") or []],
+        active_goals=[g.get("name", "") for g in active_goals],
         known_claims=[],
-        context=f"intent={packet.get('intent')} targets={packet.get('targets')}",
-        missing_evidence=[],
+        context=(f"intent={packet.get('intent')} targets={packet.get('targets')}"
+                 f"{evidence_context}\nRUNTIME RESOURCE STATE: "
+                 f"{json.dumps(packet.get('resource_state') or {}, separators=(',', ':'))}"),
+        missing_evidence=missing_evidence,
         previous_actions=packet.get("previous_actions") or [],
         available_tools=[
             tool for tool in RUNTIME_TOOLS
-            if packet.get("browser_enabled") or not tool.value.startswith("browser_")
+            if tool.value in set(packet.get("available_tools") or [])
+            and (packet.get("browser_enabled") or not tool.value.startswith("browser_"))
         ],
         repository_metadata=RepositoryMetadata(notes=str(packet.get("kg_summary") or "")),
         execution_budget=ExecutionBudget(
@@ -153,21 +177,17 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
 
 
 def _to_kernel_response(investigation_id: str, output: Any) -> Dict[str, Any]:
-    """ExplorerOutput -> the kernel's ExplorerResponse (contracts/agent.py).
-
-    The kernel's ToolRequest carries the whole invocation in `parameters`, so an
-    execute_command's command is folded back in from the agent's separate
-    `command` field — that split is the Agent System's, not the kernel's.
-    """
-    params = dict(output.parameters or {})
-    if output.selected_tool == ToolName.EXECUTE_COMMAND and output.command:
-        params["command"] = output.command
+    """Convert the one validated Explorer decision to the kernel ToolRequest."""
+    request = output.to_tool_request()
+    params = dict(request.parameters or {})
+    if request.command:
+        params["command"] = request.command
     return {
         "investigation_id": investigation_id,
         "tool_request": {
-            "tool": output.selected_tool.value,
+            "tool": request.tool.value,
             "parameters": params,
-            "reason": output.purpose,
+            "reason": "",
         },
     }
 

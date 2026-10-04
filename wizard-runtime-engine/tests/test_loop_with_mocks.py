@@ -44,6 +44,58 @@ def test_loop_reaches_completed():
     assert refreshed.state == LifecycleState.completed
 
 
+def test_validator_rejection_is_given_to_explorer_once_before_node_fails(tmp_path, monkeypatch):
+    from wizard_kernel.contracts.agent import ExplorerResponse, ToolRequest
+    from wizard_kernel.contracts.node import Hypothesis, HypothesisKind, InvestigationNode
+    from wizard_kernel.ports.agents import MockVerifier
+    import wizard_kernel.ports.agents as agent_ports
+
+    (tmp_path / "README.md").write_text("ready", encoding="utf-8")
+    node = InvestigationNode(
+        id="node_validation_feedback", type="read", action={},
+        hypothesis=Hypothesis(kind=HypothesisKind.always_success),
+    )
+
+    class Planner:
+        def initial(self, *args, **kwargs):
+            return TechnologyPlan(technologies=[], seed_nodes=[node])
+
+        def next_nodes(self, context):
+            return []
+
+        def interpret(self, node, obs):
+            return []
+
+    class Explorer:
+        def __init__(self):
+            self.contexts = []
+            self.calls = 0
+
+        def request(self, context):
+            self.contexts.append(context)
+            self.calls += 1
+            request = (ToolRequest(tool="browser_snapshot", parameters={})
+                       if self.calls == 1 else
+                       ToolRequest(tool="read_file", parameters={"path": "README.md"}))
+            return ExplorerResponse(investigation_id=context["investigation_id"],
+                                    tool_request=request)
+
+    explorer = Explorer()
+    monkeypatch.setattr(agent_ports, "get_agents", lambda _options: (explorer, MockVerifier()))
+    manager = InvestigationManager()
+    inv = manager.create(InvestigationRequest(
+        repository_path=str(tmp_path), intent="investigate", targets=[],
+        options={"budget": 4, "sandbox_mode": "local_dev"},
+    ))
+    kernel_loop.run(inv, manager, Planner())
+
+    assert explorer.calls == 2
+    rejected = explorer.contexts[1]["previous_actions"][-1]
+    assert rejected["tool"] == "browser_snapshot"
+    assert rejected["succeeded"] is False
+    assert "disabled" in rejected["outcome"]
+
+
 def test_loop_budget_terminates():
     """Invariant 7: budget always terminates.
 
@@ -326,4 +378,6 @@ def test_a_goal_closing_does_not_abandon_the_rest_of_the_plan(tmp_path):
     assert manager.get(inv.id).nodes_completed == 3
     # Nothing extra was asked of the Planner to make this happen: the work was
     # already in the graph, so the drain is bounded by what was planned.
-    assert planner.calls == []
+    # The plan drained, but its legacy goal has no explicit evidence contract;
+    # it must remain open and give the Planner the existing replan opportunity.
+    assert planner.calls == ["next_nodes"]

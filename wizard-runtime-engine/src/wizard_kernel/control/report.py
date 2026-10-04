@@ -171,12 +171,16 @@ def generate(
         goal_list = goals.all()
         if goal_list:
             lines += [
-                "| Goal | State | Progress |",
-                "|---|---|---|",
+                "| Goal | State | Evidence | Missing |",
+                "|---|---|---|---|",
             ]
             for g in goal_list:
                 icon = "✅" if g.state == "satisfied" else ("❌" if g.state == "failed" else "⏳")
-                lines.append(f"| {g.name} | {icon} {g.state} | {g.progress:.0%} |")
+                evidence = goals.evidence_status(g.id, observations)
+                label = "VERIFIED" if g.state == "satisfied" else ("FAILED" if g.state == "failed" else "UNVERIFIED / INCOMPLETE")
+                lines.append(f"| {g.name} | {icon} {label} | "
+                             f"{', '.join(evidence['completed']) or '—'} | "
+                             f"{', '.join(evidence['missing']) or '—'} |")
         else:
             lines.append("*No goals were tracked for this investigation.*")
     else:
@@ -292,7 +296,9 @@ def generate(
         lines.append("The following investigation goals were not satisfied:")
         lines.append("")
         for g in unverified:
-            lines.append(f"- **{g.name}** — state: `{g.state}` (progress: {g.progress:.0%})")
+                missing = goals.evidence_status(g.id, observations)['missing'] if goals else []
+                suffix = f"; missing evidence: {', '.join(missing)}" if missing else ""
+                lines.append(f"- **{g.name}** — {('FAILED' if g.state == 'failed' else 'UNVERIFIED / INCOMPLETE')}{suffix}")
     elif kg and kg.all_claims():
         lines.append("*All tracked goals satisfied.*")
     else:

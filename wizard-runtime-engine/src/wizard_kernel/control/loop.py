@@ -32,7 +32,8 @@ from wizard_kernel.contracts.plan import TechnologyPlan
 from wizard_kernel.contracts.status import LifecycleState
 from wizard_kernel.context.engine import ContextEngine
 from wizard_kernel.control import hypothesis as hyp_eval
-from wizard_kernel.control.goals import Goal, GoalEngine
+from wizard_kernel.control.goals import Goal, GoalEngine, evidence_categories_for_tool
+from wizard_kernel.ports.goal_policy import goal_evidence_for
 from wizard_kernel.control.investigation_graph import InvestigationGraph, register_graph
 from wizard_kernel.control.priority import next_ready
 from wizard_kernel.control.tool_validator import ToolRequestValidator, BROWSER_TOOLS
@@ -67,6 +68,7 @@ _TOOL_TO_OBS_TYPE: dict[str, str] = {
     "browser_back":     "browser_action",
     "browser_snapshot": "page_content",
     "browser_extract":  "page_content",
+    "http_request": "http_response",
 }
 
 # How many nodes complete before the Verifier Agent is consulted
@@ -201,22 +203,30 @@ def _run_loop(
     )
     fs_store.write(inv.id, "plan.json", plan.model_dump())
 
-    # Goal requirements come ENTIRELY from GoalDefinition — invariant 5
+    # The Runtime strengthens Planner declarations with its deterministic policy;
+    # a model cannot weaken a goal by omitting or under-declaring its evidence.
     for tech in plan.technologies:
         for goal_def in tech.initial_goals:
+            policy = goal_evidence_for(goal_def.name)
             goals.add(Goal(
                 id=f"goal_{uuid.uuid4().hex[:6]}",
                 name=goal_def.name,
-                required_claim_types=goal_def.required_claim_types,
+                required_claim_types=list(dict.fromkeys(
+                    [*policy.required_claim_types, *goal_def.required_claim_types]
+                )),
+                required_evidence=list(dict.fromkeys(
+                    [*policy.required_evidence, *goal_def.required_evidence]
+                )),
                 belief_threshold=goal_def.belief_threshold,
-                requires_execution_evidence=goal_def.requires_execution_evidence,
+                requires_execution_evidence=(goal_def.requires_execution_evidence
+                                             or policy.requires_execution_evidence),
             ))
 
     for node in plan.seed_nodes:
         graph.add(node)
 
     manager.update(inv.id, state=LifecycleState.investigation_loop,
-                   last_event="loop started", active_goals=goals.to_api_list())
+                   last_event="loop started", active_goals=goals.to_api_list(obs_store.all()))
     bus.emit(event_bus.InvestigationStarted, {"repository_path": inv.repository_path})
 
     nodes_since_last_verify = 0
@@ -272,6 +282,14 @@ def _run_loop(
                 graph.add(n)
             continue
 
+        # Planner seed nodes are often intentionally goal-agnostic. Keep the
+        # Runtime's context choice and evidence provenance aligned by assigning
+        # their execution to the first still-open goal unless the Planner named
+        # one explicitly.
+        active_goal_id = node.goal_id
+        if active_goal_id is None and goals.open_goals():
+            active_goal_id = goals.open_goals()[0].id
+
         graph.set_state(node.id, "running")
         manager.update(inv.id, last_event=f"executing {node.id} ({node.type})")
 
@@ -279,15 +297,45 @@ def _run_loop(
         # Context Engine builds the trust-stripped packet (agent contract) plus the
         # modular section view that drives KV-cache ordering + audit (invariant 3).
         ctx = context_engine.build_context("explorer", inv, node, goals, kg, budget, obs_store)
-        tool_action = _resolve_tool_action(node, explorer, ctx.packet, validator, budget, bus)
+        tool_action, decision_failure = _resolve_tool_action(
+            node, explorer, ctx.packet, validator, budget, bus,
+        )
+
+        # A deterministic validator rejection is actionable feedback, not a
+        # provider failure. Persist it before one corrective Explorer decision
+        # so the existing Context Engine can show the rejected tool and reason.
+        # Provider/schema failures still stop immediately, and the one-pass
+        # bound prevents an invalid action from creating an LLM retry loop.
+        if (tool_action is None and decision_failure
+                and decision_failure.get("error_type") == "TOOL_REQUEST_REJECTED"):
+            obs_store.append(
+                node_id=node.id,
+                source_tool="explorer",
+                obs_type="agent_failure",
+                payload={"ok": False, **decision_failure,
+                         "investigation_id": inv.id, "node_id": node.id},
+                goal_id=active_goal_id,
+                tool_request_id=decision_failure.get("tool_request_id"),
+            )
+            context_engine.on_state_mutation()
+            ctx = context_engine.build_context("explorer", inv, node, goals, kg, budget, obs_store)
+            tool_action, decision_failure = _resolve_tool_action(
+                node, explorer, ctx.packet, validator, budget, bus,
+            )
 
         if tool_action is None:
-            # Explorer failed or returned an invalid request: fail the node and record it.
+            failure = decision_failure or {
+                "error_type": "EXPLORER_DECISION_FAILED",
+                "detail": "Explorer did not provide a valid ToolRequest",
+            }
             obs = obs_store.append(
                 node_id=node.id,
                 source_tool="explorer",
                 obs_type="agent_failure",
-                payload={"ok": False, "error": "Explorer did not provide a valid ToolRequest"},
+                payload={"ok": False, **failure,
+                         "investigation_id": inv.id, "node_id": node.id},
+                goal_id=active_goal_id,
+                tool_request_id=failure.get("tool_request_id"),
             )
             graph.mark_failed(node.id, obs_ids=[obs.id])
             completed_ids.add(node.id)
@@ -295,7 +343,10 @@ def _run_loop(
             manager.update(inv.id, budget_remaining=budget.remaining,
                            nodes_completed=inv.nodes_completed + 1)
             bus.emit(event_bus.NodeFailed, {"node_id": node.id, "type": node.type,
-                                            "reason": "validation_rejected"})
+                                            "reason": failure["error_type"]})
+            if failure["error_type"].startswith("EXPLORER_"):
+                gave_up = True
+                break
             continue
 
         # The step is BEGINNING, said before it runs rather than after.
@@ -321,11 +372,16 @@ def _run_loop(
             "type": node.type,
             "tool": tool_action.get("tool", "unknown"),
             "params": tool_action.get("params", {}) or {},
-            "goal_id": node.goal_id,
+            "goal_id": active_goal_id,
         })
 
         # Execute — failures become observations, never crashes (invariant 4)
         payload = _safe_execute(tools, tool_action)
+        # The validator's resource prerequisites advance only from the actual
+        # executor result. A requested/planned action never marks a resource ready.
+        validator.record_execution(
+            tool_action.get("tool", ""), tool_action.get("params", {}) or {}, payload,
+        )
 
         # Immutable observation (invariant 1)
         tool_name = tool_action.get("tool", "unknown")
@@ -334,6 +390,10 @@ def _run_loop(
             source_tool=tool_name,
             obs_type=_TOOL_TO_OBS_TYPE.get(tool_name, "command_result"),
             payload=payload,
+            goal_id=active_goal_id,
+            tool_request_id=tool_action.get("tool_request_id"),
+            execution_id=uuid.uuid4().hex,
+            evidence_categories=evidence_categories_for_tool(tool_name, payload),
         )
 
         # Narration plane: discrete browser.* events on the EventBus. Pixels stream
@@ -345,10 +405,12 @@ def _run_loop(
         # ── Deterministic hypothesis evaluation (invariant 3 — no LLM needed) ─
         source_tier = source_tier_for_tool(tool_name)
         node_outcome = hyp_eval.evaluate(node, obs)
+        planned_action_matches = _planned_action_matches(node.action, tool_name,
+                                                          tool_action.get("params") or {})
         new_claims_this_node = 0
 
         match node_outcome:
-            case "expected_success" if node.on_success:
+            case "expected_success" if node.on_success and planned_action_matches:
                 result = ev_engine.admit(
                     inv_id=inv.id,
                     claim_type=node.on_success.claim_type,
@@ -366,7 +428,7 @@ def _run_loop(
                         "key": node.on_success.key,
                         "value": node.on_success.value,
                     })
-            case "expected_failure" if node.on_failure:
+            case "expected_failure" if node.on_failure and planned_action_matches:
                 result = ev_engine.admit(
                     inv_id=inv.id,
                     claim_type=node.on_failure.claim_type,
@@ -389,6 +451,11 @@ def _run_loop(
                         "key": node.on_failure.key,
                         "value": node.on_failure.value,
                     })
+            case "expected_success" | "expected_failure":
+                # Explorer executed a different action than the Planner's
+                # hypothesis describes. Keep the actual observation/extractors,
+                # but never attach the planned claim template to it.
+                pass
             case _:
                 # Unexpected — escalate to Planner (invariant 3: Planner never writes KG)
                 for n in planner.interpret(node, obs):
@@ -416,7 +483,7 @@ def _run_loop(
 
         # ── Update goals based on all new claims ──────────────────────────────
         satisfied_before = {g.id for g in goals.all() if g.state == "satisfied"}
-        goals.evaluate_all(kg)
+        goals.evaluate_all(kg, obs_store.all())
         for g in goals.all():
             if g.state == "satisfied" and g.id not in satisfied_before:
                 bus.emit(event_bus.GoalSatisfied, {"goal_id": g.id, "goal_name": g.name})
@@ -452,7 +519,7 @@ def _run_loop(
             budget_remaining=budget.remaining,
             nodes_completed=inv.nodes_completed + 1,
             claims_count=inv.claims_count + new_claims_this_node,
-            active_goals=goals.to_api_list(),
+            active_goals=goals.to_api_list(obs_store.all()),
         )
 
         if budget.is_low():
@@ -466,7 +533,7 @@ def _run_loop(
                 graph.set_state(ckpt.id, "complete")
                 completed_ids.add(ckpt.id)
                 if ckpt.goal_id:
-                    goals.mark_satisfied(ckpt.goal_id)
+                    goals.evaluate_checkpoint(ckpt.goal_id, kg, obs_store.all())
 
         # Two different judgements, and this used to be one test for both.
         #
@@ -566,7 +633,7 @@ def _run_loop(
                  {"reason": reason, "open_goals": open_goals})
 
     manager.update(inv.id, state=state, last_event=last_event,
-                   active_goals=goals.to_api_list())
+                   active_goals=goals.to_api_list(obs_store.all()))
 
 
 # ── Phase 6 helpers ───────────────────────────────────────────────────────────
@@ -578,10 +645,11 @@ def _resolve_tool_action(
     validator: ToolRequestValidator,
     budget: BudgetManager,
     bus: event_bus.EventBus,
-) -> dict | None:
+) -> tuple[dict | None, dict | None]:
     """Ask the Explorer Agent for a ToolRequest and validate it deterministically.
 
-    Returns the sanitised action dict on success, None on validation failure.
+    Returns the sanitised action and no failure on success; otherwise a safe,
+    structured failure that the loop persists with the current goal/node.
     A failed or invalid Explorer decision is not replaced with the Planner's action.
 
     Emits the B8 decision-narration events (agent.decided / tool.rejected) so every
@@ -594,19 +662,44 @@ def _resolve_tool_action(
         agent_request = response.tool_request
     except Exception as exc:  # noqa: BLE001 — agent failure never crashes (invariant 4)
         http_response = getattr(exc, "response", None)
-        status = getattr(http_response, "status_code", "unknown")
-        detail = getattr(http_response, "text", "")
-        if detail:
-            import re
-            detail = re.sub(
-                r"(?i)(authorization|(?:groq|openai)?[_ -]?api[_ -]?key|token|secret|password)(\s*[=:]\s*)[^,}\s]+",
-                r"\1\2[REDACTED]", detail,
-            )
+        status = getattr(exc, "status_code", None) or getattr(http_response, "status_code", None)
+        detail = getattr(exc, "detail", None) or getattr(http_response, "text", None)
+        if detail is None and callable(getattr(exc, "errors", None)):
+            detail = "; ".join(
+                f"{'.'.join(map(str, item.get('loc', ())))}: {item.get('msg', '')}"
+                for item in exc.errors(include_input=False)
+            ) or "Explorer response failed schema validation"
+        if detail is None:
+            detail = str(exc)
+        request_id = getattr(exc, "request_id", None)
+        if http_response is not None:
+            headers = getattr(http_response, "headers", {})
+            request_id = request_id or headers.get("x-request-id") or headers.get("request-id")
+        import re
+        detail = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", str(detail))
+        detail = re.sub(
+            r"(?i)\b(?:[A-Z0-9_]*API[_-]?KEY|[A-Z0-9_]*_KEY|TOKEN|SECRET|PASSWORD)\b\s*[:=]\s*\S+",
+            "[REDACTED]",
+            detail,
+        )[:500]
+        error_type = "EXPLORER_PROVIDER_ERROR"
+        if detail.startswith("unusable kernel packet:"):
+            error_type = "EXPLORER_CONTEXT_REJECTED"
+        elif "output failed validation" in detail.lower():
+            error_type = "EXPLORER_OUTPUT_INVALID"
         log.warning(
-            "Explorer agent failed for node %s (planned tool %s, HTTP %s): %s; response detail: %s",
-            node.id, (node.action or {}).get("tool", "unknown"), status, exc, detail or "unavailable",
+            "%s investigation=%s node=%s status=%s request_id=%s model=%s detail=%s",
+            error_type, context.get("investigation_id", "unknown"), node.id,
+            status if status is not None else "unknown", request_id or "unknown",
+            context.get("model", "unknown"), detail,
         )
-        agent_request = None
+        return None, {
+            "error_type": error_type,
+            "status": status,
+            "detail": detail,
+            "provider_request_id": request_id,
+            "model": context.get("model", "unknown"),
+        }
 
     # If agent returned a request, validate it
     if agent_request is not None:
@@ -623,22 +716,35 @@ def _resolve_tool_action(
                 "params": validation.sanitised_params,
             })
             # Use agent's suggested tool with sanitised parameters
-            return {"tool": agent_request.tool, "params": validation.sanitised_params}
+            return ({"tool": agent_request.tool, "params": validation.sanitised_params,
+                     "tool_request_id": uuid.uuid4().hex}, None)
         else:
+            request_id = uuid.uuid4().hex
             bus.emit(event_bus.ToolRejected, {
                 "node_id": node.id, "tool": agent_request.tool, "reason": validation.reason,
+                "tool_request_id": request_id,
                 # Same reason the accepted path carries them: a refusal that names
                 # only the tool forces the reader to guess which file or command
                 # was refused, and on a duplicate it hides the very path that
                 # explains the refusal.
-                "params": agent_request.parameters,
+                "params": {key: type(value).__name__
+                           for key, value in agent_request.parameters.items()},
             })
             log.warning(
                 "Explorer agent ToolRequest rejected for node %s: %s",
                 node.id, validation.reason,
             )
+            return None, {
+                "error_type": "TOOL_REQUEST_REJECTED",
+                "tool": agent_request.tool,
+                "detail": validation.reason[:500],
+                "tool_request_id": request_id,
+                "parameters": {key: type(value).__name__
+                               for key, value in agent_request.parameters.items()},
+            }
 
-    return None
+    return None, {"error_type": "EXPLORER_DECISION_FAILED",
+                  "detail": "Explorer returned no ToolRequest"}
 
 
 def _consult_verifier(
@@ -698,7 +804,16 @@ def _consult_verifier(
     try:
         assessment = verifier.assess(claims_payload, inv.id)
     except Exception as exc:  # noqa: BLE001 — verifier failure is non-fatal (invariant 4)
-        log.warning("Verifier agent failed: %s — continuing without assessment", exc)
+        response = getattr(exc, "response", None)
+        obs_store.append(
+            node_id="verifier",
+            source_tool="verifier",
+            obs_type="agent_failure",
+            payload={"ok": False, "error": "Verifier request failed",
+                     "status_code": getattr(response, "status_code", None)},
+        )
+        log.warning("Verifier agent failed (HTTP %s): %s — continuing without assessment",
+                    getattr(response, "status_code", "unknown"), exc)
         return
 
     log.info("Verifier assessment for %s: %s, weak_claims=%s",
@@ -1012,6 +1127,15 @@ def _page_state(obs_store: ObservationStore) -> dict:
         "page_fingerprint": fingerprint,
         "interacted_selectors": list(acted),
     }
+
+
+def _planned_action_matches(planned: dict | None, actual_tool: str, actual_params: dict) -> bool:
+    """Whether this observation can support the Planner's action-specific claim."""
+    if not isinstance(planned, dict) or planned.get("tool") != actual_tool:
+        return False
+    expected = planned.get("params") or planned.get("parameters") or {}
+    return isinstance(expected, dict) and all(actual_params.get(key) == value
+                                               for key, value in expected.items())
 
 
 def _planner_next_context(

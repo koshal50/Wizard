@@ -63,6 +63,7 @@ export interface WireGoalDefinition {
   required_claim_types: string[];
   belief_threshold: number;
   requires_execution_evidence: boolean;
+  required_evidence: string[];
 }
 
 export interface WireTechnologyEntry {
@@ -254,6 +255,7 @@ export function goalDefFor(name: string): WireGoalDefinition {
     required_claim_types: evidence.required_claim_types,
     belief_threshold: 0.6,
     requires_execution_evidence: evidence.requires_execution_evidence,
+    required_evidence: evidence.required_evidence,
   };
 }
 

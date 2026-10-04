@@ -12,6 +12,7 @@ from __future__ import annotations
 from app.contracts.explorer import ExplorerInput, ExplorerOutput
 from app.llm.base import LLMError, LLMProvider
 from app.prompts.explorer_prompts import EXPLORER_SYSTEM_PROMPT, build_explorer_user_prompt
+from app.explorer.tools import describe_tools
 from app.validation.explorer_validation import ExplorerValidationError, validate_explorer_output
 
 
@@ -38,7 +39,18 @@ class ExplorerAgent:
                 system_prompt=EXPLORER_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 response_model=ExplorerOutput,
-                metadata={"input": explorer_input.model_dump(mode="json")},
+                metadata={
+                    "input": explorer_input.model_dump(mode="json"),
+                    "strict_json_schema": True,
+                    "reasoning_effort": "low",
+                    # One compact tactical decision; the previous real response
+                    # exhausted 1024 completion tokens before emitting a JSON key.
+                    "max_completion_tokens": 2048,
+                    "tool_parameter_schema": {
+                        tool.name.value: tool.expected_parameters
+                        for tool in describe_tools(explorer_input.available_tools)
+                    },
+                },
             )
         except LLMError as exc:
             raise ExplorerAgentError(f"Explorer LLM call failed: {exc}") from exc

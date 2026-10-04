@@ -188,14 +188,16 @@ class TuiSession:
     # ------------------------------------------------------------------
     def start(self) -> None:
         """Spawn the background worker that streams runtime events."""
-        if self._thread is not None:
-            return
         with self._lock:
+            if self._thread is not None or self.finished or self.cancelled:
+                return
             self.running = True
             self.status = "running"
             self.started_at = time.monotonic()
-        self._thread = threading.Thread(target=self._run, name="wiz-worker", daemon=True)
-        self._thread.start()
+            self._thread = threading.Thread(target=self._run, name="wiz-worker", daemon=True)
+            # Publish and start under the same lock: concurrent start() callers
+            # must not each create a worker and submit duplicate investigations.
+            self._thread.start()
 
     def cancel(self) -> None:
         """Ask the Runtime to stop, and stop listening.

@@ -8,6 +8,7 @@ tools that were actually made available, and step counts within budget.
 from __future__ import annotations
 
 from app.contracts.explorer import ExplorerInput, ExplorerOutput
+from app.explorer.tools import TOOL_REGISTRY
 
 
 class ExplorerValidationError(Exception):
@@ -33,37 +34,18 @@ def validate_explorer_output(explorer_input: ExplorerInput, output: ExplorerOutp
             f"node_id mismatch: expected '{explorer_input.current_node.node_id}', got '{output.node_id}'"
         )
 
-    all_node_ids = {n.node_id for n in explorer_input.nodes} | set(explorer_input.route.node_order)
-    if output.next_node is not None and output.next_node not in all_node_ids:
-        errors.append(f"next_node '{output.next_node}' is not a known node id")
-
-    if output.selected_tool not in explorer_input.available_tools:
+    if output.tool not in explorer_input.available_tools:
         errors.append(
-            f"selected_tool '{output.selected_tool.value}' is not in available_tools "
+            f"tool '{output.tool.value}' is not in available_tools "
             f"{[t.value for t in explorer_input.available_tools]}"
         )
-
-    for step in output.execution_steps:
-        if step.tool not in explorer_input.available_tools:
-            errors.append(
-                f"execution_steps references unavailable tool '{step.tool.value}' "
-                f"(step {step.step_number})"
-            )
-
-    if len(output.execution_steps) > explorer_input.execution_budget.max_steps:
-        errors.append(
-            f"execution_steps has {len(output.execution_steps)} steps, exceeding "
-            f"execution_budget.max_steps={explorer_input.execution_budget.max_steps}"
-        )
-
-    step_numbers = [s.step_number for s in output.execution_steps]
-    if step_numbers != sorted(step_numbers):
-        errors.append("execution_steps must be ordered by ascending step_number")
-    if len(set(step_numbers)) != len(step_numbers):
-        errors.append("execution_steps contains duplicate step_number values")
-
-    if output.command is not None and output.selected_tool.value != "execute_command":
-        errors.append("command was supplied but selected_tool is not 'execute_command'")
+    descriptor = TOOL_REGISTRY.get(output.tool)
+    if descriptor:
+        unknown = set(output.parameters) - set(descriptor.expected_parameters)
+        if unknown:
+            errors.append(f"parameters contain unsupported names for {output.tool.value}: {sorted(unknown)}")
+    if output.tool.value == "execute_command" and not output.parameters.get("command"):
+        errors.append("execute_command requires parameters.command")
 
     if errors:
         raise ExplorerValidationError("; ".join(errors))

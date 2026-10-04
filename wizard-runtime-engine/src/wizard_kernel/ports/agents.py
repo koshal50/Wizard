@@ -51,11 +51,33 @@ class HttpExplorer:
 
     def request(self, context: dict) -> ExplorerResponse:
         import httpx
+        import re
         # Strip any trust/graph fields before sending (invariant 3)
         safe_context = {k: v for k, v in context.items()
                         if k not in ("trust", "knowledge_graph_raw")}
         r = httpx.post(self._url, json=safe_context, timeout=30)
-        r.raise_for_status()
+        if r.is_error:
+            try:
+                detail = r.json().get("detail")
+            except (ValueError, AttributeError):
+                detail = None
+            if isinstance(detail, list):
+                detail = "; ".join(
+                    str(item.get("msg", "")) for item in detail if isinstance(item, dict)
+                )
+            if not isinstance(detail, str):
+                detail = "agent request failed"
+            detail = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", detail)
+            detail = re.sub(
+                r"(?i)\b(?:[A-Z0-9_]*API[_-]?KEY|[A-Z0-9_]*_KEY|TOKEN|SECRET|PASSWORD)\b\s*[:=]\s*\S+",
+                "[REDACTED]",
+                detail,
+            )
+            error = RuntimeError(f"Explorer HTTP {r.status_code}: {detail[:500]}")
+            error.status_code = r.status_code
+            error.detail = detail[:500]
+            error.request_id = r.headers.get("x-request-id") or r.headers.get("request-id")
+            raise error
         return ExplorerResponse.model_validate(r.json())
 
 

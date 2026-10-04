@@ -35,7 +35,7 @@ def test_explorer_endpoint_success(client: TestClient, python_project_explorer_i
     assert resp.status_code == 200
     body = resp.json()
     assert body["node_id"] == python_project_explorer_input.current_node.node_id
-    assert "selected_tool" in body
+    assert "tool_request" in body and "tool" in body["tool_request"]
 
 
 def test_explorer_endpoint_validation_error(client: TestClient):

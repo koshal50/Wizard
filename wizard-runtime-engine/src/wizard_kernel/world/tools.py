@@ -3,6 +3,10 @@ No technology-specific knowledge here. All tools return {ok, data, error, meta}.
 import fnmatch
 import json
 import socket
+import re
+from urllib.error import HTTPError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.parse import urlsplit, urlunsplit
 from pathlib import Path
 from wizard_kernel.world.sandbox.base import SandboxRuntime
 
@@ -13,6 +17,7 @@ _REGISTERED_TOOLS = frozenset({
     # Agentic browser — a browser action is just another tool (opt-in).
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_back", "browser_extract",
+    "http_request",
 })
 
 
@@ -114,6 +119,41 @@ class ToolExecutor:
                 "data": {"path": path, "exists": exists},
                 "error": None, "meta": {}}
 
+    def _tool_http_request(self, url: str, method: str = "GET", body: str | None = None) -> dict:
+        """Make the validated, allow-listed HTTP request and retain a bounded response."""
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        safe_netloc = host + (f":{parsed.port}" if parsed.port else "")
+        safe_url = urlunsplit((parsed.scheme, safe_netloc, parsed.path, "", ""))
+        request = Request(url, data=body.encode("utf-8") if body is not None else None,
+                          method=method.upper())
+        class _NoRedirect(HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):
+                return None
+
+        try:
+            response = build_opener(_NoRedirect).open(request, timeout=10)
+            status = response.status
+            raw = response.read(8192)
+        except HTTPError as exc:
+            status = exc.code
+            raw = exc.read(8192)
+        except OSError as exc:
+            return {
+                "ok": False,
+                "data": {"url": safe_url, "method": method.upper(), "status_code": None},
+                "error": str(exc)[:500],
+                "meta": {"url": safe_url, "method": method.upper()},
+            }
+        text = raw.decode("utf-8", errors="replace")
+        text = re.sub(r"(?i)(authorization|api[_ -]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
+                      r"\1\2[REDACTED]", text)[:2000]
+        return {"ok": True, "data": {"url": safe_url, "method": method.upper(),
+                "status_code": status, "body_preview": text}, "error": None,
+                "meta": {"url": safe_url, "method": method.upper(), "status_code": status}}
+
     # ── Background process tools ───────────────────────────────────────────────
 
     def _tool_start_process(self, command: str, cwd: str = ".") -> dict:
@@ -167,12 +207,25 @@ class ToolExecutor:
         if (err := self._browser_ready()) is not None:
             return err
         data = self._browser.click(selector)
+        # A click can replace the page (for example, a login page's sign-up
+        # link). Return the resulting live page schema with the action so the
+        # next Explorer decision sees the fields it can actually address.
+        if data.get("clicked"):
+            try:
+                data["page_observation"] = self._browser.snapshot()
+            except Exception as exc:  # the click already happened; preserve it
+                data["page_observation_error"] = type(exc).__name__
         return {"ok": True, "data": data, "error": None, "meta": {"selector": selector}}
 
     def _tool_browser_type(self, selector: str, text: str) -> dict:
         if (err := self._browser_ready()) is not None:
             return err
         data = self._browser.fill(selector, text)
+        if data.get("typed"):
+            try:
+                data["page_observation"] = self._browser.snapshot()
+            except Exception as exc:  # keep the actual fill result intact
+                data["page_observation_error"] = type(exc).__name__
         return {"ok": True, "data": data, "error": None, "meta": {"selector": selector}}
 
     def _tool_browser_back(self) -> dict:

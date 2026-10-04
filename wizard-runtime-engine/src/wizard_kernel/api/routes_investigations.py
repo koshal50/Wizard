@@ -10,7 +10,8 @@ from wizard_kernel.ports.planner import get_planner
 from wizard_kernel.control import loop as kernel_loop
 from wizard_kernel.control.investigation_graph import get_graph
 from wizard_kernel.world.sandbox import docker_status
-from wizard_kernel.ports.goal_policy import names_operation_for
+from wizard_kernel.ports.goal_policy import goal_evidence_for, names_operation_for
+from urllib.parse import urlparse
 
 # The tools that put a page on screen. A node that ran one of these and reached
 # `complete` is proof the browser opened something, which is what separates "the
@@ -66,7 +67,13 @@ def create_investigation(
     # A request that explicitly asks to operate a UI opts into its existing
     # browser plane. Keep navigation fail-closed: absent a caller allowlist,
     # only local development hosts are permitted.
-    if names_operation_for(req.intent, req.targets, req.question):
+    requested_evidence = goal_evidence_for(" ".join([req.question, *req.targets])).required_evidence
+    declared_hosts = [urlparse(target).hostname for target in req.targets
+                      if urlparse(target).scheme in {"http", "https"}]
+    if not req.options.allowed_domains and declared_hosts:
+        req.options.allowed_domains = list(dict.fromkeys(host for host in declared_hosts if host))
+    if (names_operation_for(req.intent, req.targets, req.question)
+            or "browser_navigation" in requested_evidence):
         req.options.browser_enabled = True
         if not req.options.allowed_domains:
             req.options.allowed_domains = ["localhost", "127.0.0.1"]
@@ -154,9 +161,7 @@ def get_frontier(
         and (n.action or {}).get("tool") in _NAVIGATION_TOOLS
     ]
 
-    finished = inv.state in (
-        LifecycleState.completed, LifecycleState.failed, LifecycleState.cancelled,
-    )
+    finished = is_terminal(inv.state)
     never_ran = list(frontier.get("next") or []) if finished else []
     if finished:
         frontier = {**frontier, "now": None, "next": []}

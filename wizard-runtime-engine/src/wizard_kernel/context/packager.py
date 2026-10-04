@@ -70,6 +70,62 @@ class Packager:
         so MockExplorer / HttpExplorer behaviour does not change. Agents never
         receive trust scores, raw KG relationships, or observation internals.
         """
+        observations = obs_store.all() if obs_store else []
+        active_goals = []
+        for goal in goals.open_goals():
+            evidence = goals.evidence_status(goal.id, observations)
+            active_goals.append({
+                "id": goal.id,
+                "name": goal.name,
+                "state": goal.state,
+                "required_evidence": evidence["required"],
+                "completed_evidence": evidence["completed"],
+                "missing_evidence": evidence["missing"],
+            })
+        process_observations = [o for o in observations if o.source_tool in {"start_process", "read_process"}]
+        port_observations = [
+            o for o in observations
+            if o.source_tool == "check_port" and (o.payload or {}).get("data", {}).get("active")
+        ]
+        browser_page = None
+        for observation in reversed(observations):
+            payload = observation.payload or {}
+            if not observation.source_tool.startswith("browser_") or not payload.get("ok"):
+                continue
+            data = payload.get("data") or {}
+            # Interactions that navigate to a new page include its freshly
+            # captured snapshot. Prefer that over the older pre-click snapshot.
+            page = data.get("page_observation") or data
+            if isinstance(page, dict) and (page.get("snapshot") or page.get("controls")):
+                browser_page = page
+                break
+        resource_state = {
+            "process": [
+                {
+                    "tool": o.source_tool,
+                    "handle_id": ((o.payload or {}).get("meta") or {}).get("handle_id")
+                                 or (((o.payload or {}).get("data") or {}).get("handle_id")),
+                    "running": (o.payload or {}).get("is_running")
+                               if "is_running" in (o.payload or {})
+                               else (((o.payload or {}).get("data") or {}).get("is_running")),
+                    "output_available": bool((o.payload or {}).get("stdout") or
+                                              (o.payload or {}).get("stderr") or
+                                              ((o.payload or {}).get("data") or {}).get("stdout_so_far") or
+                                              ((o.payload or {}).get("data") or {}).get("stderr_so_far")),
+                }
+                for o in process_observations[-2:]
+            ],
+            "reachable_endpoints": [
+                {"host": (o.payload.get("data") or {}).get("host"),
+                 "port": (o.payload.get("data") or {}).get("port")}
+                for o in port_observations[-4:]
+            ],
+            "browser": ({
+                key: (value[:6000] if key == "snapshot" and isinstance(value, str) else value)
+                for key, value in browser_page.items()
+                if key in {"url", "title", "snapshot", "controls", "node_count", "status"}
+            } if browser_page else {"state": "no browser page schema observed"}),
+        }
         return {
             "investigation_id": inv.id,
             "intent": inv.intent,
@@ -81,25 +137,36 @@ class Packager:
                 "action": node.action,
                 "goal_id": node.goal_id,
             },
-            "active_goals": [
-                {"id": g.id, "name": g.name, "state": g.state}
-                for g in goals.open_goals()
-            ],
+            "active_goals": active_goals,
+            "resource_state": resource_state,
+            "available_tools": sorted(
+                tool for tool in _REGISTERED_TOOLS
+                if (inv.options.get("browser_enabled") or not tool.startswith("browser_"))
+                and (tool != "http_request" or inv.options.get("allowed_domains"))
+            ),
             "kg_summary": kg.summary(),
             "remaining_budget": budget.remaining,
             "previous_actions": [
                 {
                     "node_id": obs.node_id,
-                    "tool": obs.source_tool,
-                    "parameters": (obs.payload or {}).get("meta") or {},
+                    "tool": ((obs.payload or {}).get("tool")
+                             if getattr(obs, "obs_type", "") == "agent_failure" else obs.source_tool),
+                    "parameters": ((obs.payload or {}).get("parameters")
+                                   if getattr(obs, "obs_type", "") == "agent_failure"
+                                   else (obs.payload or {}).get("meta")) or {},
                     "outcome": json.dumps(
-                        {key: (obs.payload or {})[key] for key in ("ok", "data", "error", "stdout", "stderr", "exit_code") if key in (obs.payload or {})},
+                        {key: (obs.payload or {})[key] for key in (
+                            "ok", "data", "error", "detail", "error_type",
+                            "stdout", "stderr", "exit_code",
+                        ) if key in (obs.payload or {})},
                         default=str,
                         ensure_ascii=False,
                     )[:4000],
                     "succeeded": (obs.payload or {}).get("ok"),
                 }
-                for obs in (obs_store.all() if obs_store else [])[-_RECENT_OBS_N:]
+                for obs in observations[-_RECENT_OBS_N:]
+                if ((obs.payload or {}).get("tool")
+                    if getattr(obs, "obs_type", "") == "agent_failure" else obs.source_tool) in _REGISTERED_TOOLS
             ],
         }
 

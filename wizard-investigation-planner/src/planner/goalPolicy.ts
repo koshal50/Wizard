@@ -50,6 +50,7 @@ export interface PlannedGoal {
 export interface GoalEvidence {
   required_claim_types: string[];
   requires_execution_evidence: boolean;
+  required_evidence: string[];
 }
 
 /**
@@ -63,27 +64,35 @@ export interface GoalEvidence {
  * cannot exist is unsatisfiable by construction.
  */
 /** A goal nothing routes: it exists to be reported on, not to be proven. */
-const NO_EVIDENCE: GoalEvidence = { required_claim_types: [], requires_execution_evidence: false };
+const NO_EVIDENCE: GoalEvidence = { required_claim_types: [], requires_execution_evidence: false, required_evidence: [] };
 
 export function goalEvidenceFor(name: string): GoalEvidence {
   const n = name.toLowerCase();
-  if (/^inspect\b/.test(n)) return { required_claim_types: ["FILE_READ"], requires_execution_evidence: false };
-  if (/^operate\b/.test(n)) return { required_claim_types: ["WEB", "INTERACTION"], requires_execution_evidence: true };
+  if (/^inspect\b/.test(n)) return { required_claim_types: ["FILE_READ"], requires_execution_evidence: false, required_evidence: ["repository_read"] };
+  if (/^operate\b/.test(n)) return { required_claim_types: ["WEB", "INTERACTION"], requires_execution_evidence: true, required_evidence: ["browser_navigation", "browser_observation", "browser_interaction"] };
   if (/container|docker|deploy/.test(n)) {
-    return { required_claim_types: ["DEPLOYMENT"], requires_execution_evidence: /\b(execute|run|start|launch|up|bring up)\b/.test(n) };
+    const execution = /\b(execute|run|start|launch|up|bring up)\b/.test(n);
+    return { required_claim_types: ["DEPLOYMENT"], requires_execution_evidence: execution, required_evidence: execution ? ["docker_execution"] : ["repository_read"] };
   }
+  if (/endpoint|\bapi\b|http|auth(?:entication)?\s+(?:endpoint|route)|protected routes?/.test(n)) return { required_claim_types: ["WEB"], requires_execution_evidence: true, required_evidence: ["http_response"] };
   if (/web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b/.test(n)) {
     const required = ["WEB"];
-    if (/after auth|authenticate|log ?in|sign ?in|submit|click|fill/.test(n)) required.push("INTERACTION");
-    if (/\b(start|launch|run|execute|compile|build|listen|serve)\b/.test(n)) required.push("RUNTIME");
-    return { required_claim_types: required, requires_execution_evidence: true };
+    const evidence = ["browser_navigation", "browser_observation"];
+    if (/after auth|authenticate|log ?in|sign ?in|submit|click|fill/.test(n)) { required.push("INTERACTION"); evidence.push("browser_interaction"); }
+    if (/\b(start|launch|run|execute|compile|build|listen|serve)\b/.test(n)) {
+      required.push("RUNTIME"); evidence.unshift("process_execution");
+      if (/\b(compile|build|npm run|command)\b/.test(n)) evidence.unshift("command_execution");
+    }
+    return { required_claim_types: required, requires_execution_evidence: true, required_evidence: evidence };
   }
-  if (/runtime|server|listen|port|compile|build|\bdev\b|\bstart\b|\blaunch\b|\bexecute\b|\brespond/.test(n)) {
-    return { required_claim_types: ["RUNTIME"], requires_execution_evidence: true };
+  if (/runtime|server|listen|port|compile|build|\bdev\b|\bstart\b|\blaunch\b|\bexecute\b|\brespond|initiali[sz]/.test(n)) {
+    const evidence = ["command_execution", "process_execution"];
+    if (/listen|port|respond/.test(n)) evidence.push("http_response");
+    return { required_claim_types: ["RUNTIME"], requires_execution_evidence: true, required_evidence: evidence };
   }
-  if (/depend|package/.test(n)) return { required_claim_types: ["PACKAGE"], requires_execution_evidence: false };
-  if (/test|spec|coverage/.test(n)) return { required_claim_types: ["TESTING"], requires_execution_evidence: true };
-  if (/investigate|repository|filesystem/.test(n)) return { required_claim_types: ["FILESYSTEM"], requires_execution_evidence: false };
+  if (/depend|package/.test(n)) return { required_claim_types: ["PACKAGE"], requires_execution_evidence: false, required_evidence: ["repository_read"] };
+  if (/test|spec|coverage|eslint|\blint(?:er|ing)?\b|type.?check|formatting/.test(n)) return { required_claim_types: ["TESTING"], requires_execution_evidence: true, required_evidence: ["command_execution"] };
+  if (/investigate|repository|filesystem/.test(n)) return { required_claim_types: ["FILESYSTEM"], requires_execution_evidence: false, required_evidence: ["repository_read"] };
   return NO_EVIDENCE;
 }
 

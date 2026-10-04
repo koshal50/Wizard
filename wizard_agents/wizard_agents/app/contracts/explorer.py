@@ -9,15 +9,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.contracts.common import (
     ExecutionBudget,
-    ExecutionStep,
     PreviousAction,
     RepositoryMetadata,
     ToolName,
-    ToolRequest,
+    ToolRequest as KernelToolRequest,
 )
 
 
@@ -97,39 +96,33 @@ class ExplorerInput(BaseModel):
         return v
 
 
-class ExplorerOutput(BaseModel):
-    """Explorer's validated Tool Request / Execution Plan for a node.
+class ExplorerToolRequest(BaseModel):
+    """One tool plus that tool's own arguments (never a cross-tool argument union)."""
 
-    This is the ONLY thing Explorer produces. It contains no observations,
-    no claims, and no execution results -- those belong to Runtime.
-    """
+    model_config = ConfigDict(extra="forbid")
+    tool: ToolName
+    parameters: Dict[str, str | int | float | bool | None]
+
+
+class ExplorerOutput(BaseModel):
+    """One concise tactical decision; Runtime remains the execution authority."""
+
+    model_config = ConfigDict(extra="forbid")
 
     investigation_id: str
     node_id: str
-    purpose: str = Field(..., min_length=1, description="Why this investigation step matters")
-    reasoning: str = Field(..., min_length=1, description="Explorer's reasoning trace")
-    selected_tool: ToolName
-    parameters: Dict[str, Any] = Field(default_factory=dict)
-    command: Optional[str] = Field(default=None)
-    execution_steps: List[ExecutionStep] = Field(..., min_length=1)
-    expected_observation: str = Field(..., min_length=1)
-    success_condition: str = Field(..., min_length=1)
-    failure_condition: str = Field(..., min_length=1)
-    next_node: Optional[str] = Field(
-        default=None, description="node_id Runtime should move to next, or None if terminal"
-    )
-    fallback: Optional[str] = Field(
-        default=None, description="What to do / escalate to if this plan fails"
-    )
+    tool_request: ExplorerToolRequest
 
-    def to_tool_request(self) -> ToolRequest:
+    @property
+    def tool(self) -> ToolName:
+        return self.tool_request.tool
+
+    @property
+    def parameters(self) -> Dict[str, str | int | float | bool | None]:
+        return self.tool_request.parameters
+
+    def to_tool_request(self) -> KernelToolRequest:
         """Convenience conversion to the minimal ToolRequest Runtime consumes."""
-        return ToolRequest(tool=self.selected_tool, command=self.command, parameters=self.parameters)
-
-    @field_validator("command")
-    @classmethod
-    def _command_requires_execute_tool(cls, v: Optional[str], info) -> Optional[str]:
-        tool = info.data.get("selected_tool")
-        if v and tool != ToolName.EXECUTE_COMMAND:
-            raise ValueError("command is only valid when selected_tool == execute_command")
-        return v
+        params = dict(self.parameters)
+        command = params.pop("command", None) if self.tool == ToolName.EXECUTE_COMMAND else None
+        return KernelToolRequest(tool=self.tool, command=command, parameters=params)

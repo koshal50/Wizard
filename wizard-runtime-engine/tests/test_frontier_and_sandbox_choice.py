@@ -151,7 +151,8 @@ def test_a_live_run_still_shows_what_is_next(client):
 
 
 @pytest.mark.parametrize("state", [
-    LifecycleState.completed, LifecycleState.failed, LifecycleState.cancelled,
+    LifecycleState.completed, LifecycleState.incomplete, LifecycleState.failed,
+    LifecycleState.cancelled,
 ])
 def test_every_terminal_state_empties_next(client, state):
     inv = _created(client)

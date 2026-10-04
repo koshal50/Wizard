@@ -12,7 +12,9 @@ class ObservationStore:
         self._cache: dict[str, Observation] = {}
 
     def append(self, *, node_id: str, source_tool: str, obs_type: str,
-                payload: dict) -> Observation:
+                payload: dict, goal_id: str | None = None,
+                tool_request_id: str | None = None, execution_id: str | None = None,
+                evidence_categories: list[str] | None = None) -> Observation:
         """Create and persist an immutable Observation.
         Returns the frozen object — caller cannot mutate it."""
         obs = Observation(
@@ -23,6 +25,11 @@ class ObservationStore:
             obs_type=obs_type,
             payload=payload,
             created_at=datetime.now(timezone.utc),
+            goal_id=goal_id,
+            tool_request_id=tool_request_id,
+            execution_id=execution_id,
+            evidence_categories=evidence_categories or [],
+            success=bool(payload.get("ok")),
         )
         self._seq += 1
         fs_store.write_observation(self._inv_id, self._seq, obs.model_dump())

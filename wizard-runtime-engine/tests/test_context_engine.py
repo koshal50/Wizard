@@ -81,13 +81,88 @@ def test_packet_is_the_trust_stripped_contract():
     assert set(packet) == {
         "investigation_id", "intent", "targets", "current_node",
         "active_goals", "kg_summary", "remaining_budget", "browser_enabled",
-        "previous_actions",
+        "previous_actions", "available_tools", "resource_state",
     }
     assert packet["current_node"] == {"id": "n1", "type": "read",
                                       "action": node.action, "goal_id": "g1"}
     assert packet["remaining_budget"] == 40
     # No trust scores or raw relationships leak into the packet.
     assert "trust" not in packet and "relationships" not in packet
+
+
+def test_non_tool_failure_observations_are_not_serialized_as_previous_tools():
+    inv, node, goals, kg, budget = _state()
+    observations = _ObsStub([
+        _obs("command_result", "start_process", {"ok": True}),
+        _obs("agent_failure", "explorer", {"ok": False, "error": "request failed"}),
+    ])
+
+    packet = Packager().build_explorer_packet(
+        inv, node, goals, kg, budget, observations,
+    )
+
+    assert [action["tool"] for action in packet["previous_actions"]] == ["start_process"]
+
+
+def test_rejected_tool_request_and_reason_reach_next_explorer_decision():
+    inv, node, goals, kg, budget = _state()
+    rejected = _obs("agent_failure", "explorer", {
+        "ok": False,
+        "error_type": "TOOL_REQUEST_REJECTED",
+        "tool": "browser_navigate",
+        "parameters": {"url": "str"},
+        "detail": "browser tools are disabled",
+    })
+
+    packet = Packager().build_explorer_packet(
+        inv, node, goals, kg, budget, _ObsStub([rejected]),
+    )
+
+    assert packet["previous_actions"] == [{
+        "node_id": "n1",
+        "tool": "browser_navigate",
+        "parameters": {"url": "str"},
+        "outcome": '{"ok": false, "detail": "browser tools are disabled", "error_type": "TOOL_REQUEST_REJECTED"}',
+        "succeeded": False,
+    }]
+
+
+def test_process_session_state_is_carried_into_next_explorer_packet():
+    inv, node, goals, kg, budget = _state()
+    process = _obs("command_result", "start_process", {
+        "ok": True,
+        "data": {"handle_id": "proc-safe", "pid": 123, "is_running": True,
+                 "stdout_so_far": "Local endpoint reported by process"},
+        "meta": {"handle_id": "proc-safe"},
+    })
+
+    packet = Packager().build_explorer_packet(
+        inv, node, goals, kg, budget, _ObsStub([process]),
+    )
+
+    previous = packet["previous_actions"][0]
+    assert previous["tool"] == "start_process"
+    assert previous["parameters"]["handle_id"] == "proc-safe"
+    assert '"is_running": true' in previous["outcome"]
+
+
+def test_latest_browser_interaction_page_schema_reaches_explorer_context():
+    inv, node, goals, kg, budget = _state()
+    click = _obs("browser_action", "browser_click", {
+        "ok": True,
+        "data": {"clicked": True, "page_observation": {
+            "url": "http://localhost/signup", "title": "Sign up",
+            "snapshot": 'textbox "Email"',
+            "controls": [{"role": "textbox", "name": "Email",
+                          "selector": 'role=textbox[name="Email"]'}],
+        }},
+    })
+    packet = Packager().build_explorer_packet(
+        inv, node, goals, kg, budget, _ObsStub([click]),
+    )
+    assert packet["resource_state"]["browser"]["url"] == "http://localhost/signup"
+    assert packet["resource_state"]["browser"]["controls"][0]["selector"] == 'role=textbox[name="Email"]'
+    assert 'textbox "Email"' in packet["resource_state"]["browser"]["snapshot"]
 
 
 def test_explorer_sections_ids_and_priorities():

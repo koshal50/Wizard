@@ -298,7 +298,10 @@ class BrowserRuntime:
         name = await self._name_of(selector)
         before = await self._state()
         await self._page.fill(selector, text, timeout=self._action_timeout)
-        value = await self._field_value(selector)
+        field_type = (await self._page.locator(selector).get_attribute("type") or "").lower()
+        # Password contents must never enter persisted browser observations or
+        # the next agent context.
+        value = None if field_type == "password" else await self._field_value(selector)
         after = await self._state()
         return {"selector": selector, "selector_name": name, "typed": True,
                 "url": self._page.url,
@@ -505,7 +508,9 @@ class BrowserRuntime:
                       // not overwrite: `required` and `value` together are what let
                       // the script skip a pre-filled field rather than clobber it.
                       required: Boolean(el.required),
-                      value: tag === 'input' || tag === 'textarea' || tag === 'select'
+                      value: tag === 'input' && (el.getAttribute('type') || '').toLowerCase() === 'password'
+                        ? ''
+                        : tag === 'input' || tag === 'textarea' || tag === 'select'
                         ? clean(el.value) : '',
                     });
                     if (out.length >= 60) break;
@@ -655,4 +660,3 @@ def _effect(before: dict, after: dict) -> str:
         if before.get(key) != after.get(key):
             return "changed"
     return "unchanged"
-

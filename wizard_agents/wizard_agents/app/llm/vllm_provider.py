@@ -68,13 +68,20 @@ class VLLMProvider(LLMProvider):
         temperature: float = 0.0,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> T:
+        strict_schema = bool((metadata or {}).get("strict_json_schema"))
+        if strict_schema:
+            max_tokens = int((metadata or {}).get("max_completion_tokens", max_tokens))
         schema = response_model.model_json_schema()
-        full_system = (
-            f"{system_prompt}\n\n"
-            "You MUST respond with ONLY a single JSON object matching this JSON Schema. "
-            "No prose, no markdown fences, no explanation before or after the JSON.\n\n"
-            f"JSON Schema:\n{json.dumps(schema)}"
-        )
+        if strict_schema:
+            schema = _strict_explorer_schema(schema, metadata or {})
+            full_system = f"{system_prompt}\n\nReturn only the single object constrained by the response schema."
+        else:
+            full_system = (
+                f"{system_prompt}\n\n"
+                "You MUST respond with ONLY a single JSON object matching this JSON Schema. "
+                "No prose, no markdown fences, no explanation before or after the JSON.\n\n"
+                f"JSON Schema:\n{json.dumps(schema)}"
+            )
         payload = {
             "model": self._model,
             "max_completion_tokens": max_tokens,
@@ -83,8 +90,26 @@ class VLLMProvider(LLMProvider):
                 {"role": "system", "content": full_system},
                 {"role": "user", "content": user_prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "response_format": (
+                {"type": "json_schema", "json_schema": {
+                    "name": "explorer_tool_request", "strict": True, "schema": schema,
+                }} if strict_schema else {"type": "json_object"}
+            ),
         }
+
+        reasoning_effort = (metadata or {}).get("reasoning_effort")
+        if strict_schema and self._cerebras_gate and self._model == "gpt-oss-120b" and reasoning_effort == "low":
+            payload["reasoning_effort"] = "low"
+
+        if strict_schema:
+            _LOG.info(
+                "structured_output provider=%s model=%s response_format=json_schema "
+                "schema=explorer_tool_request strict=true reasoning_effort=%s "
+                "max_completion_tokens=%s stream=false prompt_chars=%s schema_chars=%s",
+                "cerebras" if self._cerebras_gate else "openai-compatible",
+                self._model, payload.get("reasoning_effort", "default"), max_tokens,
+                len(system_prompt) + len(user_prompt), len(json.dumps(schema)),
+            )
 
         api_key = os.environ.get("OPENAI_API_KEY")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
@@ -132,16 +157,38 @@ class VLLMProvider(LLMProvider):
                 raise LLMError(f"vLLM API call failed: {exc}") from exc
 
         try:
-            raw_text = data["choices"][0]["message"]["content"].strip()
+            choice = data["choices"][0]
+            raw_text = choice["message"]["content"].strip()
+            finish_reason = choice.get("finish_reason")
         except (KeyError, IndexError, AttributeError, TypeError) as exc:
             raise LLMError(f"Unexpected vLLM response shape: {data!r}") from exc
         if not raw_text:
             raise LLMError("vLLM API returned empty content")
 
-        parsed = self._extract_json(raw_text)
+        if strict_schema:
+            try:
+                parsed = json.loads(raw_text)
+            except json.JSONDecodeError as exc:
+                request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+                usage = data.get("usage") or {}
+                raise LLMError(
+                    "Explorer structured response invalid JSON; "
+                    f"finish_reason={finish_reason or 'unknown'}; "
+                    f"completion_tokens={usage.get('completion_tokens', 'unknown')}; "
+                    f"content_chars={len(raw_text)}; request_id={request_id or 'unknown'}"
+                ) from exc
+        else:
+            parsed = self._extract_json(raw_text)
         try:
             return response_model.model_validate(parsed)
         except ValidationError as exc:
+            if strict_schema:
+                request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+                raise LLMError(
+                    f"Explorer structured response failed schema validation; "
+                    f"finish_reason={finish_reason or 'unknown'}; request_id={request_id or 'unknown'}; "
+                    f"detail={str(exc)[:400]}"
+                ) from exc
             raise LLMError(f"LLM response failed schema validation: {exc}") from exc
 
     @staticmethod
@@ -152,3 +199,48 @@ class VLLMProvider(LLMProvider):
             return json.loads(candidate)
         except json.JSONDecodeError as exc:
             raise LLMError(f"LLM response was not valid JSON: {exc}\nRaw response: {raw_text[:500]}") from exc
+
+
+def _strict_explorer_schema(schema: dict, metadata: dict) -> dict:
+    """Constrain each nested ToolRequest variant under strict decoding."""
+    def close_objects(value):
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                value["additionalProperties"] = False
+            for child in value.values():
+                close_objects(child)
+        elif isinstance(value, list):
+            for child in value:
+                close_objects(child)
+
+    close_objects(schema)
+    available = (metadata.get("input") or {}).get("available_tools") or []
+    enum_schema = schema.get("$defs", {}).get("ToolName")
+    if enum_schema is not None and available:
+        enum_schema["enum"] = [item for item in enum_schema.get("enum", []) if item in available]
+
+    parameter_contracts = metadata.get("tool_parameter_schema") or {}
+    type_map = {"string": "string", "integer": "integer", "number": "number", "boolean": "boolean"}
+    properties = schema.get("properties", {})
+    if not {"investigation_id", "node_id", "tool_request"} <= set(properties):
+        raise LLMError("Explorer structured schema has no parameters object")
+    branches = []
+    for tool in available:
+        param_properties = {
+            name: {"type": type_map[kind]}
+            for name, kind in parameter_contracts.get(tool, {}).items()
+            if kind in type_map
+        }
+        tool_properties = {
+            "tool": {"type": "string", "enum": [tool]},
+            "parameters": {
+                "type": "object", "properties": param_properties,
+                "required": list(param_properties), "additionalProperties": False,
+            },
+        }
+        branches.append({
+            "type": "object", "properties": tool_properties,
+            "required": list(tool_properties), "additionalProperties": False,
+        })
+    schema["properties"]["tool_request"] = {"anyOf": branches}
+    return schema

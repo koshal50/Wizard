@@ -40,6 +40,7 @@ class ToolName(str, Enum):
     LIST_PROCESSES = "list_processes"
 
     CHECK_PORT = "check_port"
+    HTTP_REQUEST = "http_request"
 
     # Browser actions are ordinary tools to the Runtime (world/browser).
     BROWSER_NAVIGATE = "browser_navigate"

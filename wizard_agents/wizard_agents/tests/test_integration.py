@@ -34,7 +34,7 @@ def test_full_pipeline_planner_to_verification():
     # 2. Explorer reasons and produces a validated Tool Request.
     explorer_output = explorer.investigate(explorer_input)
     tool_request = explorer_output.to_tool_request()
-    assert tool_request.tool == explorer_output.selected_tool
+    assert tool_request.tool == explorer_output.tool
 
     # 3. Runtime (mocked) executes the Tool Request and returns an Observation.
     observation = runtime.execute(tool_request)
@@ -90,7 +90,7 @@ def test_missing_dependency_project_explorer_avoids_repeating_failed_action():
     output = explorer.investigate(explorer_input)
     # The plan must still be valid even though a previous action failed.
     assert output.node_id == "inspect_dependencies"
-    assert len(output.execution_steps) >= 1
+    assert output.to_tool_request().tool == output.tool
 
 
 def test_contradictory_documentation_project_flags_contradiction():

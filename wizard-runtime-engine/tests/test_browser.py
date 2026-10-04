@@ -18,6 +18,7 @@ from wizard_kernel.belief.trust import source_tier_for_tool
 from wizard_kernel.contracts.agent import ToolRequest
 from wizard_kernel.contracts.observation import Observation
 from wizard_kernel.contracts.request import InvestigationOptions
+from wizard_kernel.control.goals import evidence_categories_for_tool
 from wizard_kernel.control.tool_validator import ToolRequestValidator
 from wizard_kernel.session import events as event_bus
 from wizard_kernel.world.tools import ToolExecutor, _REGISTERED_TOOLS
@@ -72,6 +73,22 @@ def test_executor_browser_passthrough_envelope():
     assert typed["ok"] and typed["data"]["typed"] is True
 
 
+def test_browser_click_and_type_attach_fresh_page_schema():
+    class FormBrowser(_FakeBrowser):
+        def snapshot(self):
+            return {"url": "https://x.test/signup", "title": "Sign up",
+                    "snapshot": 'textbox "Email"',
+                    "controls": [{"role": "textbox", "name": "Email",
+                                  "selector": 'role=textbox[name="Email"]'}]}
+
+    tools = ToolExecutor(sandbox=None, repo_path=".", browser=FormBrowser())
+    clicked = tools.execute({"tool": "browser_click", "params": {"selector": 'role=link[name="Create one"]'}})
+    typed = tools.execute({"tool": "browser_type", "params": {
+        "selector": 'role=textbox[name="Email"]', "text": "person@example.invalid"}})
+    assert clicked["data"]["page_observation"]["url"].endswith("/signup")
+    assert typed["data"]["page_observation"]["controls"][0]["selector"] == 'role=textbox[name="Email"]'
+
+
 def test_executor_browser_exception_becomes_error(monkeypatch):
     class Boom(_FakeBrowser):
         def navigate(self, url): raise RuntimeError("nav timeout")
@@ -83,19 +100,19 @@ def test_executor_browser_exception_becomes_error(monkeypatch):
 # ── URL egress guard (fail-closed allowlist) ────────────────────────────────
 
 def test_url_guard_fail_closed_empty_allowlist():
-    v = ToolRequestValidator(".", allowed_domains=[])
+    v = ToolRequestValidator(".", allowed_domains=[], browser_enabled=True)
     r = v.validate(ToolRequest(tool="browser_navigate", parameters={"url": "https://example.com"}), 10)
     assert not r.valid and "fail-closed" in r.reason
 
 
 def test_url_guard_allows_listed_domain_and_subdomain():
-    v = ToolRequestValidator(".", allowed_domains=["example.com"])
+    v = ToolRequestValidator(".", allowed_domains=["example.com"], browser_enabled=True)
     assert v.validate(ToolRequest(tool="browser_navigate", parameters={"url": "https://example.com/a"}), 10).valid
     assert v.validate(ToolRequest(tool="browser_navigate", parameters={"url": "https://docs.example.com"}), 10).valid
 
 
 def test_url_guard_blocks_unlisted_and_lookalike_and_scheme():
-    v = ToolRequestValidator(".", allowed_domains=["example.com"])
+    v = ToolRequestValidator(".", allowed_domains=["example.com"], browser_enabled=True)
     assert not v.validate(ToolRequest(tool="browser_navigate", parameters={"url": "https://evil.com"}), 10).valid
     # lookalike must not pass the subdomain check
     assert not v.validate(ToolRequest(tool="browser_navigate", parameters={"url": "https://evil-example.com"}), 10).valid
@@ -106,7 +123,8 @@ def test_url_guard_blocks_unlisted_and_lookalike_and_scheme():
 # ── Dedup policy: browser tools excluded, file tools still deduped ───────────
 
 def test_browser_tools_excluded_from_dedup():
-    v = ToolRequestValidator(".", allowed_domains=["x.test"])
+    v = ToolRequestValidator(".", allowed_domains=["x.test"], browser_enabled=True)
+    v.record_execution("browser_navigate", {"url": "https://x.test/"}, {"ok": True})
     req = ToolRequest(tool="browser_snapshot", parameters={})
     assert v.validate(req, 10).valid
     assert v.validate(req, 10).valid  # identical params, still allowed (page changed)
@@ -120,7 +138,8 @@ def test_non_browser_tools_still_deduped():
 
 
 def test_browser_structural_validation():
-    v = ToolRequestValidator(".", allowed_domains=["x.test"])
+    v = ToolRequestValidator(".", allowed_domains=["x.test"], browser_enabled=True)
+    v.record_execution("browser_navigate", {"url": "https://x.test/"}, {"ok": True})
     # browser_type requires text
     r = v.validate(ToolRequest(tool="browser_type", parameters={"selector": "#q"}), 10)
     assert not r.valid and "text" in r.reason
@@ -448,12 +467,15 @@ def test_a_navigate_cannot_close_a_goal_that_requires_interaction():
     goals.add(Goal(
         id="goal_operate", name="Operate Web Surface",
         required_claim_types=["INTERACTION"], belief_threshold=0.6,
-        requires_execution_evidence=True,
+        required_evidence=["browser_interaction"], requires_execution_evidence=True,
     ))
 
     def run(tool: str, data: dict) -> None:
         obs = store.append(node_id=f"n_{tool}", source_tool=tool,
-                           obs_type="browser_action", payload={"ok": True, "data": data})
+                           obs_type="browser_action", payload={"ok": True, "data": data},
+                           goal_id="goal_operate",
+                           evidence_categories=evidence_categories_for_tool(
+                               tool, {"ok": True, "data": data}))
         tier = source_tier_for_tool(tool)
         for result in extractors.extract(obs):
             engine.admit(inv_id="inv_interaction", claim_type=result.claim_type,
@@ -462,7 +484,7 @@ def test_a_navigate_cannot_close_a_goal_that_requires_interaction():
                          node_id=obs.node_id)
 
     run("browser_navigate", {"url": "https://x.test/login", "status": 200, "title": "Sign in"})
-    assert goals.evaluate_checkpoint("goal_operate", kg) is False
+    assert goals.evaluate_checkpoint("goal_operate", kg, store.all()) is False
     assert goals.get("goal_operate").progress == 0.0, (
         "a navigate closed an interaction goal — the run can report operating a "
         "page it only loaded"
@@ -471,7 +493,7 @@ def test_a_navigate_cannot_close_a_goal_that_requires_interaction():
     run("browser_type", {"url": "https://x.test/login",
                          "selector": 'role=textbox[name="Email"]',
                          "typed": True, "value": "a@b.test"})
-    assert goals.evaluate_checkpoint("goal_operate", kg) is True
+    assert goals.evaluate_checkpoint("goal_operate", kg, store.all()) is True
     assert goals.get("goal_operate").progress == 1.0
 
 
@@ -492,8 +514,10 @@ def test_a_web_goal_still_closes_on_a_navigate_alone():
     engine = EvidenceEngine(kg)
     obs = store.append(node_id="n_nav", source_tool="browser_navigate",
                        obs_type="browser_action",
+                       goal_id="goal_web",
                        payload={"ok": True, "data": {
-                           "url": "https://x.test/", "status": 200, "title": "X"}})
+                           "url": "https://x.test/", "status": 200, "title": "X"}},
+                       evidence_categories=["browser_navigation"])
     tier = source_tier_for_tool("browser_navigate")
     for result in extractors.extract(obs):
         engine.admit(inv_id="inv_web_goal", claim_type=result.claim_type,
@@ -503,8 +527,9 @@ def test_a_web_goal_still_closes_on_a_navigate_alone():
 
     goals = GoalEngine("inv_web_goal")
     goals.add(Goal(id="goal_web", name="Verify Web Surface",
-                   required_claim_types=["WEB"], belief_threshold=0.6))
-    assert goals.evaluate_checkpoint("goal_web", kg) is True
+                   required_claim_types=["WEB"], required_evidence=["browser_navigation"],
+                   belief_threshold=0.6))
+    assert goals.evaluate_checkpoint("goal_web", kg, store.all()) is True
 
 
 def test_typed_value_absent_is_not_a_claim():

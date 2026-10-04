@@ -32,6 +32,10 @@ def _kernel_explorer_packet(**overrides):
             "goal_id": "goal_0",
         },
         "active_goals": [{"id": "goal_0", "name": "Verify Runtime", "state": "open"}],
+        "available_tools": ["read_file", "search_files", "list_tree", "path_exists",
+                            "execute_command", "check_port", "start_process", "read_process",
+                            "kill_process", "list_processes", "http_request"],
+        "browser_enabled": False,
         "kg_summary": {"claims_count": 0, "high_trust_claims": [], "contradictions": []},
         "remaining_budget": 12,
     }
@@ -80,7 +84,7 @@ def test_explorer_returns_the_kernels_response_shape(client):
     assert set(body) == {"investigation_id", "tool_request"}
     assert body["investigation_id"] == "inv_abc123"
     assert set(body["tool_request"]) == {"tool", "parameters", "reason"}
-    assert body["tool_request"]["reason"]
+    assert body["tool_request"]["reason"] == ""
 
 
 def test_explorer_honours_the_nodes_planned_action(client):
@@ -129,7 +133,32 @@ def test_explorer_resolves_the_goal_name_from_active_goals(client):
     packet["active_goals"] = [{"id": "goal_0", "name": "Verify Containerization",
                                "state": "open"}]
     body = client.post("/agent/explorer", json=packet).json()
-    assert "Verify Containerization" in body["tool_request"]["reason"]
+    assert body["tool_request"]["tool"] == "read_file"
+
+
+def test_explorer_receives_required_and_missing_evidence(client):
+    packet = _kernel_explorer_packet()
+    packet["current_node"]["goal_id"] = None  # Planner seed nodes may be unassociated.
+    packet["active_goals"] = [{
+        "id": "goal_0", "name": "Verify page renders", "state": "open",
+        "required_evidence": ["process_execution", "browser_navigation", "browser_observation"],
+        "completed_evidence": ["process_execution"],
+        "missing_evidence": ["browser_navigation", "browser_observation"],
+    }]
+    response = client.post("/agent/explorer", json=packet)
+    assert response.status_code == 200, response.text
+    from app.api.routes_runtime import _to_explorer_input
+    adapted = _to_explorer_input(packet)
+    assert adapted.missing_evidence == ["browser_navigation", "browser_observation"]
+    assert "REQUIRED EVIDENCE" in adapted.context
+    assert "process_execution" in adapted.context
+
+
+def test_http_tool_is_available_only_when_runtime_advertises_it(client):
+    packet = _kernel_explorer_packet()
+    packet["available_tools"].append("http_request")
+    from app.api.routes_runtime import _to_explorer_input
+    assert "http_request" in {tool.value for tool in _to_explorer_input(packet).available_tools}
 
 
 @pytest.mark.parametrize("packet", [

@@ -56,11 +56,13 @@ FILESYSTEM = "FILESYSTEM"
 class GoalEvidence:
     """How the kernel's goal engine counts a goal as satisfied."""
 
-    __slots__ = ("required_claim_types", "requires_execution_evidence")
+    __slots__ = ("required_claim_types", "requires_execution_evidence", "required_evidence")
 
-    def __init__(self, required_claim_types: list[str], requires_execution_evidence: bool) -> None:
+    def __init__(self, required_claim_types: list[str], requires_execution_evidence: bool,
+                 required_evidence: list[str] | None = None) -> None:
         self.required_claim_types = required_claim_types
         self.requires_execution_evidence = requires_execution_evidence
+        self.required_evidence = required_evidence or []
 
 
 #: A goal nothing routes: it exists to be reported on, not to be proven.
@@ -77,27 +79,49 @@ def goal_evidence_for(name: str) -> GoalEvidence:
     """The evidence a goal named `name` is closed by."""
     lowered = name.lower()
     if re.match(r"^inspect\b", lowered):
-        return GoalEvidence([FILE_READ], False)
+        return GoalEvidence([FILE_READ], False, ["repository_read"])
     if re.match(r"^operate\b", lowered):
-        return GoalEvidence([WEB, INTERACTION], True)
+        return GoalEvidence([WEB, INTERACTION], True,
+                            ["browser_navigation", "browser_observation", "browser_interaction"])
     if re.search(r"container|docker|deploy", lowered):
         execution = bool(re.search(r"\b(execute|run|start|launch|up|bring up)\b", lowered))
-        return GoalEvidence([DEPLOYMENT], execution)
-    if re.search(r"web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b", lowered):
+        return GoalEvidence([DEPLOYMENT], execution,
+                            ["docker_execution"] if execution else ["repository_read"])
+    if re.search(r"endpoint|\bapi\b|http|auth(?:entication)?\s+(?:endpoint|route)|protected routes?", lowered):
+        # An endpoint response proves only that a responder answered. Goals
+        # about a server exposing/listening for endpoints also require actual
+        # process execution; a frontend SPA fallback must not close them.
+        server_endpoint = bool(re.search(r"server|service|backend|listen|running|start|launch", lowered))
+        required = ["http_response"]
+        if server_endpoint:
+            required.insert(0, "process_execution")
+        return GoalEvidence([WEB], True, required)
+    if re.search(r"web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b|sign ?up|sign ?in|log ?in|register|registration", lowered):
         required = [WEB]
-        if re.search(r"after auth|authenticate|log ?in|sign ?in|submit|click|fill", lowered):
+        evidence = ["browser_navigation", "browser_observation"]
+        if re.search(r"after auth|authenticate|log ?in|sign ?in|sign ?up|register|registration|submit|click|fill", lowered):
             required.append(INTERACTION)
+            evidence.append("browser_interaction")
+        if (re.search(r"\b(test|try|complete|submit|fill|exercise)\b", lowered)
+                and re.search(r"sign ?up|sign ?in|log ?in|register|registration", lowered)):
+            evidence.append("browser_form_input")
         if re.search(r"\b(start|launch|run|execute|compile|build|listen|serve)\b", lowered):
             required.append(RUNTIME)
-        return GoalEvidence(required, True)
-    if re.search(r"runtime|server|listen|port|compile|build|\bdev\b|\bstart\b|\blaunch\b|\bexecute\b|\brespond", lowered):
-        return GoalEvidence([RUNTIME], True)
+            evidence = ["process_execution", *evidence]
+            if re.search(r"\b(compile|build|npm run|command)\b", lowered):
+                evidence.insert(0, "command_execution")
+        return GoalEvidence(required, True, evidence)
+    if re.search(r"runtime|server|listen|port|compile|build|\bdev\b|\bstart\b|\blaunch\b|\bexecute\b|\brespond|initiali[sz]", lowered):
+        evidence = ["command_execution", "process_execution"]
+        if re.search(r"listen|port|respond", lowered):
+            evidence.append("http_response")
+        return GoalEvidence([RUNTIME], True, evidence)
     if re.search(r"depend|package", lowered):
-        return GoalEvidence([PACKAGE], False)
-    if re.search(r"test|spec|coverage", lowered):
-        return GoalEvidence([TESTING], True)
+        return GoalEvidence([PACKAGE], False, ["repository_read"])
+    if re.search(r"test|spec|coverage|eslint|\blint(?:er|ing)?\b|type.?check|formatting", lowered):
+        return GoalEvidence([TESTING], True, ["command_execution"])
     if re.search(r"investigate|repository|filesystem", lowered):
-        return GoalEvidence([FILESYSTEM], False)
+        return GoalEvidence([FILESYSTEM], False, ["repository_read"])
     return NO_EVIDENCE
 
 

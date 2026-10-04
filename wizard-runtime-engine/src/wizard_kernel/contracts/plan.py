@@ -8,6 +8,7 @@ Invariant 5: no technology-specific knowledge lives in the kernel core.
 """
 from pydantic import BaseModel
 from wizard_kernel.contracts.node import InvestigationNode
+from wizard_kernel.contracts.evidence import EvidenceCategory
 
 
 class GoalDefinition(BaseModel):
@@ -18,6 +19,7 @@ class GoalDefinition(BaseModel):
     """
     name: str
     required_claim_types: list[str] = []
+    required_evidence: list[EvidenceCategory] = []
     belief_threshold: float = 0.6
     requires_execution_evidence: bool = False
 

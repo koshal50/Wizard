@@ -5,7 +5,7 @@ from pydantic import BaseModel
 SourceTier = Literal["execution", "config_parse", "documentation"]
 SupportType = Literal["support", "contradict"]
 EvidenceCategory = Literal[
-    "repository_read", "command_execution", "process_execution", "http_response",
+    "repository_read", "command_execution", "process_execution", "http_response", "runtime_startup", "http_readiness",
     "browser_navigation", "browser_observation", "browser_interaction", "browser_form_input", "docker_execution",
 ]
 

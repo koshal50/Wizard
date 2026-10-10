@@ -15,6 +15,7 @@ export type Err = { ok: false; errors: string[] };
 export type Result<T> = Ok<T> | Err;
 
 export interface Schema<T> {
+  jsonSchema?: Record<string, unknown>;
   readonly _t?: T; // phantom for inference
   validate(value: unknown, path: string): Result<T>;
   optional(): Schema<T | undefined>;

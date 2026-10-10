@@ -150,8 +150,12 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
             )
         except OSError:
             pass
+    kernel_port = int(os.environ.get("WIZARD_KERNEL_PORT", "8080"))
+    planner_port = int(os.environ.get("WIZARD_PLANNER_PORT", "8787"))
+    agents_port = int(os.environ.get("WIZARD_AGENTS_PORT", "8100"))
     planner_env = os.environ.copy()
     planner_env.update({
+        "PORT": str(planner_port),
         "LLM_PROVIDER": "openai",
         "LLM_MODEL": "gpt-oss-120b",
         "LLM_BASE_URL": "https://api.cerebras.ai",
@@ -173,11 +177,11 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
         ServiceSpec(
             key="kernel",
             label="Runtime Engine",
-            port=8080,
+            port=kernel_port,
             health_path="/health",
             cwd=str(root / "wizard-runtime-engine"),
             argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
-                  "--host", "127.0.0.1", "--port", "8080"),
+                  "--host", "127.0.0.1", "--port", str(kernel_port)),
             env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", ""))))},
             needs=("uvicorn",),
             why_unstartable="uvicorn is not importable by this interpreter",
@@ -185,7 +189,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
         ServiceSpec(
             key="planner",
             label="Investigation Planner",
-            port=8787,
+            port=planner_port,
             health_path="/health",
             cwd=str(root / "wizard-investigation-planner"),
             argv=(node, "--experimental-strip-types", "src/http/server.ts") if node else None,
@@ -196,7 +200,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
         ServiceSpec(
             key="agents",
             label="Explorer + Verifier agents",
-            port=8100,
+            port=agents_port,
             health_path="/health",
             # wizard_agents/wizard_agents: the inner directory is the package
             # root, because `app` is the top-level module uvicorn imports.
@@ -204,7 +208,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
             # 'app'" — which is exactly what it did until this was corrected.
             cwd=str(root / "wizard_agents" / "wizard_agents"),
             argv=(_python(), "-m", "uvicorn", "app.api.main:app",
-                  "--host", "127.0.0.1", "--port", "8100"),
+                  "--host", "127.0.0.1", "--port", str(agents_port)),
             env=agents_env,
             needs=("uvicorn",),
             why_unstartable="uvicorn is not importable by this interpreter",
@@ -452,15 +456,15 @@ def find_chromium(root: Path | None = None) -> Path | None:
     return None
 
 
-def ensure_chromium() -> str:
+def ensure_chromium(announce: bool = True) -> str:
     """Make sure Playwright's Chromium is on disk, fetching it once if not.
 
     `pip install -e .` installs the Playwright *package* but not its browser
     binaries, and it cannot: Playwright downloads those from its own CDN, while
     pip installs wheels and has no post-install step to run. A `setup.py`
     install hook does not close the gap either — pip builds a wheel and installs
-    that, bypassing the command. So the download happens here, on the first
-    launch, which works however the package was installed.
+    that, bypassing the command. So the download happens here before an
+    explicitly browser-enabled investigation, however the package was installed.
 
     Returns the line to report, in the same shape as the service lines. Failure
     is not fatal: the browser is one tool of several, and a run that never
@@ -488,8 +492,9 @@ def ensure_chromium() -> str:
     if find_chromium() is not None:
         return "[=] Chromium (Playwright browser)  ready        already on disk"
 
-    print("    fetching Chromium for the agentic browser "
-          "(one time, ~150 MB)...", flush=True)
+    if announce:
+        print("    fetching Chromium for the agentic browser "
+              "(one time, ~150 MB)...", flush=True)
     try:
         result = subprocess.run(
             [kernel_python, "-m", "playwright", "install", "chromium"],

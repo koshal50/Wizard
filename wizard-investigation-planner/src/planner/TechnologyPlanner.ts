@@ -69,7 +69,7 @@ export class TechnologyPlanner {
     const result = await this.llm.generateStructured(request, technologyPlanSchema);
     if (!result.ok) {
       this.logger.warn("planner.technology.failed", { provider: result.provider, errors: result.errors, raw: result.errors.some((error) => error.startsWith("openai: HTTP ")) ? result.raw : undefined });
-      return { technologies: [] };
+      throw new Error(`Planner provider failed: ${result.errors.join('; ')}`);
     }
     this.logger.info("planner.technology.planned", {
       provider: result.provider,
@@ -77,6 +77,32 @@ export class TechnologyPlanner {
       intent,
       targets,
     });
+    // Command scope is authoritative. Source architecture analysis cannot be
+    // turned into application execution by model-authored goal names.
+    if (intent.trim() === 'explain') {
+      const paths = [...new Set([
+        ...manifest.keyFiles.map(file => file.path).filter(path => /(?:package\.json|requirements\.txt|pyproject\.toml|Cargo\.toml|go\.mod)$/.test(path)),
+        ...result.value.technologies.flatMap(t => t.priorityFiles),
+      ].map(path => path.replace(/\\/g, '/')))].slice(0, 6);
+      return {technologies: result.value.technologies.map((t, index) => ({...t,
+        initialGoals: index === 0 ? [`Inspect ${targets.map(t => t.charAt(0).toUpperCase() + t.slice(1)).join(', ') || 'repository'}`] : [],
+        priorityFiles: index === 0 ? paths : [],
+      }))};
+    }
+    if (['investigate', 'explain'].includes(intent.trim()) && targets.includes('architecture')) {
+      const seen = new Set<string>();
+      let remainingReads = 6;
+      return { technologies: result.value.technologies.map((technology, index) => ({
+        ...technology, initialGoals: index === 0 ? ['Inspect Architecture'] : [],
+        priorityFiles: technology.priorityFiles.filter(path => {
+          const key = path.replace(/\\/g, '/');
+          if (seen.has(key) || remainingReads === 0) return false;
+          seen.add(key);
+          remainingReads -= 1;
+          return true;
+        }),
+      })) };
+    }
     return result.value;
   }
 }

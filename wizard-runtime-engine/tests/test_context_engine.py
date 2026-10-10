@@ -52,7 +52,7 @@ class _ObsStub:
 def _obs(obs_type, tool, payload):
     return Observation(id=f"obs_{tool}", investigation_id="inv_ctx", node_id="n1",
                        source_tool=tool, obs_type=obs_type, payload=payload,
-                       created_at=datetime.now(timezone.utc))
+                       created_at=datetime.now(timezone.utc), success=payload.get("ok") is True)
 
 
 def _sec(sec_id, priority, cost=10):
@@ -82,6 +82,7 @@ def test_packet_is_the_trust_stripped_contract():
         "investigation_id", "intent", "targets", "current_node",
         "active_goals", "kg_summary", "remaining_budget", "browser_enabled",
         "previous_actions", "available_tools", "resource_state",
+        "question", "deadline_at", "investigation", "plan", "node_selection", "successful_results", "recent_failures", "http",
     }
     assert packet["current_node"] == {"id": "n1", "type": "read",
                                       "action": node.action, "goal_id": "g1"}
@@ -118,13 +119,12 @@ def test_rejected_tool_request_and_reason_reach_next_explorer_decision():
         inv, node, goals, kg, budget, _ObsStub([rejected]),
     )
 
-    assert packet["previous_actions"] == [{
-        "node_id": "n1",
-        "tool": "browser_navigate",
-        "parameters": {"url": "str"},
-        "outcome": '{"ok": false, "detail": "browser tools are disabled", "error_type": "TOOL_REQUEST_REJECTED"}',
-        "succeeded": False,
-    }]
+    assert packet["previous_actions"] == []
+    failure = packet["recent_failures"][0]
+    assert failure["tool"] == "browser_navigate"
+    assert failure["reason"] == "browser tools are disabled"
+    assert failure["prohibited_from_repeating"]
+
 
 
 def test_process_session_state_is_carried_into_next_explorer_packet():
@@ -381,7 +381,7 @@ def test_loop_emits_context_supplied_end_to_end():
     # older request completed only because the built-in planner ignored the
     # target and planned a read-only goal instead — the run reported success for
     # a question it had answered differently.
-    req = InvestigationRequest(repository_path="/tmp", intent="investigate", targets=[],
+    req = InvestigationRequest(repository_path=__import__("tempfile").gettempdir(), intent="investigate", targets=[],
                                options={"budget": 5, "sandbox_mode": "local_dev"})
     inv = manager.create(req)
     kernel_loop.run(inv, manager, MockPlanner())

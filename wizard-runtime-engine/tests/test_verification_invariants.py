@@ -53,7 +53,7 @@ def test_static_evidence_cannot_satisfy_runtime_categories():
 
 def test_execution_tools_create_only_proven_categories():
     assert evidence_categories_for_tool("execute_command", {"ok": True, "exit_code": 0}) == ["command_execution"]
-    assert evidence_categories_for_tool("start_process", {"ok": True, "data": {"is_running": True}}) == ["command_execution", "process_execution"]
+    assert evidence_categories_for_tool("start_process", {"ok": True, "data": {"is_running": True}}) == ["command_execution"]
     assert evidence_categories_for_tool("browser_navigate", {"ok": True}) == ["browser_navigation"]
     assert evidence_categories_for_tool("browser_snapshot", {"ok": True}) == ["browser_observation"]
     assert evidence_categories_for_tool("browser_click", {"ok": True}) == ["browser_interaction"]
@@ -131,11 +131,13 @@ def test_goal_only_counts_compatible_evidence_associated_with_it():
     class RuntimeKG(_StaticKG):
         def has_execution_evidence(self, _claim_id):
             return True
+        def evidence_for(self, _claim_id):
+            return [SimpleNamespace(support_type='support', observation_ids=['obs1'])]
     engine = GoalEngine("inv_test")
     goal = Goal(id="g1", name="server", required_claim_types=["RUNTIME"],
                 required_evidence=["process_execution"], requires_execution_evidence=True)
     engine.add(goal)
-    obs = SimpleNamespace(success=True, evidence_categories=["process_execution"], goal_id="other")
+    obs = SimpleNamespace(id='obs1', success=True, evidence_categories=["process_execution"], goal_id="other")
     assert not engine.evaluate_checkpoint("g1", RuntimeKG("RUNTIME"), [obs])
     obs.goal_id = "g1"
     assert engine.evaluate_checkpoint("g1", RuntimeKG("RUNTIME"), [obs])
@@ -210,8 +212,9 @@ def test_verifier_422_is_persisted_without_an_assessment(tmp_path, monkeypatch):
         def evidence_for(self, _claim_id):
             return []
     store = ObservationStore("inv_verifier_failure")
-    loop._consult_verifier(
-        SimpleNamespace(id="inv_verifier_failure"), FailedVerifier(), KG(), None,
+    with pytest.raises(__import__("wizard_kernel.session.control", fromlist=["NoProgress"]).NoProgress):
+        loop._consult_verifier(
+            SimpleNamespace(id="inv_verifier_failure"), FailedVerifier(), KG(), None,
         None, None, None, None, store, EventBus("inv_verifier_failure"), escalate=False,
     )
     observations = store.all()
@@ -268,6 +271,7 @@ def test_validator_does_not_reaccept_identical_rejected_request(tmp_path):
 
 def test_readiness_observations_can_be_repeated_after_world_state_changes(tmp_path):
     validator = ToolRequestValidator(str(tmp_path), allowed_domains=["127.0.0.1"])
+    validator.record_execution("start_process", {}, {"ok": True, "data": {"handle_id": "proc-1"}})
     requests = [
         ToolRequest(tool="read_process", parameters={"handle_id": "proc-1"}),
         ToolRequest(tool="check_port", parameters={"host": "127.0.0.1", "port": 8123}),
@@ -281,7 +285,7 @@ def test_readiness_observations_can_be_repeated_after_world_state_changes(tmp_pa
         "ok": True, "data": {"active": True, "host": "127.0.0.1", "port": 8123},
     })
     assert validator.validate(requests[2], 5).valid
-    assert validator.validate(requests[2], 5).valid
+    assert not validator.validate(requests[2], 5).valid
 
     post = ToolRequest(tool="http_request", parameters={
         "url": "http://127.0.0.1:8123/", "method": "POST", "body": "{}",
@@ -348,6 +352,7 @@ def test_http_connection_failure_keeps_safe_target_without_success_evidence(monk
         "url": "http://127.0.0.1:8123/health",
         "method": "GET",
         "status_code": None,
+        "timeout_sec": 10,
     }
     assert "not-a-secret" not in str(result)
     assert "password" not in str(result)
@@ -377,10 +382,16 @@ def test_execute_command_uses_sandbox_and_persists_execution_observation(tmp_pat
 
 
 def test_execution_observation_is_available_to_next_explorer_context():
-    obs = SimpleNamespace(node_id="n1", source_tool="execute_command",
-                          payload={"ok": True, "stdout": "server ready", "meta": {}})
-    inv = SimpleNamespace(id="inv_test", intent="verify", targets=[], options={})
-    node = SimpleNamespace(id="n2", type="execute", action={}, goal_id="g1")
+    from datetime import datetime, timezone
+    from wizard_kernel.contracts.observation import Observation
+    from wizard_kernel.session.investigation import Investigation
+    from wizard_kernel.contracts.node import InvestigationNode, Hypothesis, HypothesisKind
+    obs = Observation(id="obs1", investigation_id="inv_test", node_id="n1", source_tool="execute_command",
+                      obs_type="command_result", success=True, created_at=datetime.now(timezone.utc),
+                      payload={"ok": True, "stdout": "server ready", "meta": {}})
+    inv = Investigation(id="inv_test", repository_path=".", intent="verify", targets=[], options={})
+    node = InvestigationNode(id="n2", type="execute", action={}, goal_id="g1",
+                             hypothesis=Hypothesis(kind=HypothesisKind.always_success))
     goals = SimpleNamespace(open_goals=lambda: [])
     kg = SimpleNamespace(summary=lambda: {})
     budget = SimpleNamespace(remaining=5)

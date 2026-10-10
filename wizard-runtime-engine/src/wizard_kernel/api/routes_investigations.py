@@ -109,6 +109,9 @@ def get_investigation(
         # only completed/failed/cancelled, so it polled an `incomplete` run
         # forever and the TUI never showed a result.
         "is_terminal": is_terminal(inv.state),
+        'report_ready': inv.report_ready,
+        'deadline_at': inv.deadline_at.isoformat(),
+        'active_step': inv.active_step,
         "budget_remaining": inv.budget_remaining,
         "nodes_completed": inv.nodes_completed,
         "claims_count": inv.claims_count,

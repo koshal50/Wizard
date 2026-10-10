@@ -7,9 +7,9 @@ Explorer never executes anything itself.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.contracts.common import (
     ExecutionBudget,
@@ -78,6 +78,14 @@ class ExplorerInput(BaseModel):
     context: Optional[str] = Field(default=None, description="Free-text additional context")
     missing_evidence: List[str] = Field(default_factory=list)
     previous_actions: List[PreviousAction] = Field(default_factory=list)
+    investigation: Dict[str, Any] = Field(default_factory=dict)
+    goals: List[Dict[str, Any]] = Field(default_factory=list)
+    plan: Dict[str, Any] = Field(default_factory=dict)
+    node_selection: Dict[str, Any] = Field(default_factory=dict)
+    successful_results: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_failures: List[Dict[str, Any]] = Field(default_factory=list)
+    resources: Dict[str, Any] = Field(default_factory=dict)
+    http: Dict[str, Any] = Field(default_factory=dict)
     available_tools: List[ToolName] = Field(
         default_factory=lambda: list(ToolName),
         description="Tools Runtime has made available for this investigation",
@@ -109,9 +117,19 @@ class ExplorerOutput(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    investigation_id: str
-    node_id: str
-    tool_request: ExplorerToolRequest
+    investigation_id: str = Field(..., min_length=1)
+    node_id: str = Field(..., min_length=1)
+    tool_request: ExplorerToolRequest | None = None
+    decision: Literal['action', 'complete', 'incomplete'] = 'action'
+    reason: str = ''
+
+    @model_validator(mode='after')
+    def decision_shape(self):
+        if self.decision == 'action' and self.tool_request is None:
+            raise ValueError('action decision requires tool_request')
+        if self.decision != 'action' and (self.tool_request is not None or not self.reason.strip()):
+            raise ValueError('terminal decision requires a reason and no tool_request')
+        return self
 
     @property
     def tool(self) -> ToolName:

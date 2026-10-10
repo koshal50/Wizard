@@ -165,7 +165,7 @@ def test_a_describing_command_aimed_at_an_address_only_reads_it():
     """
     goals = _goals(_manifest(), "report", ["http://localhost:5173"], browser=True)
     assert "Operate Web Surface" not in goals
-    assert "Verify Web Surface" in goals
+    assert "Verify Web Surface" not in goals
 
 
 def test_a_question_that_asks_to_operate_the_page_plans_it():
@@ -207,7 +207,7 @@ def test_operating_the_page_is_the_goal_a_repository_goal_never_forces():
         _manifest(), "report", ["http://localhost:5173"], {"browser_enabled": True},
     )
     read_goals = [g.name for tech in read_only.technologies for g in tech.initial_goals]
-    assert "Verify Web Surface" in read_goals
+    assert "Verify Web Surface" not in read_goals
     assert "Operate Web Surface" not in read_goals, "a report may not be planned to act on a page"
 
     asked = MockPlanner().initial(

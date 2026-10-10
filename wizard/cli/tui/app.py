@@ -157,7 +157,7 @@ class WizardTUI:
         # terminal gets the smaller, denser one.
         self.top_window = Window(
             content=_FixedControl(self._render_top),
-            height=top_panel_height(self._geometry()[1], self._geometry()[0]),
+            height=lambda: top_panel_height(self._geometry()[1], self._geometry()[0]),
             wrap_lines=False,
             always_hide_cursor=True,
         )
@@ -505,6 +505,9 @@ class WizardTUI:
 
     def _find_frontend(self) -> None:
         """Look for a servable client in the project, and say what to do about it."""
+        if self.family in {'explain', 'report'}:
+            self.frontend, self.frontend_hint = None, ''
+            return
         try:
             self.frontend, self.frontend_hint = suggestion_for(self.repo_path)
         except Exception:
@@ -790,12 +793,7 @@ def run_tui(repo_path: str | None = None) -> None:
             )
             return
 
-    from wizard.cli.tui.services import ServiceSupervisor, ensure_chromium
-
-    # Before the services: the browser binary is a large one-time download, and
-    # this is the only moment it can be done with the user watching and no
-    # investigation already waiting on it.
-    print(ensure_chromium(), flush=True)
+    from wizard.cli.tui.services import ServiceSupervisor
 
     supervisor = ServiceSupervisor()
     report = supervisor.ensure_all()

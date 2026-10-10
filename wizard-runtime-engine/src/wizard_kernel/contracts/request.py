@@ -1,8 +1,9 @@
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class InvestigationOptions(BaseModel):
+    max_context_tokens: int = 8192
     budget: int = 40
     sandbox_mode: Literal["docker", "local_dev"] = "local_dev"
     planner_url: str | None = None
@@ -34,3 +35,9 @@ class InvestigationRequest(BaseModel):
     # request.
     question: str = ""
     options: InvestigationOptions = Field(default_factory=InvestigationOptions)
+
+    @model_validator(mode='after')
+    def explanation_is_read_only(self):
+        if self.intent == 'explain':
+            self.options.browser_enabled = False
+        return self

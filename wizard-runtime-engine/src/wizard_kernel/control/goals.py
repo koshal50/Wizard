@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 
 GoalState = Literal["open", "satisfied", "failed"]
 _EVIDENCE_CATEGORIES = frozenset({
-    "repository_read", "command_execution", "process_execution", "http_response",
+    "repository_read", "command_execution", "process_execution", "http_response", "runtime_startup", "http_readiness",
     "browser_navigation", "browser_observation", "browser_interaction", "browser_form_input", "docker_execution",
 })
 
@@ -65,6 +65,10 @@ class GoalEngine:
             obs.goal_id == goal.id and evidence_satisfies_requirement(obs, r)
             for obs in observations
         )]
+        if 'http_readiness' in required and 'http_readiness' not in completed:
+            from wizard_kernel.control.runtime_checks import readiness_observations
+            if readiness_observations(observations, goal.id):
+                completed.append('http_readiness')
         return {"required": required, "completed": completed,
                 "missing": [r for r in required if r not in completed]}
 
@@ -76,8 +80,16 @@ class GoalEngine:
         Returns True if the goal transitioned to satisfied.
         """
         goal = self._goals.get(goal_id)
-        if not goal or goal.state == "satisfied":
-            return goal.state == "satisfied" if goal else False
+        if not goal:
+            return False
+
+        if any(obs.goal_id == goal.id and not obs.success and obs.payload.get('required_check')
+               for obs in observations or []):
+            goal.progress = 0.0
+            goal.state = 'open'
+            return False
+        if goal.state == 'satisfied':
+            return True
 
         req_types = set(goal.required_claim_types)
         evidence = self.evidence_status(goal_id, observations or [])
@@ -87,8 +99,12 @@ class GoalEngine:
             return False
 
         satisfied_types: set[str] = set()
+        goal_observations = {getattr(obs, 'id', None) for obs in observations or [] if obs.goal_id == goal.id and obs.success}
         for claim in kg.all_claims():
             if claim.claim_type not in req_types:
+                continue
+            if not goal_observations or not any(ev.support_type == 'support' and goal_observations.intersection(ev.observation_ids)
+                       for ev in kg.evidence_for(claim.id)):
                 continue
             trust = kg.trust_of(claim.id)
             if trust < goal.belief_threshold:
@@ -108,7 +124,7 @@ class GoalEngine:
 
     def evaluate_all(self, kg: "KnowledgeGraph", observations: list | None = None) -> None:
         """Re-evaluate every open goal. Called after each node completes."""
-        for g in list(self.open_goals()):
+        for g in self.all():
             self.evaluate_checkpoint(g.id, kg, observations)
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -181,13 +197,20 @@ def evidence_categories_for_tool(tool: str, payload: dict) -> list[str]:
     if tool == "execute_command" and payload.get("exit_code") == 0:
         categories.append("command_execution")
     if tool == "start_process" and data.get("is_running"):
-        categories.extend(("command_execution", "process_execution"))
+        # Creation is not subsequent liveness/readiness evidence.
+        categories.append("command_execution")
     if tool == "read_process" and data.get("is_running"):
         categories.append("process_execution")
+        from wizard_kernel.control.runtime_checks import listening_url
+        if listening_url(payload):
+            categories.append('runtime_startup')
     if tool == "check_port" and data.get("active"):
         categories.append("process_execution")
     if tool == "http_request" and data.get("status_code") is not None:
         categories.append("http_response")
+        from wizard_kernel.control.runtime_checks import readiness_failure
+        if payload.get('readiness_check') and not readiness_failure(payload):
+            categories.append('http_readiness')
     if tool == "browser_navigate":
         categories.append("browser_navigation")
     if tool in {"browser_snapshot", "browser_extract"}:

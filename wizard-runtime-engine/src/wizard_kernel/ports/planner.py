@@ -287,6 +287,7 @@ class HttpPlanner:
 
     def __init__(self, base_url: str) -> None:
         self._url = base_url.rstrip("/")
+        self.deadline_at = None
         # The planner service mounts its three handlers at /plan/*, and _post()
         # appends the full "/plan/initial" path itself. A caller that configures
         # the base as "<origin>/plan" — the natural reading of "the planner's
@@ -298,8 +299,22 @@ class HttpPlanner:
 
     def _post(self, path: str, payload: dict) -> dict:
         import httpx
-        r = httpx.post(f"{self._url}{path}", json=payload, timeout=30)
-        r.raise_for_status()
+        from wizard_kernel.ports.agents import _remaining_timeout
+        payload = {**payload, 'deadline_at': self.deadline_at}
+        r = httpx.post(f"{self._url}{path}", json=payload, timeout=_remaining_timeout(self.deadline_at))
+        if r.is_error:
+            # Planner failures are orchestration failures, not application HTTP
+            # failures. Preserve the service's actual rejection before stopping.
+            from wizard_kernel.session.control import NoProgress
+            import re
+            try:
+                detail = r.json().get('error', 'Planner rejected the request')
+            except (ValueError, AttributeError):
+                detail = 'Planner returned an unreadable error response'
+            detail = re.sub(r'(?i)(authorization|api[_ -]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+',
+                            r'\1\2[REDACTED]', str(detail))
+            detail = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', detail)[:600]
+            raise NoProgress(f'Planner {path} returned HTTP {r.status_code}: {detail}')
         return r.json()
 
     def initial(

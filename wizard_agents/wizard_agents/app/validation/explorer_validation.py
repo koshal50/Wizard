@@ -34,6 +34,14 @@ def validate_explorer_output(explorer_input: ExplorerInput, output: ExplorerOutp
             f"node_id mismatch: expected '{explorer_input.current_node.node_id}', got '{output.node_id}'"
         )
 
+    if output.decision != 'action':
+        if output.tool_request is not None or not output.reason.strip():
+            errors.append('terminal decision requires a reason and no tool request')
+        if errors:
+            raise ExplorerValidationError('; '.join(errors))
+        return
+    if output.tool_request is None:
+        raise ExplorerValidationError('action decision requires a tool request')
     if output.tool not in explorer_input.available_tools:
         errors.append(
             f"tool '{output.tool.value}' is not in available_tools "

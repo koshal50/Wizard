@@ -150,7 +150,7 @@ test("the goal-name matcher and the operation gate share one word list", () => {
 
 test("operating the web surface is proven by INTERACTION, not by reaching a page", () => {
   const evidence = goalEvidenceFor("Operate Web Surface");
-  assert.deepEqual(evidence.required_claim_types, ["INTERACTION"]);
+  assert.deepEqual(evidence.required_claim_types, ["WEB", "INTERACTION"]);
   assert.equal(evidence.requires_execution_evidence, true);
 });
 
@@ -203,7 +203,7 @@ test("the declared goal carries the evidence routing, not a default", () => {
   const wired = technologyPlanToWire(planWithoutWeb(), [URL], true);
   const op = webGoal(wired, "Operate Web Surface");
   assert.ok(op, "operate goal missing");
-  assert.deepEqual(op.required_claim_types, ["INTERACTION"]);
+  assert.deepEqual(op.required_claim_types, ["WEB", "INTERACTION"]);
   assert.equal(op.requires_execution_evidence, true);
 });
 

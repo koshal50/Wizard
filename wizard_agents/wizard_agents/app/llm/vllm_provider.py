@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import re
+import time
+from datetime import datetime
 from typing import Any, Dict, Optional, Type, TypeVar
 from urllib.parse import urlparse
 
@@ -42,7 +44,7 @@ class VLLMProvider(LLMProvider):
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         *,
-        timeout: float = 120.0,
+        timeout: float = 30.0,
     ) -> None:
         self._base_url = (base_url or os.environ.get("WIZARD_LLM_BASE_URL", DEFAULT_BASE_URL)).rstrip("/")
         self._model = model or os.environ.get("WIZARD_LLM_MODEL")
@@ -92,7 +94,7 @@ class VLLMProvider(LLMProvider):
             ],
             "response_format": (
                 {"type": "json_schema", "json_schema": {
-                    "name": "explorer_tool_request", "strict": True, "schema": schema,
+                    "name": "explorer_tool_request" if response_model.__name__ == 'ExplorerOutput' else 'verification_assessment', "strict": True, "schema": schema,
                 }} if strict_schema else {"type": "json_object"}
             ),
         }
@@ -112,16 +114,21 @@ class VLLMProvider(LLMProvider):
             )
 
         api_key = os.environ.get("OPENAI_API_KEY")
+        deadline_text = ((metadata or {}).get('input') or {}).get('investigation', {}).get('operation_deadline_at') or ((metadata or {}).get('input') or {}).get('investigation', {}).get('deadline_at') or (metadata or {}).get('deadline_at')
+        deadline = datetime.fromisoformat(deadline_text).timestamp() if deadline_text else time.time() + self._timeout
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         for attempt in range(2 if self._cerebras_gate else 1):
             if self._cerebras_gate:
-                self._cerebras_gate.acquire()
+                self._cerebras_gate.acquire(deadline=deadline)
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                raise LLMError('Investigation deadline reached before provider request')
             try:
                 response = httpx.post(
                     f"{self._base_url}/v1/chat/completions",
                     json=payload,
                     headers=headers,
-                    timeout=self._timeout,
+                    timeout=min(self._timeout, remaining),
                 )
             except Exception as exc:  # noqa: BLE001 - surface any HTTP/network failure uniformly
                 raise LLMError(f"vLLM API call failed: {exc}") from exc
@@ -172,7 +179,7 @@ class VLLMProvider(LLMProvider):
                 request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
                 usage = data.get("usage") or {}
                 raise LLMError(
-                    "Explorer structured response invalid JSON; "
+                    f"{response_model.__name__} structured response invalid JSON; "
                     f"finish_reason={finish_reason or 'unknown'}; "
                     f"completion_tokens={usage.get('completion_tokens', 'unknown')}; "
                     f"content_chars={len(raw_text)}; request_id={request_id or 'unknown'}"
@@ -185,7 +192,7 @@ class VLLMProvider(LLMProvider):
             if strict_schema:
                 request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
                 raise LLMError(
-                    f"Explorer structured response failed schema validation; "
+                    f"{response_model.__name__} structured response failed schema validation; "
                     f"finish_reason={finish_reason or 'unknown'}; request_id={request_id or 'unknown'}; "
                     f"detail={str(exc)[:400]}"
                 ) from exc
@@ -207,6 +214,8 @@ def _strict_explorer_schema(schema: dict, metadata: dict) -> dict:
         if isinstance(value, dict):
             if value.get("type") == "object":
                 value["additionalProperties"] = False
+                if 'properties' in value:
+                    value['required'] = list(value['properties'])
             for child in value.values():
                 close_objects(child)
         elif isinstance(value, list):
@@ -222,8 +231,20 @@ def _strict_explorer_schema(schema: dict, metadata: dict) -> dict:
     parameter_contracts = metadata.get("tool_parameter_schema") or {}
     type_map = {"string": "string", "integer": "integer", "number": "number", "boolean": "boolean"}
     properties = schema.get("properties", {})
+    if 'report_markdown' in properties and 'tool_request' not in properties:
+        # Verification uses the same strict-object closure, but has no tool/node
+        # union. Do not validate its schema as an Explorer response.
+        return schema
     if not {"investigation_id", "node_id", "tool_request"} <= set(properties):
         raise LLMError("Explorer structured schema has no parameters object")
+    # IDs are supplied by the current Runtime dispatch, never inferred from history.
+    current_input = metadata.get('input') or {}
+    for field, value in (
+        ('investigation_id', current_input.get('investigation_id')),
+        ('node_id', (current_input.get('current_node') or {}).get('node_id')),
+    ):
+        if value:
+            properties[field] = {'type': 'string', 'enum': [value]}
     branches = []
     for tool in available:
         param_properties = {
@@ -242,5 +263,6 @@ def _strict_explorer_schema(schema: dict, metadata: dict) -> dict:
             "type": "object", "properties": tool_properties,
             "required": list(tool_properties), "additionalProperties": False,
         })
-    schema["properties"]["tool_request"] = {"anyOf": branches}
+    schema["properties"]["tool_request"] = {"anyOf": branches + [{"type": "null"}]}
+    schema['required'] = list(schema['properties'])
     return schema

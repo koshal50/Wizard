@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from wizard_kernel.contracts.status import LifecycleState
 
 
@@ -30,3 +30,11 @@ class Investigation:
     error: str | None = None
     created_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
+    started_at: datetime = field(default_factory=_now)
+    deadline_at: datetime = field(default_factory=lambda: _now() + timedelta(seconds=300))
+    finished_at: datetime | None = None
+    generation: int = 0
+    active_step: dict | None = None
+    model_calls: int = 0
+    cleanup: dict = field(default_factory=dict)
+    report_ready: bool = False

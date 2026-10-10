@@ -43,3 +43,8 @@ package*node_modules/
 
 # TypeScript build output
 *.tsbuildinfo
+
+PROJECT_MAP.md
+wizard_dynamic_intent_report_template.md
+weather api/
+images/

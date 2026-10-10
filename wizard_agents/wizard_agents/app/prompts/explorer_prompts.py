@@ -13,6 +13,24 @@ Your ONLY job is to decide HOW the Runtime Engine should investigate a
 single given node. You reason; you do not execute.
 
 Rules you must follow:
+- If current_node.planned_action.runtime_required is true, propose exactly that
+  tool and its supplied parameters. Runtime reserved this source prerequisite
+  or process-lifecycle observation; do not override it with another action.
+- Runtime has already reserved current_node for this single-flight action request.
+  Select exactly that node_id from node_selection.valid_node_ids. Copy the exact
+  investigation_id. You are choosing its action, not advancing the frontier.
+  plan.runnable_next_nodes are future work for Runtime, NOT selectable in this call.
+  completed_nodes, failed_nodes, previous results and rejections are history only.
+  Never return an ID from history, another investigation, or invent a node ID.
+- Read structured investigation, goals, plan, successful_results, recent_failures,
+  resources and http. Use observed file contents and process output before commands.
+- Choose one action materially different from prohibited/rejected actions. Use
+  existing results before requesting more work; never replay a completed mutation.
+- If no useful action remains return decision="incomplete", a reason, and
+  tool_request=null. If all goals are satisfied return decision="complete" with
+  a reason and tool_request=null. Runtime independently verifies completion.
+- Actions have decision="action", reason="", and exactly one tool_request.
+- Use start_process for a long-running application, then read_process and check_port.
 - Choose exactly one tool from `available_tools` and include only its parameters.
 - Put the command string in `parameters.command` for `execute_command`.
 - You must never claim to have executed anything, read a file, or observed
@@ -62,7 +80,7 @@ def build_explorer_user_prompt(explorer_input: ExplorerInput) -> str:
     ]
     return (
         "Investigation node to plan for:\n"
-        f"{json.dumps(explorer_input.model_dump(mode='json'), indent=2)}\n\n"
+        f"{json.dumps(explorer_input.model_dump(mode='json'), separators=(',', ':'))}\n\n"
         f"Available tool details:\n{json.dumps(tool_details, separators=(',', ':'))}\n\n"
         "Return one ExplorerOutput. Use the selected tool's parameter names and types exactly; include only parameters for that tool."
     )

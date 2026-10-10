@@ -64,6 +64,9 @@ class BrowserRuntime:
         self._context = None
         self._page = None
         self._cdp = None
+        self.closed = False
+        self._stopping = False
+        self.deadline_at = None
         # Screencast: the CDP frame handler is registered ONCE; reconnecting a
         # viewer just swaps this callback, so frames never duplicate or leak a
         # stale closure onto a dead socket's loop.
@@ -92,21 +95,27 @@ class BrowserRuntime:
 
         self._thread = threading.Thread(target=_runner, name="wizard-browser", daemon=True)
         self._thread.start()
-        ready.wait()
+        timeout = self._remaining(30)
+        if not ready.wait(timeout):
+            self._stopping = True
+            raise TimeoutError('Browser startup exceeded investigation deadline')
         if "e" in boot_error:
             raise RuntimeError(f"browser failed to start: {boot_error['e']}") from boot_error["e"]
 
     def stop(self) -> None:
         """Close the page/browser and tear down the loop thread. Best-effort."""
+        self._stopping = True
         if not self._loop:
+            self.closed = True
             return
         try:
-            self._call(self._a_stop(), timeout=20)
+            self._call(self._a_stop(), timeout=3)
+            self.closed = True
         except Exception:  # noqa: BLE001 — teardown never raises to the caller
             log.debug("browser stop error", exc_info=True)
         self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread:
-            self._thread.join(timeout=5)
+            self._thread.join(timeout=1)
         self._loop = None
 
     async def _a_start(self) -> None:
@@ -117,16 +126,15 @@ class BrowserRuntime:
             if not self._cdp_url:
                 raise ValueError("browser_backend 'cdp_url' requires browser_cdp_url")
             self._browser = await self._pw.chromium.connect_over_cdp(self._cdp_url)
-            self._context = (
-                self._browser.contexts[0]
-                if self._browser.contexts
-                else await self._browser.new_context()
-            )
+            self._context = await self._browser.new_context()
         else:  # "local" — launch a Chromium in this environment
             self._browser = await self._pw.chromium.launch(headless=self._headless)
             self._context = await self._browser.new_context()
         self._context.set_default_timeout(self._action_timeout)
         self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+        if self._stopping:
+            await self._a_stop()
+            raise RuntimeError('Browser startup cancelled')
         await self._a_install_egress_guard()
 
     # ── egress (the boundary that covers every way out of the page) ────────────
@@ -204,7 +212,28 @@ class BrowserRuntime:
         """Run a coroutine on the browser loop from any other thread and block for it."""
         if not self._loop:
             raise RuntimeError("browser not started")
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=timeout)
+        if not self._stopping:
+            timeout = self._remaining(timeout or 15)
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return future.result(timeout=timeout)
+        except BaseException:
+            future.cancel()
+            raise
+
+    def _remaining(self, timeout):
+        if self.deadline_at is None:
+            return timeout
+        from datetime import datetime, timezone
+        remaining = (self.deadline_at - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            raise TimeoutError('Investigation deadline reached')
+        return min(timeout, remaining)
+
+    def screenshot(self, path):
+        async def capture():
+            await self._page.screenshot(path=path, timeout=self._remaining(8) * 1000)
+        return self._call(capture(), timeout=10)
 
     # ── actions (sync — called by ToolExecutor on the loop thread) ─────────────
 

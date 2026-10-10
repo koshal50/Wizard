@@ -60,6 +60,7 @@ class ClaimInput(BaseModel):
 
 
 class VerificationInput(BaseModel):
+    deadline_at: str | None = None
     """Everything Verification needs to critically review a set of claims."""
 
     investigation_id: str = Field(..., min_length=1)
@@ -99,7 +100,7 @@ class VerificationOutput(BaseModel):
     unresolved_claims: List[str] = Field(default_factory=list, description="claim_ids that remain undecided")
     recommended_additional_investigations: List[str] = Field(default_factory=list)
     reasoning: str = Field(..., min_length=1)
-    report_markdown: str = Field(..., min_length=1)
+    report_markdown: str = Field(..., min_length=1, pattern=r"^#")
 
     @field_validator("reviewed_claims")
     @classmethod

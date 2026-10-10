@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from wizard_kernel.contracts.agent import ToolRequest
+from wizard_kernel.contracts.actions import fingerprint, normalize
 
 log = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ _EXEC_TOOLS = frozenset({"execute_command", "start_process"})
 _URL_TOOLS = frozenset({"browser_navigate", "http_request"})
 BROWSER_TOOLS = frozenset({
     "browser_navigate", "browser_snapshot", "browser_click",
-    "browser_type", "browser_back", "browser_extract",
+    "browser_type", "browser_back", "browser_extract", "browser_screenshot",
 })
 
 # The full set of tools the Runtime accepts from agents
@@ -61,9 +62,10 @@ class ToolRequestValidator:
     """Per-investigation validator. Holds dedup state — never shared across investigations."""
 
     def __init__(self, workspace_root: str, allowed_domains: list[str] | None = None,
-                 browser_enabled: bool = False) -> None:
+                 browser_enabled: bool = False, read_only: bool = False) -> None:
         self._root = Path(workspace_root).resolve()
         self._browser_enabled = browser_enabled
+        self._read_only = read_only
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
         self._rejected_fingerprints: set[str] = set()
@@ -71,11 +73,28 @@ class ToolRequestValidator:
         self._allowed_domains = tuple(allowed_domains or ())
         # Runtime observations, not agent assertions, advance resource state.
         self._reachable_local_endpoints: set[tuple[str, int]] = set()
+        self._local_readiness_targets: set[str] = set()
         self._browser_navigated = False
+        self._owned_handles: set[str] = set()
+        self._observed_selectors: set[str] = set()
+        self._page_url = ''
+
+    def register_local_readiness(self, url: str) -> None:
+        """Runtime-only admission of a discovered local GET target, not egress."""
+        if self._is_loopback_url(url):
+            self._local_readiness_targets.add(url)
 
     def record_execution(self, tool: str, params: dict, payload: dict) -> None:
         """Advance prerequisites only from successful executor results."""
         data = payload.get("data") or {}
+        page = data.get('page_observation') or data
+        if tool in BROWSER_TOOLS and payload.get('ok') and isinstance(page, dict) and 'controls' in page:
+            self._observed_selectors = {c['selector'] for c in page['controls'] if isinstance(c, dict) and c.get('selector')}
+            self._page_url = page.get('url') or self._page_url
+        if tool == 'start_process' and payload.get('ok') and data.get('handle_id'):
+            self._owned_handles.add(data['handle_id'])
+        if tool == 'kill_process' and payload.get('ok'):
+            self._owned_handles.discard(params.get('handle_id'))
         if tool == "check_port" and payload.get("ok") and data.get("active"):
             host = str(data.get("host", params.get("host", "localhost"))).lower()
             port = data.get("port", params.get("port"))
@@ -99,6 +118,8 @@ class ToolRequestValidator:
     def validate(self, request: ToolRequest, budget_remaining: int) -> ValidationResult:
         """Run all checks. Returns a ValidationResult with valid=True on pass."""
 
+        if getattr(self, 'control', None):
+            self.control.check()
         raw_fingerprint = self._fingerprint(request.tool, request.parameters)
         if raw_fingerprint in self._rejected_fingerprints:
             return ValidationResult(valid=False, reason="Duplicate rejected ToolRequest; choose a different action.")
@@ -106,6 +127,9 @@ class ToolRequestValidator:
         def reject(reason: str) -> ValidationResult:
             self._rejected_fingerprints.add(raw_fingerprint)
             return ValidationResult(valid=False, reason=reason)
+
+        if self._read_only and request.tool not in {'read_file', 'list_tree', 'search_files', 'path_exists'}:
+            return reject('Explain is read-only; execution, network and browser tools are disabled.')
 
         # 1. Tool existence check
         if request.tool not in _ALLOWED_TOOLS:
@@ -120,6 +144,16 @@ class ToolRequestValidator:
 
         # 3. Path traversal guard for tools that accept paths
         params = dict(request.parameters)
+        if request.tool in {'read_process', 'kill_process'} and params.get('handle_id') not in self._owned_handles:
+            return reject('Process handle does not belong to this investigation')
+        if request.tool in _EXEC_TOOLS:
+            path_result = self._validate_path({'path': params.get('cwd', '.')})
+            if not path_result.valid:
+                return reject(path_result.reason)
+            import re
+            command = params.get('command', '')
+            if not isinstance(command, str) or re.search(r'(?i)(\brm\s+-rf|\bdel\s+/|\bformat\b|\bgit\s+push\b|\bcurl\b.*\|\s*(sh|bash)|\bshutdown\b)', command):
+                return reject('Command violates Runtime execution policy')
         if request.tool in _PATH_TOOLS:
             result = self._validate_path(params)
             if not result.valid:
@@ -128,7 +162,9 @@ class ToolRequestValidator:
 
         # 3b. Egress guard for browser and direct HTTP requests.
         if request.tool in _URL_TOOLS:
-            url_result = self._validate_url(params)
+            local_readiness = (request.tool == 'http_request' and params.get('method', 'GET') == 'GET'
+                               and params.get('url') in self._local_readiness_targets and bool(self._owned_handles))
+            url_result = ValidationResult(valid=True, sanitised_params=params) if local_readiness else self._validate_url(params)
             if not url_result.valid:
                 return reject(url_result.reason)
             if self._is_loopback_url(params.get("url", "")):
@@ -149,16 +185,18 @@ class ToolRequestValidator:
         if not struct_result.valid:
             return reject(struct_result.reason)
 
+        if request.tool in {'browser_click', 'browser_type'} and params.get('selector') not in self._observed_selectors:
+            return reject('Selector was not observed in the current browser page schema')
+
         # 5. Duplicate detection — fingerprint (tool + canonical params).
         #    Browser tools are EXCLUDED: identical params address a changed live
         #    page, so deduping them would wrongly block legitimate re-observation.
         #    Budget still guarantees termination (invariant 7).
-        repeatable_observation = request.tool in BROWSER_TOOLS | {
-            "read_process", "check_port", "list_processes",
-        } or (
-            request.tool == "http_request"
-            and str(params.get("method", "GET")).upper() in {"GET", "HEAD"}
-        )
+        # Read-only live observations may repeat only after resource state changes.
+        # Mutations (including fills/clicks/navigation) are never replayed blindly.
+        repeatable_observation = request.tool in {
+            'read_process', 'check_port', 'list_processes', 'browser_snapshot', 'browser_extract',
+        }
         if not repeatable_observation:
             fingerprint = self._fingerprint(request.tool, params)
             if fingerprint in self._seen_fingerprints:
@@ -234,6 +272,16 @@ class ToolRequestValidator:
     def _validate_structure(self, tool: str, params: dict) -> ValidationResult:
         """Check that required parameters for known tools are present and typed."""
         required: dict[str, type] = {}
+        import inspect
+        from wizard_kernel.world.tools import ToolExecutor
+        handler = getattr(ToolExecutor, f'_tool_{tool}', None)
+        if handler is not None:
+            allowed = set(inspect.signature(handler).parameters) - {'self'}
+            unknown = set(params) - allowed
+            if unknown:
+                return ValidationResult(False, f'Unsupported parameters: {sorted(unknown)}')
+        if tool == 'read_file':
+            required = {'path': str}
         if tool == "execute_command":
             required = {"command": str}
         elif tool == "start_process":
@@ -278,11 +326,9 @@ class ToolRequestValidator:
                 return ValidationResult(valid=False, reason="http_request body exceeds 8192 characters.")
         return ValidationResult(valid=True, sanitised_params=params)
 
-    @staticmethod
-    def _fingerprint(tool: str, params: dict) -> str:
+    def _fingerprint(self, tool: str, params: dict) -> str:
         """Stable fingerprint of (tool, params) for dedup. Order-independent on dict keys."""
-        canonical = json.dumps({"tool": tool, "params": params}, sort_keys=True, default=str)
-        return hashlib.sha256(canonical.encode()).hexdigest()
+        return fingerprint(tool, {**params, '_page_url': self._page_url} if tool in BROWSER_TOOLS - {'browser_navigate'} else params)
 
     @staticmethod
     def _is_loopback_url(url: str) -> bool:

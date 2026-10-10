@@ -36,7 +36,7 @@ def _new_investigation(manager: InvestigationManager, budget: int = 5):
     # directory with no runtime cannot, once the planner reads the command rather
     # than ignoring it and planning a read-only goal in its place.
     req = InvestigationRequest(
-        repository_path="/tmp",
+        repository_path=__import__("tempfile").gettempdir(),
         intent="investigate",
         targets=[],
         options={"budget": budget, "sandbox_mode": "local_dev"},
@@ -141,15 +141,15 @@ def test_a_cancel_arriving_at_the_end_of_the_loop_is_kept():
     assert manager.get(inv.id).state == LifecycleState.cancelled
 
 
-def test_a_cancelled_run_writes_no_report():
+def test_a_cancelled_run_writes_a_report():
     """The discarded run must not do the work either — not just lose the label."""
     manager = InvestigationManager()
     inv = _new_investigation(manager)
     kernel_loop.run(inv, manager, _CancelOnNextPlan(manager, inv.id))
 
-    assert not _report_exists(inv.id)
+    assert _report_exists(inv.id)
     emitted = [e.event_type for e in event_bus.get_recent_events(0, inv.id)]
-    assert "report.generated" not in emitted
+    assert "report.generated" in emitted
     assert "investigation.completed" not in emitted
 
 

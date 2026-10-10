@@ -13,11 +13,12 @@ import uuid
 from datetime import datetime, timezone
 
 from wizard_kernel.contracts.request import InvestigationRequest
-from wizard_kernel.contracts.status import LifecycleState
+from wizard_kernel.contracts.status import LifecycleState, TERMINAL_STATES, is_terminal
 from wizard_kernel.session.investigation import Investigation
 from wizard_kernel.storage import fs_store
 
 log = logging.getLogger(__name__)
+MAX_MODEL_CALLS = 32
 
 # States that signal an investigation is done — persist immediately on these
 _TERMINAL_STATES = {
@@ -25,6 +26,7 @@ _TERMINAL_STATES = {
     LifecycleState.incomplete,
     LifecycleState.failed,
     LifecycleState.cancelled,
+    LifecycleState.timed_out,
 }
 
 
@@ -32,6 +34,44 @@ class InvestigationManager:
     def __init__(self) -> None:
         self._store: dict[str, Investigation] = {}
         self._lock = __import__("threading").Lock()
+        self._runners: set[str] = set()
+
+    def acquire_run(self, inv_id: str) -> bool:
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv_id in self._runners or is_terminal(inv.state):
+                return False
+            self._runners.add(inv_id)
+            return True
+
+    def release_run(self, inv_id: str) -> None:
+        with self._lock:
+            self._runners.discard(inv_id)
+
+    def begin_step(self, inv_id: str, phase: LifecycleState, model: bool = False) -> dict:
+        with self._lock:
+            inv = self._store[inv_id]
+            if is_terminal(inv.state):
+                raise RuntimeError("Investigation is terminal")
+            if inv.active_step and inv.active_step['status'] in {'queued', 'running'}:
+                return {**inv.active_step, 'existing': True}
+            if model and inv.model_calls >= MAX_MODEL_CALLS:
+                raise RuntimeError("Model-call budget exhausted")
+            inv.generation += 1
+            inv.model_calls += int(model)
+            inv.state = phase
+            inv.active_step = {'id': f'{inv.id}:{phase.value}:{inv.generation}',
+                               'phase': phase.value, 'status': 'running'}
+            _persist(inv)
+            return dict(inv.active_step)
+
+    def end_step(self, inv_id: str, step_id: str, status: str) -> None:
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv.active_step and inv.active_step['id'] == step_id:
+                if inv.active_step['status'] == 'running':
+                    inv.active_step['status'] = status
+                    _persist(inv)
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
@@ -109,6 +149,16 @@ class InvestigationManager:
                 import json
                 data = json.loads(meta_path.read_text(encoding="utf-8"))
                 inv = _from_dict(data)
+                if not is_terminal(inv.state):
+                    inv.state = LifecycleState.incomplete
+                    inv.last_event = 'Runtime restarted before investigation finished'
+                    inv.active_step = None
+                    _persist(inv)
+                    from wizard_kernel.control.report import generate
+                    from wizard_kernel.control.investigation_graph import InvestigationGraph
+                    fs_store.write_text(inv.id, 'verification_report.md', generate(inv, InvestigationGraph(inv.id), []))
+                    inv.report_ready = True
+                    _persist(inv)
                 self._store[inv.id] = inv
                 restored += 1
             except Exception as exc:  # noqa: BLE001
@@ -132,7 +182,7 @@ def _persist(inv: Investigation) -> None:
 def _from_dict(data: dict) -> Investigation:
     """Reconstruct Investigation from persisted dict — handle datetime + enum fields."""
     from datetime import datetime
-    for key in ("created_at", "updated_at"):
+    for key in ("created_at", "updated_at", "started_at", "deadline_at", "finished_at"):
         if isinstance(data.get(key), str):
             data[key] = datetime.fromisoformat(data[key])
     if isinstance(data.get("state"), str):

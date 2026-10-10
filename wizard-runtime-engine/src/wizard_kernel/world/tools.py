@@ -18,6 +18,7 @@ _REGISTERED_TOOLS = frozenset({
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_back", "browser_extract",
     "http_request",
+    "browser_screenshot",
 })
 
 
@@ -41,6 +42,8 @@ class ToolExecutor:
 
     def execute(self, action: dict, _: str | None = None) -> dict:
         """Main dispatch called from the investigation loop."""
+        if getattr(self, 'control', None):
+            self.control.check()
         tool = action.get("tool", "")
         params = action.get("params", {})
         if tool not in _REGISTERED_TOOLS:
@@ -99,7 +102,7 @@ class ToolExecutor:
             "stdout": result.stdout,
             "stderr": result.stderr,
             "duration_ms": result.duration_ms,
-            "error": None,
+            "error": None if result.ok else (result.stderr or result.stdout or f'Command exited with code {result.exit_code}'),
             "meta": {"command": command},
         }
 
@@ -127,6 +130,7 @@ class ToolExecutor:
             host = f"[{host}]"
         safe_netloc = host + (f":{parsed.port}" if parsed.port else "")
         safe_url = urlunsplit((parsed.scheme, safe_netloc, parsed.path, "", ""))
+        timeout = min(10, self.control.remaining()) if getattr(self, 'control', None) else 10
         request = Request(url, data=body.encode("utf-8") if body is not None else None,
                           method=method.upper())
         class _NoRedirect(HTTPRedirectHandler):
@@ -134,7 +138,7 @@ class ToolExecutor:
                 return None
 
         try:
-            response = build_opener(_NoRedirect).open(request, timeout=10)
+            response = build_opener(_NoRedirect).open(request, timeout=timeout)
             status = response.status
             raw = response.read(8192)
         except HTTPError as exc:
@@ -143,7 +147,7 @@ class ToolExecutor:
         except OSError as exc:
             return {
                 "ok": False,
-                "data": {"url": safe_url, "method": method.upper(), "status_code": None},
+                "data": {"url": safe_url, "method": method.upper(), "status_code": None, "timeout_sec": timeout},
                 "error": str(exc)[:500],
                 "meta": {"url": safe_url, "method": method.upper()},
             }
@@ -151,7 +155,7 @@ class ToolExecutor:
         text = re.sub(r"(?i)(authorization|api[_ -]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
                       r"\1\2[REDACTED]", text)[:2000]
         return {"ok": True, "data": {"url": safe_url, "method": method.upper(),
-                "status_code": status, "body_preview": text}, "error": None,
+                "status_code": status, "body_preview": text, "timeout_sec": timeout}, "error": None,
                 "meta": {"url": safe_url, "method": method.upper(), "status_code": status}}
 
     # ── Background process tools ───────────────────────────────────────────────
@@ -165,9 +169,11 @@ class ToolExecutor:
     def _tool_read_process(self, handle_id: str) -> dict:
         """Poll a background process — get current output + running status."""
         bg = self._sandbox.read_process_output(handle_id)
-        return {"ok": True, "data": bg.model_dump(), "is_running": bg.is_running,
+        ok = bg.is_running or bg.exit_code == 0
+        return {"ok": ok, "data": bg.model_dump(), "is_running": bg.is_running,
                 "stdout": bg.stdout_so_far, "stderr": bg.stderr_so_far,
-                "error": None, "meta": {"handle_id": handle_id}}
+                "error": None if ok else (bg.stderr_so_far or f'Process exited with code {bg.exit_code}'),
+                "meta": {"handle_id": handle_id}}
 
     def _tool_kill_process(self, handle_id: str) -> dict:
         """Terminate a background process."""
@@ -195,6 +201,7 @@ class ToolExecutor:
         if (err := self._browser_ready()) is not None:
             return err
         data = self._browser.navigate(url)
+        data['page_observation'] = self._browser.snapshot()
         return {"ok": True, "data": data, "error": None, "meta": {"url": data.get("url")}}
 
     def _tool_browser_snapshot(self) -> dict:
@@ -239,3 +246,14 @@ class ToolExecutor:
             return err
         data = self._browser.extract()
         return {"ok": True, "data": data, "error": None, "meta": {"url": data.get("url")}}
+
+    def _tool_browser_screenshot(self) -> dict:
+        if (err := self._browser_ready()) is not None:
+            return err
+        import uuid
+        from wizard_kernel.storage import fs_store
+        path = fs_store.ensure(self.control.inv.id) / f'screenshot_{uuid.uuid4().hex[:8]}.png'
+        self._browser.screenshot(str(path))
+        if not path.is_file() or not path.stat().st_size:
+            raise RuntimeError('Browser did not capture a screenshot')
+        return {'ok': True, 'data': {'path': str(path), 'bytes': path.stat().st_size}, 'meta': {}, 'error': None}

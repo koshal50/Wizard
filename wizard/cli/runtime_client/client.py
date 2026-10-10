@@ -253,7 +253,7 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
                 # list of terminal states here. The list this replaced named only
                 # completed/failed/cancelled, so when `incomplete` was added the
                 # poll never ended and the caller waited on a finished run forever.
-                if status_data.get("is_terminal"):
+                if status_data.get("is_terminal") and status_data.get('report_ready', True):
                     # Drain the tail before leaving.
                     #
                     # Reading the events and asking whether the run has stopped
@@ -305,7 +305,7 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
     # there was no report for a run whose report was on disk. The endpoint answers
     # 409 when there is genuinely none, which is what the HTTPError handles.
     report_data: dict = {}
-    if current_state != "cancelled" and status_data.get("is_terminal"):
+    if status_data.get("is_terminal"):
         try:
             report_req = urllib.request.Request(f"{api}/{inv_id}/report", method="GET")
             with urllib.request.urlopen(report_req) as response:

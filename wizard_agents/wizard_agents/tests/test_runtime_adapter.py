@@ -8,9 +8,20 @@ tool names — not the Agent System's internal ones.
 from __future__ import annotations
 
 import pytest
+from app.api.main import app
 from fastapi.testclient import TestClient
 
-from app.api.main import app
+
+def test_verifier_adapter_preserves_observation_ids_and_report_scope():
+    import json
+
+    from app.api.routes_runtime import _to_verification_input
+
+    packet = _kernel_claims_packet(context=json.dumps({'report_contract': {'command': 'investigate', 'targets': ['api']}}))
+    packet['claims'][0]['evidence'][0]['observation_ids'] = ['obs_actual_result']
+    result = _to_verification_input(packet)
+    assert 'obs_actual_result' in result.claims[0].evidence[0].description
+    assert json.loads(result.context)['report_contract']['targets'] == ['api']
 
 
 @pytest.fixture
@@ -81,7 +92,8 @@ def test_explorer_returns_the_kernels_response_shape(client):
     body = r.json()
 
     # contracts/agent.py::ExplorerResponse — exactly these keys, no more.
-    assert set(body) == {"investigation_id", "tool_request"}
+    assert set(body) == {"investigation_id", "node_id", "tool_request"}
+    assert body['node_id'] == 'node_read1'
     assert body["investigation_id"] == "inv_abc123"
     assert set(body["tool_request"]) == {"tool", "parameters", "reason"}
     assert body["tool_request"]["reason"] == ""
@@ -186,7 +198,8 @@ def test_verifier_returns_the_kernels_assessment_shape(client):
 
     # contracts/agent.py::VerifierAssessment — exactly these keys.
     assert set(body) == {"investigation_id", "assessment", "weak_claims",
-                         "recommended_additional_investigations"}
+                         "recommended_additional_investigations", "report_markdown"}
+    assert body['report_markdown'].strip()
     assert body["investigation_id"] == "inv_abc123"
     assert body["assessment"] in ("overall_sufficient", "needs_more_work")
 

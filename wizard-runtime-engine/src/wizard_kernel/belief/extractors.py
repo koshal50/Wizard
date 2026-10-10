@@ -184,6 +184,13 @@ def _extract_requirements_txt(obs: Observation) -> list[ExtractResult]:
 
 @register("command_result")
 def _extract_command_result(obs: Observation) -> list[ExtractResult]:
+    if not obs.success:
+        return []
+    if obs.source_tool == 'read_process':
+        data = obs.payload.get('data') or {}
+        if data.get('is_running') and data.get('handle_id') and data.get('pid'):
+            return [ExtractResult('RUNTIME', f"process:{data['handle_id']}:running", True)]
+        return []
     exit_code = obs.payload.get("exit_code")
     stdout = obs.payload.get("stdout", "")
     stderr = obs.payload.get("stderr", "")
@@ -247,6 +254,17 @@ def _extract_port_check(obs: Observation) -> list[ExtractResult]:
         support_type="support" if active else "contradict",
         confidence="high",  # execution-tier check
     )]
+
+
+@register('http_response')
+def _extract_http_response(obs: Observation) -> list[ExtractResult]:
+    data = obs.payload.get('data') or {}
+    status, url = data.get('status_code'), data.get('url')
+    if not obs.success or status is None or not url:
+        return []
+    positive = 200 <= int(status) < 400
+    return [ExtractResult('WEB', f'http_status:{url}', status,
+                          support_type='support' if positive else 'contradict')]
 
 
 @register("filesystem")

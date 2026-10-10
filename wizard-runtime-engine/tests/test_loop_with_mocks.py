@@ -10,7 +10,7 @@ from wizard_kernel.ports.planner import MockPlanner
 from wizard_kernel.control import loop as kernel_loop
 
 
-def _run_sync(repo_path: str = "/tmp", budget: int = 5) -> tuple:
+def _run_sync(repo_path: str = __import__("tempfile").gettempdir(), budget: int = 5) -> tuple:
     """Run loop synchronously (same thread) and return (inv, manager).
 
     The request is `investigate` with no target — the plainest run there is, and
@@ -90,10 +90,10 @@ def test_validator_rejection_is_given_to_explorer_once_before_node_fails(tmp_pat
     kernel_loop.run(inv, manager, Planner())
 
     assert explorer.calls == 2
-    rejected = explorer.contexts[1]["previous_actions"][-1]
+    rejected = explorer.contexts[1]["recent_failures"][-1]
     assert rejected["tool"] == "browser_snapshot"
-    assert rejected["succeeded"] is False
-    assert "disabled" in rejected["outcome"]
+    assert rejected["status"] == "REJECTED"
+    assert "disabled" in rejected["reason"]
 
 
 def test_loop_budget_terminates():
@@ -154,7 +154,7 @@ def test_loop_reports_incomplete_when_goals_stay_open():
     """
     manager = InvestigationManager()
     req = InvestigationRequest(
-        repository_path="/tmp", intent="verify", targets=[],
+        repository_path=__import__("tempfile").gettempdir(), intent="verify", targets=[],
         options={"budget": 5, "sandbox_mode": "local_dev"},
     )
     inv = manager.create(req)
@@ -251,7 +251,7 @@ def test_the_users_sentence_reaches_the_planner():
     manager = InvestigationManager()
     asked = "why does the login form lose my session on refresh"
     req = InvestigationRequest(
-        repository_path="/tmp", intent="investigate", targets=["architecture"],
+        repository_path=__import__("tempfile").gettempdir(), intent="investigate", targets=["architecture"],
         question=asked,
         options={"budget": 3, "sandbox_mode": "local_dev"},
     )
@@ -276,7 +276,7 @@ def test_a_run_with_no_question_hands_the_planner_an_empty_string():
     planner = _QuestionRecordingPlanner()
     manager = InvestigationManager()
     req = InvestigationRequest(
-        repository_path="/tmp", intent="report", targets=[],
+        repository_path=__import__("tempfile").gettempdir(), intent="report", targets=[],
         options={"budget": 3, "sandbox_mode": "local_dev"},
     )
     inv = manager.create(req)

@@ -17,6 +17,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+
+def test_planner_http_error_preserves_rejection_without_retry(monkeypatch):
+    import httpx
+    from wizard_kernel.session.control import NoProgress
+    calls = []
+    def post(url, **kwargs):
+        calls.append(url)
+        return httpx.Response(400, json={'error': 'Planner proposals rejected: unsupported action type'},
+                              request=httpx.Request('POST', url))
+    monkeypatch.setattr(httpx, 'post', post)
+    with pytest.raises(NoProgress, match='HTTP 400: Planner proposals rejected: unsupported action type'):
+        HttpPlanner('http://127.0.0.1:8787').next_nodes({})
+    assert calls == ['http://127.0.0.1:8787/plan/next']
+
 from wizard_kernel.belief.knowledge_graph import KnowledgeGraph
 from wizard_kernel.contracts.node import Hypothesis, HypothesisKind
 from wizard_kernel.contracts.plan import GoalDefinition, TechnologyEntry, TechnologyPlan
@@ -282,6 +296,7 @@ def test_a_failed_action_is_not_proposed_again():
     graph = InvestigationGraph("inv_test")
     graph.add(InvestigationNode(
         id="node_failed", type="execute", goal_id="goal_0",
+        executed_action={"tool": "execute_command", "params": {"command": "npm test --silent"}},
         action={"tool": "execute_command", "params": {"command": "npm test --silent"}},
         hypothesis=_ALWAYS))
     graph.mark_failed("node_failed")
@@ -329,7 +344,7 @@ def test_active_technology_follows_the_open_goal_not_the_plan_order():
     goals = GoalEngine("inv_test")
     goals.add(Goal(id="g0", name="Verify Containerization", required_claim_types=["DEPLOYMENT"]))
     goals.add(Goal(id="g1", name="Verify Runtime", required_claim_types=["RUNTIME"]))
-    goals.mark_satisfied("g0")
+    goals._goals["g0"].state = "satisfied"
 
     assert kernel_loop._active_technology(plan, goals) == "Python"
 
@@ -337,7 +352,7 @@ def test_active_technology_follows_the_open_goal_not_the_plan_order():
 def test_active_technology_falls_back_when_nothing_is_open():
     goals = _fixture_goals()
     for g in goals.all():
-        goals.mark_satisfied(g.id)
+        goals._goals[g.id].state = "satisfied"
     assert kernel_loop._active_technology(_fixture_plan(), goals) == "Python"
     assert kernel_loop._active_technology(TechnologyPlan(technologies=[]), goals) == "unknown"
 

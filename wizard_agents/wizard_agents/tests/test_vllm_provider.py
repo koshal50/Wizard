@@ -94,7 +94,7 @@ def test_explorer_requests_strict_canonical_toolrequest_schema(monkeypatch, vllm
     provider = VLLMProvider()
 
     class _Gate:
-        def acquire(self):
+        def acquire(self, deadline=None):
             pass
 
     provider._cerebras_gate = _Gate()

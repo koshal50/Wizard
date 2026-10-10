@@ -365,7 +365,8 @@ class TestGoalPersistence:
             required_claim_types=["RUNTIME"],
             belief_threshold=0.65,
         ))
-        goals.mark_satisfied("goal_001")
+        goals._goals["goal_001"].state = "satisfied"
+        goals._goals["goal_001"].progress = 1.0
         goals.persist()
 
         # New engine restores from disk
@@ -520,7 +521,7 @@ class TestPlannerDrivesGoals:
                     initial_goals=[
                         GoalDefinition(
                             name="Entirely Custom Goal Name 🔬",
-                            required_claim_types=["FILESYSTEM"],  # kernel must use this
+                            required_claim_types=["FILESYSTEM"], required_evidence=["repository_read"],  # explicit evidence contract
                         )
                     ],
                     priority_files=[],

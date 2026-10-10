@@ -226,10 +226,12 @@ class TestExtractors:
 
     def test_command_result_extractor_exit_code(self):
         obs = _obs("command_result", {
+            "ok": True,
             "exit_code": 0,
             "stdout": "added 47 packages",
             "stderr": "",
         }, tool="execute_command")
+        obs = obs.model_copy(update={'success': True})
         results = extractors.extract(obs)
         keys = {r.key for r in results}
         assert "execute_command_exit_code" in keys

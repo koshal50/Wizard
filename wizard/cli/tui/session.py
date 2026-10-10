@@ -253,6 +253,12 @@ class TuiSession:
         # environment's — which `run_tui` fills in — or a wired run silently
         # degrades to an offline one.
         options = RequestOptions.from_env()
+        if self.family in {'verify', 'investigate'}:
+            from wizard.cli.parser.intent_parser import parse_intent
+            from wizard.cli.tui.services import ensure_chromium
+            parsed = parse_intent(self.intent_text, self.family, menu_target=self.target or None)
+            if parsed.urls or options.browser_enabled is True:
+                ensure_chromium(announce=False)
 
         # The browser window is the point: a reader who watches the agent work
         # wants to see the page it is driving, not only the pane this view draws
@@ -347,6 +353,7 @@ class TuiSession:
             time.sleep(min(remaining, 0.05))
 
     def _log(self, text: str, style: str, kind: str = "step", role: str = "") -> None:
+        text = _safe_display(text)
         with self._lock:
             self.activity.append(LogLine(text, style, kind, role))
             self.now = text
@@ -361,8 +368,14 @@ class TuiSession:
         self.on_change()
 
     def _consume(self, ev: dict) -> None:
+        if not isinstance(ev, dict):
+            self._log('Runtime sent an unreadable event', 'wiz.warn', role='runtime')
+            return
         ev_type = ev.get("event_type", "")
         payload = ev.get("payload") or {}
+        if not isinstance(payload, dict):
+            self._log('Runtime sent an unreadable event', 'wiz.warn', role='runtime')
+            return
 
         # Every event carries the Runtime's id for the run, so the first one
         # seen is recorded here — `cancel()` addresses the cancel endpoint by
@@ -399,6 +412,7 @@ class TuiSession:
                 # (which goals stayed open, or that the budget ran out) instead
                 # of leaving the reader to guess from a bare state name.
                 "incomplete": "the investigation ended incomplete",
+                'timed_out': 'Investigation timed out after 5 minutes',
             }.get(self.status, f"the investigation ended · {self.status}")
             if self.status != "completed":
                 reason = str((ev.get("stats") or {}).get("last_event") or "").strip()
@@ -425,7 +439,10 @@ class TuiSession:
         if ev_type.startswith("browser."):
             self._absorb_browser(ev_type, payload)
 
-        line, style = _narrate(ev_type, payload)
+        try:
+            line, style = _narrate(ev_type, payload)
+        except (TypeError, ValueError, AttributeError, KeyError):
+            line, style = 'Runtime update could not be displayed; details are in diagnostics', 'wiz.warn'
         if line:
             if ev_type == "context_supplied":
                 line = self._context_news(line, payload)
@@ -603,6 +620,8 @@ _DOING: dict[str, str] = {
     "browser_type":     "typing into",
     "browser_back":     "going back from",
     "browser_extract":  "extracting from the page",
+    "http_request": "requesting",
+    "browser_screenshot": "capturing screenshot",
 }
 
 _KIND: dict[str, str] = {"claim.admitted": "evidence"}
@@ -738,7 +757,19 @@ def _subject(tool: str, params: dict) -> str:
     return ""
 
 
+def _safe_display(value) -> str:
+    import re
+    text = str(value)
+    text = re.sub(r'\x1b\][^\x07]*(?:\x07|\x1b\\)', '', text)
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    return re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', text)[:400]
+
+
 def _narrate(ev_type: str, payload: dict) -> tuple[str, str]:
+    if ev_type == 'node.failed':
+        return '! Investigation step could not be verified', 'wiz.warn'
+    if ev_type == 'planner.node_skipped':
+        return '', 'wiz.dim'
     """Map a runtime event to a flow-narration line + style."""
     if ev_type == "seams.resolved":
         return _seams(payload)

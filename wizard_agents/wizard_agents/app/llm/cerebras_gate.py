@@ -27,8 +27,11 @@ class CerebrasRateGate:
         db.execute("PRAGMA busy_timeout=30000")
         return db
 
-    def acquire(self) -> None:
+    def acquire(self, deadline=None) -> None:
         while True:
+            if deadline is not None and time.time() >= deadline:
+                from app.llm.base import LLMError
+                raise LLMError('Investigation deadline reached in provider rate gate')
             with self._connect() as db:
                 db.execute("BEGIN IMMEDIATE")
                 row = db.execute("SELECT next_allowed FROM provider_gate WHERE provider='cerebras'").fetchone()
@@ -45,6 +48,9 @@ class CerebrasRateGate:
                     wait = next_allowed - now
             if wait <= 0:
                 return
+            if deadline is not None and time.time() + wait >= deadline:
+                from app.llm.base import LLMError
+                raise LLMError('Provider rate gate exceeds investigation deadline')
             _LOG.info('{"event":"provider_rate_limit_wait","provider":"cerebras","wait_seconds":%.3f}', wait)
             time.sleep(wait)
 

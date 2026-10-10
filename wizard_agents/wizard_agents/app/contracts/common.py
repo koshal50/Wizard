@@ -49,6 +49,7 @@ class ToolName(str, Enum):
     BROWSER_TYPE = "browser_type"
     BROWSER_BACK = "browser_back"
     BROWSER_EXTRACT = "browser_extract"
+    BROWSER_SCREENSHOT = 'browser_screenshot'
 
     # Agent-side reasoning vocabulary with no Runtime tool behind them. They are
     # never in the `available_tools` the Runtime sends, so Explorer cannot

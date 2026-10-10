@@ -232,8 +232,12 @@ def top_panel(repo_path: str = "", terminal_rows: int = 40,
     # half-panel is fifty-five, so left alone it wraps — and the panel's height
     # is fixed by the art, so the wrapped half is clipped off the bottom rather
     # than accommodated. The tail is kept because the tail is the folder.
+    if terminal_rows < 32:
+        return Panel(Group(Text(f'wizard v{__version__}', style='wiz.welcome'),
+                           Text(_elide(repo_path or os.getcwd(), max(20, terminal_cols - 8)), style='wiz.footer')),
+                     box=ROUNDED, border_style='wiz.panel', padding=(0, 1))
     repo_line = Text(justify="center")
-    repo_line.append(_elide(_short_home(repo_path) if repo_path else os.getcwd(), 48),
+    repo_line.append(_elide(_short_home(repo_path) if repo_path else os.getcwd(), art_cols(terminal_cols)),
                      style="wiz.footer")
 
     # The version, and nothing else. It was the version and the four command
@@ -268,7 +272,7 @@ def top_panel(repo_path: str = "", terminal_rows: int = 40,
     right = Group(*right_parts)
 
     grid = Table.grid(padding=(0, 3), expand=True)
-    grid.add_column(ratio=1)
+    grid.add_column(width=art_cols(terminal_cols) + 2, no_wrap=True)
     grid.add_column(ratio=1)
     grid.add_row(Padding(left, (0, 1)), Padding(right, (0, 1)))
 
@@ -300,7 +304,7 @@ def top_panel_height(terminal_rows: int = 40, terminal_cols: int = 120) -> int:
     lines. The right half is shorter than this at every history length the panel
     shows, so the art is the taller of the two and sets the height.
     """
-    return _art_box(terminal_rows, terminal_cols)[0] + 7
+    return 4 if terminal_rows < 32 else _art_box(terminal_rows, terminal_cols)[0] + 7
 
 
 def command_box(content: RenderableType) -> RenderableType:

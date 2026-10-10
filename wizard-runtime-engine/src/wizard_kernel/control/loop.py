@@ -20,18 +20,22 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from wizard_kernel.belief import extractors
 from wizard_kernel.belief.evidence import EvidenceEngine
 from wizard_kernel.belief.knowledge_graph import KnowledgeGraph
 from wizard_kernel.belief.trust import source_tier_for_tool
-from wizard_kernel.contracts.node import InvestigationNode
-from wizard_kernel.contracts.plan import TechnologyPlan
+from wizard_kernel.contracts.node import InvestigationNode, Hypothesis, HypothesisKind, ClaimTemplate
+from wizard_kernel.contracts.plan import TechnologyPlan, GoalDefinition
 from wizard_kernel.contracts.status import LifecycleState
 from wizard_kernel.context.engine import ContextEngine
 from wizard_kernel.control import hypothesis as hyp_eval
+from wizard_kernel.control.report_scope import report_contract
+from wizard_kernel.control.runtime_checks import listening_url, readiness_target, runtime_levels, observed_get_routes, readiness_observations, readiness_failure, readiness_source_files
 from wizard_kernel.control.goals import Goal, GoalEngine, evidence_categories_for_tool
 from wizard_kernel.ports.goal_policy import goal_evidence_for
 from wizard_kernel.control.investigation_graph import InvestigationGraph, register_graph
@@ -46,6 +50,8 @@ from wizard_kernel.storage import fs_store
 from wizard_kernel.world import repository, scanner
 from wizard_kernel.world.sandbox import get_sandbox
 from wizard_kernel.world.tools import ToolExecutor
+from wizard_kernel.session.control import RunControl, ControlledPort, InvestigationStopped, DeadlineExceeded, NoProgress
+from wizard_kernel.contracts.actions import fingerprint, safe_parameters as _safe_parameters, failure_reason
 
 if TYPE_CHECKING:
     from wizard_kernel.ports.planner import PlannerPort
@@ -81,14 +87,9 @@ def run(
     planner: "PlannerPort",
 ) -> None:
     """Entry point. Sets up all sub-systems then delegates to _run_loop."""
-    # Validate repository path before touching any sandbox (surfaces clean errors)
-    try:
-        repository.validate(inv.repository_path)
-    except ValueError as exc:
-        manager.update(inv.id, state=LifecycleState.failed,
-                       last_event=f"invalid path: {exc}", error=str(exc))
+    if not manager.acquire_run(inv.id):
         return
-
+    control = RunControl(inv, manager)
     bus = event_bus.create(inv.id)
     kg = KnowledgeGraph(inv.id)
     ev_engine = EvidenceEngine(kg)
@@ -104,7 +105,9 @@ def run(
         inv.repository_path,
         allowed_domains=inv.options.get("allowed_domains", []),
         browser_enabled=bool(inv.options.get("browser_enabled")),
+        read_only=inv.intent == 'explain',
     )
+    validator.control = control
     completed_ids: set[str] = set()
 
     # Context Engine: read-only projection of state into agent context (invariant 3).
@@ -144,25 +147,82 @@ def run(
     })
 
     try:
-        sandbox.start(inv.repository_path)
+        control.check()
+        repository.validate(inv.repository_path)
+        sandbox.deadline_at = control.operation_deadline_at
+        control.call(LifecycleState.ready, lambda: sandbox.start(inv.repository_path))
         if browser is not None:
-            browser.start()
+            browser.deadline_at = control.operation_deadline_at
+            control.call(LifecycleState.ready, browser.start)
             browser_mod.register_runtime(inv.id, browser)
+        fs_store.write(inv.id, 'resources.json', {'browser_session': f'{inv.id}:browser' if browser else None,
+                                                 'browser_started': browser is not None, 'sandbox_started': True})
         tools = ToolExecutor(sandbox, inv.repository_path, browser=browser)
+        tools.control = control
+        planner = ControlledPort(planner, control, LifecycleState.planning)
+        explorer = ControlledPort(explorer, control, LifecycleState.exploring)
+        verifier = ControlledPort(verifier, control, LifecycleState.verifying)
         _run_loop(inv, manager, planner, explorer, verifier, kg, ev_engine, graph, goals,
                   obs_store, tools, budget, bus, validator, completed_ids, context_engine)
+    except DeadlineExceeded as exc:
+        manager.update(inv.id, state=LifecycleState.timed_out, last_event=str(exc), error=str(exc))
+    except NoProgress as exc:
+        manager.update(inv.id, state=LifecycleState.incomplete, last_event=str(exc), error=str(exc))
+    except InvestigationStopped:
+        pass
     except Exception as exc:  # noqa: BLE001
+        log.exception("Investigation %s failed", inv.id)
         manager.update(inv.id, state=LifecycleState.failed,
-                       last_event=f"fatal: {exc}", error=str(exc))
+                       last_event=f"Investigation failed: {type(exc).__name__}", error=str(exc)[:500])
     finally:
         # The graph deliberately stays registered after the run ends: a viewer that
         # opens the live page once the investigation is already complete should see
         # its final shape, not an empty registry. This matches the manager, which
         # likewise keeps every investigation it has seen.
-        sandbox.stop()
+        cleanup = {}
+        try:
+            sandbox.stop()
+            cleanup['processes_terminated'] = True
+        except Exception as exc:
+            cleanup['processes_terminated'] = False
+            cleanup['process_error'] = type(exc).__name__
         if browser is not None:
             browser_mod.unregister_runtime(inv.id)
-            browser.stop()
+            try:
+                browser.stop()
+                cleanup['browser_closed'] = bool(getattr(browser, 'closed', True))
+            except Exception as exc:
+                cleanup['browser_closed'] = False
+                cleanup['browser_error'] = type(exc).__name__
+        else:
+            cleanup['browser_closed'] = None
+        inv.cleanup = cleanup
+        inv.finished_at = datetime.now(timezone.utc)
+        if not __import__('wizard_kernel.contracts.status', fromlist=['is_terminal']).is_terminal(inv.state):
+            manager.update(inv.id, state=LifecycleState.incomplete, last_event='Investigation stopped without a completed goal')
+        try:
+            _finalize_report(inv, graph, kg, goals, obs_store, bus)
+        except Exception:
+            log.exception('Detailed report finalization failed for %s', inv.id)
+            from wizard_kernel.control.report import generate
+            fs_store.write_text(inv.id, 'verification_report.md', generate(inv, graph, obs_store.all()))
+        finally:
+            manager.update(inv.id, state=inv.state, cleanup=cleanup, finished_at=inv.finished_at,
+                           report_ready=True, active_goals=goals.to_api_list(obs_store.all()))
+            manager.release_run(inv.id)
+
+
+def _finalize_report(inv, graph, kg, goals, obs_store, bus):
+    """Every exit uses the same evidence-based finalization, after cleanup."""
+    from wizard_kernel.control.report import generate
+    graph.persist()
+    kg.persist()
+    goals.persist()
+    from dataclasses import asdict
+    fs_store.write(inv.id, 'events.json', [asdict(event) for event in bus.get_recent_events()])
+    path = fs_store.write_text(inv.id, 'verification_report.md',
+                              generate(inv, graph, obs_store.all(), kg, goals))
+    bus.emit(event_bus.ReportGenerated, {'path': str(path)})
 
 
 def _run_loop(
@@ -185,7 +245,7 @@ def _run_loop(
 ) -> None:
     # ── Scanning ──────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.scanning, last_event="fast scan started")
-    manifest = scanner.scan(inv.repository_path, inv.id)
+    manifest = tools.control.call(LifecycleState.scanning, lambda: scanner.scan(inv.repository_path, inv.id))
     fs_store.write(inv.id, "manifest.json", manifest.model_dump())
 
     # ── Planning ──────────────────────────────────────────────────────────────
@@ -201,6 +261,25 @@ def _run_loop(
     plan = planner.initial(
         manifest, inv.intent, inv.targets, inv.options, question=inv.question
     )
+    if inv.intent == 'explain':
+        for index, tech in enumerate(plan.technologies):
+            tech.initial_goals = [GoalDefinition(name='Inspect ' + (', '.join(inv.targets) or 'repository'),
+                required_claim_types=['FILE_READ'], required_evidence=['repository_read'])] if index == 0 else []
+        plan.seed_nodes = [n for n in plan.seed_nodes if n.action.get('tool') in {'read_file', 'list_tree', 'search_files', 'path_exists'}]
+        plan.seed_nodes = [n.model_copy(update={
+            'action': {**n.action, 'runtime_required': True},
+            'on_success': ClaimTemplate(claim_type='FILE_READ', key=n.action['params']['path'], value=True),
+        }) if n.action.get('tool') == 'read_file' else n for n in plan.seed_nodes]
+    browser_requested = bool(inv.options.get('browser_enabled')) or (
+        inv.intent in {'verify', 'investigate'} and bool(re.search(
+            r'\b(?:browser|web|front[- ]?end|ui)\b|https?://',
+            ' '.join([*inv.targets, inv.question]), re.IGNORECASE)))
+    if not browser_requested:
+        for tech in plan.technologies:
+            tech.initial_goals = [g for g in tech.initial_goals if not any(
+                requirement.startswith('browser_') for requirement in
+                [*goal_evidence_for(g.name).required_evidence, *g.required_evidence])]
+        plan.seed_nodes = [n for n in plan.seed_nodes if n.action.get('tool') not in BROWSER_TOOLS]
     fs_store.write(inv.id, "plan.json", plan.model_dump())
 
     # The Runtime strengthens Planner declarations with its deterministic policy;
@@ -223,6 +302,11 @@ def _run_loop(
             ))
 
     for node in plan.seed_nodes:
+        if (not inv.options.get('browser_enabled') and inv.intent == 'investigate'
+                and 'runtime' in inv.targets and node.action.get('tool') == 'read_file'):
+            # These source prerequisites establish the entry point and scripts.
+            # Do not replace them with an ungrounded server launch.
+            node = node.model_copy(update={'action': {**node.action, 'runtime_required': True}})
         graph.add(node)
 
     manager.update(inv.id, state=LifecycleState.investigation_loop,
@@ -237,6 +321,7 @@ def _run_loop(
 
     # ── Core loop ─────────────────────────────────────────────────────────────
     while not budget.is_exhausted():
+        tools.control.check()
         # Check if cancelled externally
         if inv.state == LifecycleState.cancelled:
             log.info("investigation %s cancelled externally, halting loop.", inv.id)
@@ -256,7 +341,8 @@ def _run_loop(
             for g in goals.all()
         }
 
-        node = next_ready(graph.all_nodes(), completed_ids,
+        required = [n for n in graph.get_ready_nodes(completed_ids) if n.action.get('runtime_required')]
+        node = required[0] if required else next_ready(graph.all_nodes(), completed_ids,
                           goal_urgency=goal_urgency, kg_trust_by_goal=kg_trust_by_goal)
 
         if node is None:
@@ -272,14 +358,16 @@ def _run_loop(
                 # report can say which of the two happened.
                 gave_up = True
                 break
+            added = 0
             for n in new_nodes:
                 if _already_scheduled(graph, completed_ids, n):
-                    bus.emit(event_bus.PlannerNodeSkipped, {
-                        "node_id": n.id, "type": n.type,
-                        "reason": "a node for the same action is already queued",
-                    })
                     continue
                 graph.add(n)
+                added += 1
+            if not added or not next_ready(graph.all_nodes(), completed_ids):
+                failures = [o for o in obs_store.all() if not o.success]
+                detail = f'; last failure: {failure_reason(failures[-1].payload)}' if failures else ''
+                raise NoProgress('No forward progress: Planner produced no new runnable action' + detail)
             continue
 
         # Planner seed nodes are often intentionally goal-agnostic. Keep the
@@ -287,10 +375,16 @@ def _run_loop(
         # their execution to the first still-open goal unless the Planner named
         # one explicitly.
         active_goal_id = node.goal_id
+        if active_goal_id is not None and goals.get(active_goal_id) is None:
+            active_goal_id = None
         if active_goal_id is None and goals.open_goals():
             active_goal_id = goals.open_goals()[0].id
+        if node.goal_id != active_goal_id:
+            node = node.model_copy(update={'goal_id': active_goal_id})
+            graph._nodes[node.id] = node
 
         graph.set_state(node.id, "running")
+        manager.update(inv.id, state=LifecycleState.exploring)
         manager.update(inv.id, last_event=f"executing {node.id} ({node.type})")
 
         # ── Phase 6: Explorer Agent determines HOW to execute this node ───────
@@ -304,10 +398,11 @@ def _run_loop(
         # A deterministic validator rejection is actionable feedback, not a
         # provider failure. Persist it before one corrective Explorer decision
         # so the existing Context Engine can show the rejected tool and reason.
-        # Provider/schema failures still stop immediately, and the one-pass
+        # Invalid node decisions also get this correction. Provider failures
+        # still stop immediately, and the one-pass
         # bound prevents an invalid action from creating an LLM retry loop.
         if (tool_action is None and decision_failure
-                and decision_failure.get("error_type") == "TOOL_REQUEST_REJECTED"):
+                and decision_failure.get("error_type") in {"TOOL_REQUEST_REJECTED", "EXPLORER_OUTPUT_INVALID"}):
             obs_store.append(
                 node_id=node.id,
                 source_tool="explorer",
@@ -345,8 +440,9 @@ def _run_loop(
             bus.emit(event_bus.NodeFailed, {"node_id": node.id, "type": node.type,
                                             "reason": failure["error_type"]})
             if failure["error_type"].startswith("EXPLORER_"):
-                gave_up = True
-                break
+                raise NoProgress(failure.get('detail') or 'Explorer could not provide a usable decision')
+            if failure['error_type'] == 'TOOL_REQUEST_REJECTED':
+                raise NoProgress('No forward progress: Explorer repeatedly requested an invalid or already rejected action')
             continue
 
         # The step is BEGINNING, said before it runs rather than after.
@@ -376,7 +472,10 @@ def _run_loop(
         })
 
         # Execute — failures become observations, never crashes (invariant 4)
-        payload = _safe_execute(tools, tool_action)
+        previous_results = [o for o in obs_store.all() if o.source_tool == tool_action.get('tool')
+                            and (o.payload.get('action') or {}).get('params') == tool_action.get('params')]
+        payload = tools.control.call(LifecycleState.executing, lambda: _safe_execute(tools, tool_action))
+        manager.update(inv.id, state=LifecycleState.observing)
         # The validator's resource prerequisites advance only from the actual
         # executor result. A requested/planned action never marks a resource ready.
         validator.record_execution(
@@ -385,6 +484,17 @@ def _run_loop(
 
         # Immutable observation (invariant 1)
         tool_name = tool_action.get("tool", "unknown")
+        payload['action'] = {'tool': tool_name, 'params': tool_action.get('params', {})}
+        payload['required_check'] = bool(node.action.get('required_check'))
+        if node.action.get('readiness_check') and tool_name == 'http_request' and _planned_action_matches(node.action, tool_name, tool_action.get('params') or {}):
+            payload['readiness_check'] = node.action['readiness_check']
+            readiness_error = readiness_failure(payload)
+            if payload.get('ok') and readiness_error:
+                payload['ok'] = False
+                payload['error'] = readiness_error
+        payload['outcome'] = 'EXECUTED' if payload.get('ok') else 'FAILED'
+        graph.set_state(node.id, 'running')
+        graph._nodes[node.id] = graph.get(node.id).model_copy(update={'executed_action': tool_action})
         obs = obs_store.append(
             node_id=node.id,
             source_tool=tool_name,
@@ -395,6 +505,8 @@ def _run_loop(
             execution_id=uuid.uuid4().hex,
             evidence_categories=evidence_categories_for_tool(tool_name, payload),
         )
+        if previous_results and _same_result(previous_results[-1].payload, payload):
+            raise NoProgress('No forward progress: repeated observation provided no new information')
 
         # Narration plane: discrete browser.* events on the EventBus. Pixels stream
         # separately over the screencast WebSocket and never enter event history.
@@ -407,6 +519,10 @@ def _run_loop(
         node_outcome = hyp_eval.evaluate(node, obs)
         planned_action_matches = _planned_action_matches(node.action, tool_name,
                                                           tool_action.get("params") or {})
+        if not inv.options.get('browser_enabled') and tool_name != node.action.get('tool'):
+            # A foreground exit-code hypothesis cannot evaluate an owned
+            # background handle. Planned claim templates remain guarded below.
+            node_outcome = 'expected_success' if obs.success else 'expected_failure'
         new_claims_this_node = 0
 
         match node_outcome:
@@ -463,6 +579,8 @@ def _run_loop(
 
         # ── Run deterministic extractors on every observation ─────────────────
         for extract_result in extractors.extract(obs):
+            if not obs.success:
+                continue
             result = ev_engine.admit(
                 inv_id=inv.id,
                 claim_type=extract_result.claim_type,
@@ -482,6 +600,58 @@ def _run_loop(
                 })
 
         # ── Update goals based on all new claims ──────────────────────────────
+        # Discover server-specific requirements before checking completion. A
+        # live HTTP server cannot close its runtime goal without a response.
+        goal = goals.get(active_goal_id) if active_goal_id else None
+        if goal and goal.name == 'Verify Runtime' and observed_get_routes(obs_store.all()):
+            if 'http_readiness' not in goal.required_evidence:
+                goal.required_evidence.append('http_readiness')
+                goal.state = 'open'
+        # A route can be discovered after process inspection. Reuse that owned
+        # process observation rather than starting or polling the process again.
+        process_observations = [o for o in obs_store.all() if o.goal_id == active_goal_id
+                                and o.source_tool == 'read_process' and o.success
+                                and (o.payload.get('data') or {}).get('is_running')]
+        url = listening_url(process_observations[-1].payload) if process_observations else None
+        if url and goal and goal.name == 'Verify Runtime':
+            for requirement in ('runtime_startup', 'http_readiness'):
+                if requirement not in goal.required_evidence:
+                    goal.required_evidence.append(requirement)
+            goal.state = 'open'
+            target = readiness_target(obs_store.all(), url)
+            if not target and not any(n.action.get('readiness_source_discovery') for n in graph.all_nodes()):
+                queued_paths = {str((n.action.get('params') or {}).get('path', '')).replace('\\', '/')
+                                for n in graph.all_nodes() if n.action.get('tool') == 'read_file'}
+                for path in readiness_source_files(obs_store.all(), inv.repository_path):
+                    if path in queued_paths:
+                        continue
+                    graph.add(InvestigationNode(id=f'node_{uuid.uuid4().hex[:6]}', type='read',
+                        action={'tool': 'read_file', 'params': {'path': path, 'max_bytes': 65536},
+                                'runtime_required': True, 'readiness_source_discovery': True},
+                        hypothesis=Hypothesis(kind=HypothesisKind.always_success), depends_on=[node.id],
+                        goal_id=goal.id, on_success=ClaimTemplate(claim_type='FILE_READ', key=path, value=True)))
+            if (target and not readiness_observations(obs_store.all(), goal.id)
+                    and not any(n.goal_id == goal.id and n.action.get('readiness_check') for n in graph.all_nodes())):
+                validator.register_local_readiness(target)
+                from urllib.parse import urlsplit
+                endpoint = urlsplit(target)
+                port_node = InvestigationNode(id=f'node_{uuid.uuid4().hex[:6]}', type='execute',
+                    action={'tool': 'check_port', 'params': {'host': endpoint.hostname, 'port': endpoint.port or (443 if endpoint.scheme == 'https' else 80)}, 'runtime_required': True},
+                    hypothesis=Hypothesis(kind=HypothesisKind.always_success), depends_on=[node.id], goal_id=goal.id)
+                graph.add(port_node)
+                existing = next((n for n in graph.all_nodes() if n.state == 'waiting'
+                    and n.goal_id in {None, goal.id} and n.action.get('tool') == 'http_request'
+                    and (n.action.get('params') or {}).get('url') == target
+                    and (n.action.get('params') or {}).get('method', 'GET') == 'GET'), None)
+                readiness_node = InvestigationNode(id=existing.id if existing else f'node_{uuid.uuid4().hex[:6]}', type='execute',
+                    action={'tool': 'http_request', 'params': {'url': target, 'method': 'GET'}, 'runtime_required': True,
+                            'readiness_check': {'purpose': 'HTTP readiness', 'expected_status': '2xx', 'discovered_from': 'repository GET route and process listening URL'}},
+                    hypothesis=Hypothesis(kind=HypothesisKind.http_status, success_values=list(range(200, 300))),
+                    depends_on=list(dict.fromkeys([*(existing.depends_on if existing else []), port_node.id])), goal_id=goal.id)
+                if existing:
+                    graph._nodes[existing.id] = readiness_node
+                else:
+                    graph.add(readiness_node)
         satisfied_before = {g.id for g in goals.all() if g.state == "satisfied"}
         goals.evaluate_all(kg, obs_store.all())
         for g in goals.all():
@@ -489,7 +659,7 @@ def _run_loop(
                 bus.emit(event_bus.GoalSatisfied, {"goal_id": g.id, "goal_name": g.name})
 
         # ── Complete or fail the node in the graph ────────────────────────────
-        if node_outcome in ("expected_success", "expected_failure"):
+        if obs.success and node_outcome in ("expected_success", "expected_failure"):
             graph.set_state(node.id, "complete", obs_ids=[obs.id])
             # A failure has always been narrated; a success has not, which left
             # the bus carrying only what went wrong. A viewer watching a run
@@ -508,7 +678,23 @@ def _run_loop(
             })
         else:
             graph.mark_failed(node.id, obs_ids=[obs.id])
-            bus.emit(event_bus.NodeFailed, {"node_id": node.id, "type": node.type})
+            bus.emit(event_bus.NodeFailed, {"node_id": node.id, "type": node.type,
+                                          'tool': tool_name, 'reason': failure_reason(payload)})
+
+        recovery = _local_service_recovery(inv, node, tool_action, payload, active_goal_id, goals)
+        if recovery is not None and not _already_scheduled(graph, completed_ids, recovery):
+            graph.add(recovery)
+
+        if (tool_name == 'start_process' and payload.get('ok')
+                and not inv.options.get('browser_enabled')):
+            handle = (payload.get('data') or {}).get('handle_id')
+            if handle:
+                # One real lifecycle observation, on the existing frontier, must
+                # follow creation. This is not a retry or a second scheduler.
+                graph.add(InvestigationNode(id=f'node_{uuid.uuid4().hex[:6]}', type='execute',
+                    action={'tool': 'read_process', 'params': {'handle_id': handle}, 'runtime_required': True},
+                    hypothesis=Hypothesis(kind=HypothesisKind.always_success),
+                    depends_on=[node.id], parent_id=node.id, goal_id=active_goal_id))
 
         completed_ids.add(node.id)
         budget.consume()
@@ -574,7 +760,7 @@ def _run_loop(
         # ── Phase 6: Periodic Verifier Agent consultation ─────────────────────
         # The Verifier reviews claims but has NO authority to modify trust or goals.
         # The Runtime independently decides how to respond to its assessment.
-        if nodes_since_last_verify >= _VERIFIER_INTERVAL:
+        if nodes_since_last_verify >= _VERIFIER_INTERVAL and any(g.state == 'satisfied' and g.id not in satisfied_before for g in goals.all()):
             nodes_since_last_verify = 0
             _consult_verifier(inv, verifier, kg, goals, graph, planner, plan, budget,
                               obs_store, bus, completed_ids=completed_ids)
@@ -592,21 +778,12 @@ def _run_loop(
         log.info("investigation %s was cancelled before reporting; not completing it.", inv.id)
         return
 
-    manager.update(inv.id, state=LifecycleState.reporting, last_event="generating report")
-    graph.persist()
-    kg.persist()
-    goals.persist()
-
-    from wizard_kernel.control.report import generate
-    report_md = generate(inv, graph, obs_store.all(), kg, goals)
-    report_path = fs_store.write_text(inv.id, "verification_report.md", report_md)
     # Absolute, not the ".wizard/investigations/<id>/..." shape it used to emit.
     # That path is relative to *this process's* working directory, which is not
     # the directory of anyone reading the event — the Engine runs as its own
     # process, and a watcher, a CLI and a browser all sit elsewhere. Printed as
     # written it named a file that could not be opened from where it was read,
     # which is the whole of "the report is missing".
-    bus.emit(event_bus.ReportGenerated, {"path": str(report_path)})
 
     # ── Terminal state ────────────────────────────────────────────────────────
     # What the run actually achieved, not what a report was written for. The
@@ -659,7 +836,30 @@ def _resolve_tool_action(
     # Ask the Explorer Agent — it must return a ToolRequest
     try:
         response = explorer.request(context)
+        # Revalidate at the execution authority, including responses from adapters
+        # that do not enforce the provider schema. The reserved node must still run.
+        from wizard_kernel.control.investigation_graph import get_graph
+        live_graph = get_graph(context['investigation_id'])
+        live_node = live_graph.get(node.id) if live_graph else None
+        if (response.investigation_id != context['investigation_id']
+                or (response.node_id is not None and response.node_id != node.id)
+                or (live_graph is not None and (live_node is None or live_node.state != 'running'))):
+            return None, {'error_type': 'EXPLORER_OUTPUT_INVALID', 'status': 'REJECTED',
+                          'detail': f'Invalid Explorer node selection: expected {node.id}, got {response.node_id}',
+                          'valid_node_ids': [node.id] if live_node is None or live_node.state == 'running' else [],
+                          'returned_node_id': response.node_id, 'retryable': False,
+                          'required_next_behavior': 'copy the reserved node ID from node_selection.valid_node_ids'}
+        if response.decision != 'action':
+            return None, {'error_type': 'EXPLORER_TERMINAL',
+                          'detail': response.reason or 'Explorer reports no useful action remains'}
         agent_request = response.tool_request
+        if (agent_request is not None and node.action.get('runtime_required')
+                and not _planned_action_matches(node.action, agent_request.tool, agent_request.parameters)):
+            return None, {'error_type': 'EXPLORER_OUTPUT_INVALID', 'status': 'REJECTED',
+                          'detail': f'Runtime requires the reserved action {node.action["tool"]} with its supplied parameters',
+                          'required_next_behavior': 'honor current_node.action; this is an authoritative prerequisite or lifecycle observation'}
+    except InvestigationStopped:
+        raise
     except Exception as exc:  # noqa: BLE001 — agent failure never crashes (invariant 4)
         http_response = getattr(exc, "response", None)
         status = getattr(exc, "status_code", None) or getattr(http_response, "status_code", None)
@@ -727,8 +927,7 @@ def _resolve_tool_action(
                 # only the tool forces the reader to guess which file or command
                 # was refused, and on a duplicate it hides the very path that
                 # explains the refusal.
-                "params": {key: type(value).__name__
-                           for key, value in agent_request.parameters.items()},
+                "params": _safe_parameters(agent_request.parameters),
             })
             log.warning(
                 "Explorer agent ToolRequest rejected for node %s: %s",
@@ -739,8 +938,10 @@ def _resolve_tool_action(
                 "tool": agent_request.tool,
                 "detail": validation.reason[:500],
                 "tool_request_id": request_id,
-                "parameters": {key: type(value).__name__
-                               for key, value in agent_request.parameters.items()},
+                "parameters": _safe_parameters(agent_request.parameters),
+                "status": 'REJECTED', "retryable": False,
+                "prohibited_from_repeating": True,
+                "required_next_behavior": 'choose a materially different action or return a terminal decision',
             }
 
     return None, {"error_type": "EXPLORER_DECISION_FAILED",
@@ -770,6 +971,17 @@ def _consult_verifier(
     work — used for the final review, where the Runtime has already decided the
     investigation is over.
     """
+    review_claims = kg.all_claims()
+    if (getattr(inv, 'intent', None) == 'explain' or
+            (not getattr(inv, 'options', {}).get('browser_enabled') and getattr(inv, 'intent', None) == 'investigate'
+             and 'runtime' in getattr(inv, 'targets', [])) or
+            (goals is not None and any(g.name == 'Verify Runtime' for g in goals.all()))):
+        # Review the requested proof, not every incidental configuration claim.
+        # Static findings remain in the graph and in the observation context.
+        review_claims = [c for c in review_claims if any(
+            c.claim_type in g.required_claim_types
+            and (not g.requires_execution_evidence or kg.has_execution_evidence(c.id))
+            for g in goals.all())]
     claims_payload = [
         {
             "claim_id": c.id,
@@ -786,6 +998,7 @@ def _consult_verifier(
             "evidence": [
                 {
                     "evidence_id": ev.id,
+                    "observation_ids": ev.observation_ids,
                     "source_tier": ev.source_tier,
                     "support_type": ev.support_type,
                     "node_id": ev.node_id if hasattr(ev, "node_id") else None,
@@ -793,16 +1006,33 @@ def _consult_verifier(
                 for ev in kg.evidence_for(c.id)
             ],
         }
-        for c in kg.all_claims()
+        for c in review_claims
     ]
 
     if not claims_payload:
         return  # Nothing to review yet
 
+    if isinstance(verifier, ControlledPort):
+        from wizard_kernel.context.packager import _result_record
+        verifier.port.context = {'relevant_goals': [g.name for g in goals.all()],
+                                 'context': json.dumps({'intent': inv.question or inv.intent,
+                                                       'command_family': inv.intent,
+                                                       'report_contract': report_contract(inv),
+                                                       'runtime_checks': runtime_levels(obs_store.all()),
+                                                       'goal_requirements': [
+                                                           {'name': g.name, 'required_claim_types': g.required_claim_types,
+                                                            'requires_execution_evidence': g.requires_execution_evidence,
+                                                            **goals.evidence_status(g.id, obs_store.all())}
+                                                           for g in goals.all()],
+                                                       'successful_results': [_result_record(o) for o in obs_store.all() if o.success][-16:],
+                                                       'recent_failures': [_failure_record(o) for o in obs_store.all() if not o.success][-4:]}, default=str)}
+
     bus.emit(event_bus.AgentConsulted,
              {"agent_type": "verifier", "claims_reviewed": len(claims_payload)})
     try:
         assessment = verifier.assess(claims_payload, inv.id)
+    except InvestigationStopped:
+        raise
     except Exception as exc:  # noqa: BLE001 — verifier failure is non-fatal (invariant 4)
         response = getattr(exc, "response", None)
         obs_store.append(
@@ -810,11 +1040,12 @@ def _consult_verifier(
             source_tool="verifier",
             obs_type="agent_failure",
             payload={"ok": False, "error": "Verifier request failed",
+                     'detail': str(exc)[:500],
                      "status_code": getattr(response, "status_code", None)},
         )
-        log.warning("Verifier agent failed (HTTP %s): %s — continuing without assessment",
+        log.warning("Verifier agent failed (HTTP %s): %s — stopping with an incomplete report",
                     getattr(response, "status_code", "unknown"), exc)
-        return
+        raise NoProgress('Verifier could not assess the collected evidence') from exc
 
     log.info("Verifier assessment for %s: %s, weak_claims=%s",
              inv.id, assessment.assessment, assessment.weak_claims)
@@ -831,6 +1062,14 @@ def _consult_verifier(
             assessment.recommended_additional_investigations,
         "escalated": escalate,
     })
+    assessments = fs_store.read(inv.id, 'verifier_assessments.json') or []
+    assessments.append({'assessment': assessment.model_dump(), 'claim_ids': [c['claim_id'] for c in claims_payload],
+                        'timestamp': datetime.now(timezone.utc).isoformat()})
+    fs_store.write(inv.id, 'verifier_assessments.json', assessments)
+    if assessment.report_markdown.strip():
+        fs_store.write_text(inv.id, 'model_report.md', assessment.report_markdown)
+    if not escalate and assessment.assessment != 'overall_sufficient':
+        raise NoProgress('Verifier did not confirm sufficient evidence for final verification')
 
     # Runtime-only decision: if the Verifier thinks we need more work AND
     # there are weak claims, ask the Planner to generate additional investigation nodes.
@@ -864,8 +1103,11 @@ def _consult_verifier(
             if added:
                 log.info("Planner added %d nodes based on Verifier assessment for %s",
                          added, inv.id)
+        except InvestigationStopped:
+            raise
         except Exception as exc:  # noqa: BLE001
             log.warning("Planner failed to generate nodes from Verifier assessment: %s", exc)
+            raise NoProgress('Planner could not produce a corrective plan') from exc
 
 
 def _missing_requirements(goals: GoalEngine, kg: KnowledgeGraph) -> list[dict]:
@@ -997,8 +1239,7 @@ def _node_action_fingerprint(action: dict) -> str:
     tool request, which is what the validator refuses at execution time — after
     the node has already been created and will burn a budget slot to fail.
     """
-    params = action.get("params") or {}
-    return json.dumps([action.get("tool", ""), params], sort_keys=True, default=str)
+    return fingerprint(action.get('tool', ''), action.get('params') or {})
 
 
 def _already_scheduled(
@@ -1030,10 +1271,9 @@ def _already_scheduled(
     if action.get("tool") in BROWSER_TOOLS:
         return False
     fp = _node_action_fingerprint(action)
-    return any(
-        _node_action_fingerprint(existing.action or {}) == fp
-        for existing in graph.all_nodes()
-    )
+    return any(_node_action_fingerprint(
+        (existing.action if existing.state in {'waiting', 'running'} else existing.executed_action) or {}
+    ) == fp for existing in graph.all_nodes())
 
 
 def _queued_read_paths(graph: "InvestigationGraph", completed_ids: set[str]) -> list[str]:
@@ -1134,8 +1374,11 @@ def _planned_action_matches(planned: dict | None, actual_tool: str, actual_param
     if not isinstance(planned, dict) or planned.get("tool") != actual_tool:
         return False
     expected = planned.get("params") or planned.get("parameters") or {}
-    return isinstance(expected, dict) and all(actual_params.get(key) == value
-                                               for key, value in expected.items())
+    if not isinstance(expected, dict):
+        return False
+    from wizard_kernel.contracts.actions import normalize
+    actual = normalize(actual_tool, actual_params)
+    return all(actual.get(key) == value for key, value in normalize(actual_tool, expected).items())
 
 
 def _planner_next_context(
@@ -1175,7 +1418,7 @@ def _planner_next_context(
         "missing_requirements": _missing_requirements(goals, kg),
         "goal_technology": _active_technology(plan, goals),
         "priority_files": _priority_files(plan),
-        "allow_execution": True,
+        "allow_execution": inv.intent != 'explain',
         "budget_remaining": budget.remaining,
         "repo_root": inv.repository_path,
         "file_observation_ids": file_obs,
@@ -1220,9 +1463,70 @@ def _planner_next_context(
         # same reason and one more: whether a run may press a page's controls is
         # decided by what was asked, and only this key holds what was asked.
         "question": inv.question,
+        "deadline_at": inv.deadline_at.isoformat(),
+        "recent_failures": [_failure_record(o) for o in obs_store.all()[-8:] if not o.success],
+        "successful_results": [_planner_result_record(o) for o in obs_store.all() if o.success][-8:],
+        "process_sessions": _process_sessions(obs_store),
+        "runnable_nodes": [n.model_dump() for n in graph.get_ready_nodes(completed_ids or set())] if graph else [],
+        "active_goals": goals.to_api_list(obs_store.all()),
+        "plan": [{'id': n.id, 'state': n.state, 'action': n.action, 'executed_action': n.executed_action}
+                 for n in (graph.all_nodes() if graph else [])[-20:]],
     }
     context.update(extra)
     return context
+
+
+def _failure_record(obs):
+    payload = obs.payload or {}
+    return {'observation_id': obs.id, 'node_id': obs.node_id, 'goal_id': obs.goal_id,
+            'required_check': bool(payload.get('required_check')), 'tool': payload.get('tool', obs.source_tool),
+            'params': payload.get('parameters', (payload.get('action') or {}).get('params', {})),
+            'status': payload.get('status', 'FAILED'),
+            'reason': failure_reason(payload),
+            'stdout': str(payload.get('stdout') or '')[:3000],
+            'stderr': str(payload.get('stderr') or '')[:3000],
+            'exit_code': payload.get('exit_code', (payload.get('data') or {}).get('exit_code')),
+            'retryable': False, 'prohibited_from_repeating': True}
+
+
+def _planner_result_record(obs):
+    from wizard_kernel.context.packager import _result_record
+    return _result_record(obs)
+
+
+def _local_service_recovery(inv, node, action, payload, goal_id, goals):
+    """A timed-out foreground service needs a distinct owned lifecycle tool.
+
+    Startup output is only a reason to inspect, never verification evidence.
+    The existing frontier/validator still owns admission, dedup and deadlines.
+    """
+    import re
+    goal = goals.get(goal_id) if goal_id else None
+    if (inv.options.get('browser_enabled') or action.get('tool') != 'execute_command'
+            or payload.get('ok') or not failure_reason(payload).startswith('timeout after')
+            or not goal or 'process_execution' not in goal.required_evidence):
+        return None
+    if not re.search(r'\b(?:listening|ready|serving|running)\b[^\n]{0,100}(?:https?://|\bport\b)',
+                     str(payload.get('stdout') or ''), re.IGNORECASE):
+        return None
+    params = action.get('params') or {}
+    if not params.get('command'):
+        return None
+    return InvestigationNode(id=f'node_{uuid.uuid4().hex[:6]}', type='execute',
+        action={'tool': 'start_process', 'params': {'command': params['command'], 'cwd': params.get('cwd', '.')},
+                'runtime_required': True},
+        hypothesis=Hypothesis(kind=HypothesisKind.always_success),
+        depends_on=[node.id], parent_id=node.id, goal_id=goal_id)
+
+
+def _process_sessions(obs_store):
+    from wizard_kernel.context.packager import _process_records
+    return _process_records(obs_store.all())
+
+
+def _same_result(first, second):
+    fields = ('ok', 'data', 'error', 'stdout', 'stderr', 'exit_code')
+    return all(first.get(key) == second.get(key) for key in fields)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

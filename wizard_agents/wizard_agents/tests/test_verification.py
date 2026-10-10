@@ -1,12 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
-
 from app.contracts.verification import (
-    ClaimInput,
-    EvidenceInput,
-    VerificationFinding,
     VerificationInput,
     VerificationOutput,
 )
@@ -16,6 +11,33 @@ from app.validation.verification_validation import (
     validate_verification_output,
 )
 from app.verification.agent import VerificationAgent, VerificationAgentError
+from pydantic import ValidationError
+
+
+@pytest.mark.parametrize('command,target', [('investigate', 'api'), ('explain', 'architecture'), ('verify', 'runtime'), ('report', None)])
+def test_dynamic_report_contract_reaches_provider_prompt(supported_claim, command, target):
+    import json
+
+    from app.prompts.verification_prompts import build_verification_user_prompt
+
+    contract = {'command': command, 'targets': [target] if target else [],
+                'question': 'Describe only the selected subject',
+                'sections': {target: ['Routes and handlers']} if target else {}}
+    vi = VerificationInput(investigation_id='inv-1', claims=[supported_claim],
+                           context=json.dumps({'report_contract': contract}))
+    prompt = build_verification_user_prompt(vi)
+    assert json.dumps(vi.model_dump(mode='json'), indent=2) in prompt
+    assert 'report_contract in context is authoritative' in prompt
+    assert 'Cite supplied obs_ observation IDs in EVERY narrative paragraph' in prompt
+    assert 'Do not repeat universal metadata' in prompt
+    assert 'Repository reads support inspected knowledge' in prompt
+
+
+def test_report_heading_is_enforced_in_provider_schema():
+    assert VerificationOutput.model_json_schema()['properties']['report_markdown']['pattern'] == '^#'
+    with pytest.raises(ValidationError, match='pattern'):
+        VerificationOutput(investigation_id='inv', overall_assessment='sufficient',
+                           reasoning='Observed evidence', report_markdown='Plain text without a heading')
 
 
 def test_supported_claim_is_marked_supported(mock_llm, supported_claim):

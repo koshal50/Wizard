@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { remainingMs } from '../deadline.ts';
 
 const DB_PATH = process.env.WIZARD_CEREBRAS_GATE_DB ?? join(homedir(), ".wizard", "cerebras-rate-gate.sqlite3");
 
@@ -26,6 +27,7 @@ export class CerebrasRateGate {
       }
       this.db.exec("COMMIT");
       if (wait <= 0) return;
+      if (wait * 1000 >= remainingMs(300_000)) throw new Error('Provider rate gate exceeds investigation deadline');
       console.info(JSON.stringify({ event: "provider_rate_limit_wait", provider: "cerebras", wait_ms: Math.ceil(wait) }));
       await new Promise((resolve) => setTimeout(resolve, wait * 1000));
     }

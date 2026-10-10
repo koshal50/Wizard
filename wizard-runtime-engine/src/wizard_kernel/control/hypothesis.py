@@ -10,6 +10,8 @@ def evaluate(node: InvestigationNode, obs: Observation) -> MatchResult:
     """Return match result without any LLM call. Only unexpected escalates to Planner."""
     h: Hypothesis = node.hypothesis
     payload = obs.payload
+    if not obs.success:
+        return 'expected_failure'
 
     match h.kind:
         case HypothesisKind.always_success:
@@ -39,7 +41,7 @@ def evaluate(node: InvestigationNode, obs: Observation) -> MatchResult:
             return "expected_success" if exists else "expected_failure"
 
         case HypothesisKind.http_status:
-            status = payload.get("status_code")
+            status = payload.get("status_code", (payload.get('data') or {}).get('status_code'))
             if status in h.success_values:
                 return "expected_success"
             if status in h.failure_values:

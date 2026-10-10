@@ -32,6 +32,7 @@ TOOL_REGISTRY: Dict[ToolName, ToolDescriptor] = {
     ToolName.BROWSER_TYPE: ToolDescriptor(ToolName.BROWSER_TYPE, "Fill a visible textbox using its exact observed controls[].selector value and a supplied non-secret test value.", {"selector": "string", "text": "string"}),
     ToolName.BROWSER_BACK: ToolDescriptor(ToolName.BROWSER_BACK, "Navigate back in the investigation browser.", {}),
     ToolName.BROWSER_EXTRACT: ToolDescriptor(ToolName.BROWSER_EXTRACT, "Extract structured content from the current page.", {}),
+    ToolName.BROWSER_SCREENSHOT: ToolDescriptor(ToolName.BROWSER_SCREENSHOT, 'Capture a real screenshot as a persisted investigation artifact.', {}),
     ToolName.INSPECT_CONFIGURATION: ToolDescriptor(ToolName.INSPECT_CONFIGURATION, "Inspect a configuration source.", {"target": "string"}),
     ToolName.TRACE_EXECUTION: ToolDescriptor(ToolName.TRACE_EXECUTION, "Trace an execution entrypoint.", {"entrypoint": "string"}),
 }

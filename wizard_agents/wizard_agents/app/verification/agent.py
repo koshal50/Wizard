@@ -40,7 +40,15 @@ class VerificationAgent:
                 system_prompt=VERIFICATION_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 response_model=VerificationOutput,
-                metadata={"input": verification_input.model_dump(mode="json")},
+                metadata={"input": verification_input.model_dump(mode="json"),
+                          'deadline_at': verification_input.deadline_at,
+                          'strict_json_schema': True, 'reasoning_effort': 'low',
+                          # A local architecture assessment includes both claim-ID
+                          # accounting and its report. The live 1024-token reply
+                          # was cut off mid-JSON; one bounded call must fit both.
+                          **({'max_completion_tokens': 2048} if any(
+                              any(subject in goal.lower() for subject in ('architecture', 'runtime'))
+                              for goal in verification_input.relevant_goals) else {})},
             )
         except LLMError as exc:
             raise VerificationAgentError(f"Verification LLM call failed: {exc}") from exc

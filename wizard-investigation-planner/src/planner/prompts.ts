@@ -29,10 +29,23 @@ export function buildTechnologyPlanPrompt(
   manifestSummary: ManifestSummary,
 ): LLMRequest {
   const question = questionBlock(manifestSummary);
+  const localArchitecture = ['investigate', 'explain'].includes(manifestSummary.intent.trim())
+    && manifestSummary.targets.includes('architecture');
   const prompt = [
     "Given this repository manifest (Tier-1 context only), identify the technologies",
     "present and, for each, the initial verification goals and the highest-priority",
     "files to inspect.",
+    "Keep verification strictly within the requested intent, targets and question.",
+    ...(localArchitecture ? [
+      "This is a LOCAL SOURCE ARCHITECTURE investigation. Declare one goal: Inspect Architecture.",
+      "Its evidence is repository reads, not application execution. Do not declare runtime/service readiness goals.",
+      "Choose 3-6 existing implementation entry points showing component ownership and data flow, not only dependency manifests.",
+      "Do not start services, perform network verification, or require UI execution for this source analysis.",
+    ] : []),
+    "Declare each requested goal once across the entire plan, not once per technology.",
+    "Use concise goal names such as Verify Runtime, Verify Web Surface or Operate Web Surface when applicable.",
+    "Incidental technologies may have empty initialGoals and priorityFiles. Do not add linting, deployment, database migrations or test suites unless requested or necessary prerequisites.",
+    "Select only the minimum files needed to choose the first safe action; later planning receives real observations.",
     ...question,
     "",
     "MANIFEST:",
@@ -125,6 +138,11 @@ export function buildOngoingPlanPrompt(
     "Propose the next investigation nodes to close the open questions. Prefer cheap",
     "deterministic steps (read → parse) before execution. Only propose execute nodes",
     "when a runtime fact genuinely requires running something.",
+    "Use successful_results, actual failure reasons and process_sessions from the Runtime state.",
+    "A foreground server timeout is not proof that startup failed; use an owned background process and its observed output.",
+    "Do not repeat completed/rejected actions. If execution evidence is missing, propose a distinct executable recovery node, not more already-read files.",
+    'Action types are read or execute, NEVER evidence categories such as command_execution or process_execution.',
+    'An execution proposal uses {"type":"execute","action":{"type":"execute","command":"<observed package script or entry command>","workingDirectory":"<repository-relative directory>","timeoutMs":30000},"hypothesis":"<runtime fact to check>"}. Explorer selects the concrete execution tool.',
     "",
     "Return JSON of the form:",
     `{"nodes":[{"type":"read","action":{"type":"read","filePath":"package.json"},"hypothesis":"Inspect the project start configuration."}],"rationale":"Inspect startup configuration."}`,

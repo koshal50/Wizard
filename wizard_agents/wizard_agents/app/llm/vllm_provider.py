@@ -27,6 +27,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.llm.base import LLMError, LLMProvider
 from app.llm.cerebras_gate import CerebrasRateGate, retry_after_seconds
+from app.llm.usage import record_usage
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -131,7 +132,20 @@ class VLLMProvider(LLMProvider):
                     timeout=min(self._timeout, remaining),
                 )
             except Exception as exc:  # noqa: BLE001 - surface any HTTP/network failure uniformly
+                record_usage(None, provider="cerebras" if self._cerebras_gate else self.name,
+                             model=self._model, agent=response_model.__name__)
                 raise LLMError(f"vLLM API call failed: {exc}") from exc
+            # Capture before HTTP/schema validation or retry: invalid completions
+            # can still consume tokens, and each provider attempt is a real call.
+            try:
+                usage_payload = response.json()
+            except Exception:  # noqa: BLE001 -- metadata extraction must remain observational
+                usage_payload = None
+            record_usage(usage_payload,
+                         provider="cerebras" if self._cerebras_gate else self.name,
+                         model=self._model, agent=response_model.__name__,
+                         request_id=response.headers.get("x-request-id")
+                         or response.headers.get("request-id"))
             if response.status_code == 429 and self._cerebras_gate:
                 wait = retry_after_seconds(response.headers)
                 self._cerebras_gate.defer(wait)

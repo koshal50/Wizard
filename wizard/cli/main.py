@@ -94,6 +94,7 @@ def main_callback(
         ),
         metavar="[PROJECT]",
     ),
+    words: Optional[list[str]] = typer.Argument(None, metavar="[INTENT...]"),
     version: Optional[bool] = typer.Option(
         None,
         "--version",
@@ -113,6 +114,21 @@ def main_callback(
     """
     # Bare `wizard` (no --version) opens the interactive TUI.
     if ctx.invoked_subcommand is None:
+        from wizard.cli.parser.command_parser import VALID_COMMANDS
+        if path in VALID_COMMANDS:
+            from wizard.cli.display.terminal import run_command
+            raise typer.Exit(run_command(path, words or [], console))
+        if words:
+            raise typer.BadParameter("Extra arguments require one of the four command names")
+        if path == "/status":
+            from wizard.cli.display.usage import format_status
+            from wizard.cli.runtime_client.usage import standalone_status
+            try:
+                console.print(format_status(standalone_status()), markup=False)
+            except Exception:
+                console.print("Usage unavailable: check runtime and PostgreSQL configuration", markup=False)
+                raise typer.Exit(1) from None
+            return
         from wizard.cli.tui import run_tui
 
         run_tui(path)

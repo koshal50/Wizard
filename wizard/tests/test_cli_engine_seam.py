@@ -405,6 +405,7 @@ def test_escape_cancels_the_investigation_in_the_engine(engine):
     assert session.investigation_id == "inv_stub001"
 
     session.cancel()
+    session._cancel_thread.join(timeout=3)
 
     assert session.status == "cancelled"
     assert session.finished and not session.running

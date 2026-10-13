@@ -20,6 +20,7 @@ class Investigation:
     # Planner's to read, not the kernel's to interpret. Defaulted so an
     # investigation persisted before this field existed still restores.
     question: str = ""
+    usage_session_id: str | None = None
     state: LifecycleState = LifecycleState.created
     budget_total: int = 40
     budget_remaining: int = 40

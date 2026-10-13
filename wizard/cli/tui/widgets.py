@@ -419,7 +419,13 @@ def _short_path(path: str) -> str:
 def _elapsed_line(snap: dict, t: float) -> RenderableType:
     """How long this has been going, and how to stop it. Both are measured."""
     started = snap.get("started_at") or t
-    seconds = int(max(0.0, time.monotonic() - started))
+    seconds = int(max(0.0, (snap.get("ended_at") or time.monotonic()) - started))
+    usage = snap.get("usage")
+    if usage is not None and not snap.get("usage_in_footer"):
+        from wizard.cli.display.usage import counter
+        return Text(counter(usage, seconds, compact=True), style="wiz.meter")
+    if snap.get("usage_in_footer") and snap.get("running"):
+        return Text("esc to interrupt", style="wiz.meter")
 
     if snap.get("running"):
         line = Text()

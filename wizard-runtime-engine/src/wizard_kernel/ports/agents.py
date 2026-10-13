@@ -58,8 +58,11 @@ class HttpExplorer:
         safe_context = {k: v for k, v in context.items()
                         if k not in ("trust", "knowledge_graph_raw")}
         safe_context['deadline_at'] = self.deadline_at
+        safe_context['_usage'] = True
         safe_context['investigation'] = {**safe_context.get('investigation', {}), 'operation_deadline_at': self.deadline_at}
         r = httpx.post(self._url, json=safe_context, timeout=_remaining_timeout(self.deadline_at))
+        from wizard_kernel.storage.usage import capture_response
+        capture_response(r)
         if r.is_error:
             try:
                 detail = r.json().get("detail")
@@ -98,9 +101,11 @@ class HttpVerifier:
     def assess(self, claims: list[dict], investigation_id: str = "") -> VerifierAssessment:
         import httpx
         r = httpx.post(self._url,
-                       json={"investigation_id": investigation_id, "claims": claims, 'deadline_at': self.deadline_at,
+                       json={"investigation_id": investigation_id, "claims": claims, '_usage': True, 'deadline_at': self.deadline_at,
                              **getattr(self, 'context', {})},
                        timeout=_remaining_timeout(self.deadline_at))
+        from wizard_kernel.storage.usage import capture_response
+        capture_response(r)
         if r.is_error:
             try:
                 detail = r.json().get('detail')

@@ -18,6 +18,7 @@
  */
 import http from "node:http";
 import { deadlineContext } from "../llm/deadline.ts";
+import { usageContext, type UsageEvent } from "../llm/usage.ts";
 import { InvestigationPlanner } from "../planner/InvestigationPlanner.ts";
 import { createProviderFromEnv } from "../llm/providerFactory.ts";
 import { createLogger } from "../util/logger.ts";
@@ -282,14 +283,18 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && url === "/health") return send(200, { ok: true });
   const handler = req.method === "POST" ? routes[url] : undefined;
   if (!handler) return send(404, { error: "not found" });
+  const events: UsageEvent[] = [];
+  let usageEnabled = false;
   try {
     const body = await readBody(req);
+    usageEnabled = body._usage === true;
     const deadline = typeof body.deadline_at === 'string' ? Date.parse(body.deadline_at) : Date.now() + 30_000;
     if (!Number.isFinite(deadline) || deadline <= Date.now()) throw new Error('Investigation deadline reached');
-    send(200, await deadlineContext.run(deadline, () => handler(body)));
+    const result = await usageContext.run(events, () => deadlineContext.run(deadline, () => handler(body)));
+    send(200, usageEnabled ? {...result as Record<string, unknown>, usage_events: events} : result);
   } catch (e) {
     logger.warn("plan.request.failed", { url, error: (e as Error).message });
-    send(400, { error: (e as Error).message });
+    send(400, { error: (e as Error).message, ...(usageEnabled ? {usage_events: events} : {}) });
   }
 });
 

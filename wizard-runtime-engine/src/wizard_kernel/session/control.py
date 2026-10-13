@@ -53,8 +53,14 @@ class RunControl:
         def invoke():
             try:
                 self.check()
-                result.put((True, fn()))
+                from contextlib import nullcontext
+                from wizard_kernel.storage.usage import operation
+                with operation(self.inv) if model else nullcontext():
+                    result.put((True, fn()))
             except BaseException as exc:
+                if model:
+                    from wizard_kernel.storage.usage import observe
+                    observe("incomplete")
                 result.put((False, exc))
         threading.Thread(target=invoke, daemon=True, name=step['id']).start()
         status = 'failed'

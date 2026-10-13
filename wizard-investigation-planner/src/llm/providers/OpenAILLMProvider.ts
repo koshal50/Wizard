@@ -13,6 +13,7 @@ import { llmErr, llmOk } from "../LLMProvider.ts";
 import { extractJson } from "../extractJson.ts";
 import { CerebrasRateGate, retryAfterMs } from "./CerebrasRateGate.ts";
 import { remainingMs } from '../deadline.ts';
+import { recordUsage } from "../usage.ts";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -66,8 +67,9 @@ export class OpenAILLMProvider implements LLMProvider {
     let response: Response | undefined;
     for (let attempt = 0; attempt < (this.cerebrasGate ? 2 : 1); attempt++) {
       if (this.cerebrasGate) await this.cerebrasGate.acquire();
+      let requested = false;
       try {
-        response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/chat/completions`, {
+        const init = {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -75,10 +77,17 @@ export class OpenAILLMProvider implements LLMProvider {
           },
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(Math.max(1, Math.floor(remainingMs(this.cfg.timeoutMs)))),
-        });
+        };
+        requested = true;
+        response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/chat/completions`, init);
       } catch (e) {
+        if (requested) recordUsage(null, this.cerebrasGate ? "cerebras" : this.name,
+          this.cfg.model, null, request.purpose);
         return llmErr<T>([`openai: request failed: ${(e as Error).message}`], "", this.name);
       }
+      recordUsage(await safeJson(response.clone()), this.cerebrasGate ? "cerebras" : this.name,
+        this.cfg.model, response.headers.get("x-request-id") ?? response.headers.get("request-id"),
+        request.purpose);
       if (response.status === 429 && this.cerebrasGate) {
         const waitMs = retryAfterMs(response.headers);
         this.cerebrasGate.defer(waitMs);

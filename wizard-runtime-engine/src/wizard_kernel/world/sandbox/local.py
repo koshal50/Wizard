@@ -41,7 +41,7 @@ def _terminate_process(proc):
     if proc.poll() is not None:
         return
     if sys.platform == 'win32':
-        subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, timeout=2)
+        subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, timeout=4)
     else:
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -134,7 +134,7 @@ class LocalProcessRuntime:
                         if proc.poll() is None:
                             args.extend(['/PID', str(proc.pid)])
                     if len(args) > 3:
-                        subprocess.run(args, capture_output=True, timeout=2)
+                        subprocess.run(args, capture_output=True, timeout=4)
                     wait_deadline = time.monotonic() + 1
                     for proc in processes:
                         if proc.poll() is None:
@@ -147,7 +147,7 @@ class LocalProcessRuntime:
             workers = [threading.Thread(target=terminate, args=(proc,), daemon=True) for proc in processes]
         for worker in workers:
             worker.start()
-        deadline = time.monotonic() + 3
+        deadline = time.monotonic() + 5
         for worker in workers:
             worker.join(max(0, deadline - time.monotonic()))
         if errors or any(proc.poll() is None for proc in processes):

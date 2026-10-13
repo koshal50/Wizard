@@ -84,11 +84,14 @@ class InvestigationManager:
             targets=list(req.targets),
             options=req.options.model_dump(),
             question=req.question,
+            usage_session_id=req.session_id,
             budget_total=req.options.budget,
             budget_remaining=req.options.budget,
         )
         with self._lock:
             self._store[inv_id] = inv
+            from wizard_kernel.storage.usage import observe
+            observe("begin", inv, req.session_id)
             _persist(inv)   # write meta.json immediately on creation
         return inv
 
@@ -124,6 +127,8 @@ class InvestigationManager:
             # Persist only on terminal transitions — avoids excessive disk I/O
             if new_state in _TERMINAL_STATES:
                 _persist(inv)
+                from wizard_kernel.storage.usage import observe
+                observe("state", inv)
 
     def all(self) -> list[Investigation]:
         with self._lock:

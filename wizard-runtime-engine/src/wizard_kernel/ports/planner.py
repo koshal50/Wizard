@@ -300,8 +300,10 @@ class HttpPlanner:
     def _post(self, path: str, payload: dict) -> dict:
         import httpx
         from wizard_kernel.ports.agents import _remaining_timeout
-        payload = {**payload, 'deadline_at': self.deadline_at}
+        payload = {**payload, 'deadline_at': self.deadline_at, '_usage': True}
         r = httpx.post(f"{self._url}{path}", json=payload, timeout=_remaining_timeout(self.deadline_at))
+        from wizard_kernel.storage.usage import capture_response
+        capture_response(r)
         if r.is_error:
             # Planner failures are orchestration failures, not application HTTP
             # failures. Preserve the service's actual rejection before stopping.

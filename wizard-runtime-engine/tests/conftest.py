@@ -49,7 +49,7 @@ def _repo_safe_data_root(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def _private_manager():
+def _private_manager(monkeypatch):
     """No test inherits another test's investigations.
 
     Cleared before and after: before, so this test does not see the last one's
@@ -63,6 +63,13 @@ def _private_manager():
     except ImportError:  # pragma: no cover - the package is always importable here
         yield
         return
+    # A developer's root .env must never connect ordinary tests to their DB.
+    monkeypatch.setenv("WIZARD_DATABASE_URL", "")
     deps.get_manager.cache_clear()
+    from wizard_kernel.storage.usage import get_usage
+    get_usage.cache_clear()
     yield
     deps.get_manager.cache_clear()
+    if get_usage.cache_info().currsize:
+        get_usage().close()
+    get_usage.cache_clear()

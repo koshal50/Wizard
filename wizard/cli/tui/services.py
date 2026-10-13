@@ -123,10 +123,13 @@ def _kernel_python() -> str:
     optional browser dependencies. Keep Planner/agent startup on the CLI
     interpreter, but launch the kernel with its existing project environment.
     """
-    venv_python = repo_root() / "wizard-runtime-engine" / ".venv" / (
-        "Scripts/python.exe" if os.name == "nt" else "bin/python"
-    )
-    return str(venv_python) if venv_python.is_file() else _python()
+    for name in (".venv", "venv"):
+        venv_python = repo_root() / "wizard-runtime-engine" / name / (
+            "Scripts/python.exe" if os.name == "nt" else "bin/python"
+        )
+        if venv_python.is_file():
+            return str(venv_python)
+    return _python()
 
 
 def build_specs(root: Path | None = None) -> list[ServiceSpec]:
@@ -153,7 +156,17 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
     kernel_port = int(os.environ.get("WIZARD_KERNEL_PORT", "8080"))
     planner_port = int(os.environ.get("WIZARD_PLANNER_PORT", "8787"))
     agents_port = int(os.environ.get("WIZARD_AGENTS_PORT", "8100"))
+    kernel_env = os.environ.copy()
+    if "WIZARD_DATABASE_URL" not in kernel_env:
+        from dotenv import dotenv_values
+        database_url = next((value for key, value in dotenv_values(root / ".env").items()
+                             if key.upper() == "WIZARD_DATABASE_URL" and value), None)
+        if database_url:
+            # Only the runtime gets database credentials; planner/agents do not
+            # need a database connection or a second persistence lifecycle.
+            kernel_env["WIZARD_DATABASE_URL"] = database_url
     planner_env = os.environ.copy()
+    planner_env.pop("WIZARD_DATABASE_URL", None)
     planner_env.update({
         "PORT": str(planner_port),
         "LLM_PROVIDER": "openai",
@@ -164,6 +177,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
     if cerebras_key:
         planner_env["OPENAI_API_KEY"] = cerebras_key
     agents_env = os.environ.copy()
+    agents_env.pop("WIZARD_DATABASE_URL", None)
     agents_env.update({
         "WIZARD_LLM_PROVIDER": "vllm",
         "WIZARD_LLM_MODEL": "gpt-oss-120b",
@@ -182,7 +196,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
             cwd=str(root / "wizard-runtime-engine"),
             argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
                   "--host", "127.0.0.1", "--port", str(kernel_port)),
-            env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", ""))))},
+            env={**kernel_env, "PYTHONPATH": os.pathsep.join(filter(None, (str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", ""))))},
             needs=("uvicorn",),
             why_unstartable="uvicorn is not importable by this interpreter",
         ),
@@ -316,6 +330,9 @@ def _spawn(spec: ServiceSpec, log_dir: Path) -> "subprocess.Popen | None":
             handle.close()
         spec_log = log_path
         raise RuntimeError(f"could not start {spec.key}: {exc} (log: {spec_log})") from exc
+    finally:
+        if handle is not subprocess.DEVNULL:
+            handle.close()
 
 
 def ensure_service(spec: ServiceSpec, log_dir: Path) -> ServiceState:
@@ -400,15 +417,42 @@ def _log_tail(path: Path, lines: int = 4) -> str:
     return "; " + " / ".join(line.strip() for line in content[-lines:] if line.strip())
 
 
-def _terminate(process: "subprocess.Popen", timeout: float = 5.0) -> None:
+def _terminate(process: "subprocess.Popen", timeout: float = 4.0, *, additional=()) -> None:
     """Stop a child we started, escalating only if it ignores the request."""
-    if process.poll() is not None:
+    processes = [proc for proc in (process, *additional) if proc.poll() is None]
+    if not processes:
         return
-    process.terminate()
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
+    if os.name == "nt":
+        # A Windows venv executable redirects to a child Python process.
+        # Terminating only the launcher leaves uvicorn/LLM workers orphaned.
+        try:
+            args = ["taskkill", "/T", "/F"]
+            for proc in processes:
+                args.extend(["/PID", str(proc.pid)])
+            subprocess.run(
+                args,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # WMI can finish killing the tree before taskkill itself exits.
+            # Reap the launcher instead of leaking a traceback on clean exit.
+            for proc in processes:
+                if proc.poll() is None:
+                    proc.kill()
+    else:
+        import signal
+        os.killpg(process.pid, signal.SIGTERM)
+    for proc in processes:
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                import signal
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            proc.wait(timeout=1)
 
 
 # ── The browser binary ───────────────────────────────────────────────────────
@@ -628,11 +672,28 @@ class ServiceSupervisor:
         stopped: list[str] = []
         if self.report is None:
             return stopped
-        for state in self.report.states:
-            if state.process is not None:
-                _terminate(state.process)
-                stopped.append(state.spec.label)
-        return stopped
+        import threading
+        workers = []
+        failures = []
+        def terminate(states):
+            try:
+                _terminate(states[0].process, additional=[state.process for state in states[1:]])
+            except (OSError, subprocess.SubprocessError):
+                failures.extend(state.spec.label for state in states)
+        owned = [state for state in self.report.states if state.process is not None]
+        groups = [owned] if os.name == "nt" and owned else [[state] for state in owned]
+        for states in groups:
+            worker = threading.Thread(target=terminate, args=(states,), daemon=True)
+            worker.start()
+            workers.append(worker)
+            stopped.extend(state.spec.label for state in states)
+        deadline = time.monotonic() + 6
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        failures.extend(state.spec.label for state in owned if state.process.poll() is None)
+        if failures:
+            print("Could not stop owned services: " + ", ".join(failures), flush=True)
+        return [label for label in stopped if label not in failures]
 
 
 def probe_only(specs: list[ServiceSpec] | None = None) -> ServiceReport:

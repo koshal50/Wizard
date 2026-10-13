@@ -45,6 +45,7 @@ from app.contracts.verification import (
 )
 from app.explorer.agent import ExplorerAgent, ExplorerAgentError
 from app.llm.base import LLMProvider
+from app.llm.usage import usage_response
 from app.verification.agent import VerificationAgent, VerificationAgentError
 
 router = APIRouter(prefix="/agent", tags=["runtime-adapter"])
@@ -206,6 +207,7 @@ def _to_kernel_response(investigation_id: str, output: Any) -> Dict[str, Any]:
 
 
 @router.post("/explorer")
+@usage_response
 def explorer(
     packet: Dict[str, Any], provider: LLMProvider = Depends(get_provider)
 ) -> Dict[str, Any]:
@@ -302,6 +304,7 @@ def _to_kernel_assessment(investigation_id: str, output: Any) -> Dict[str, Any]:
 
 
 @router.post("/verifier")
+@usage_response
 def verifier(
     packet: Dict[str, Any], provider: LLMProvider = Depends(get_provider)
 ) -> Dict[str, Any]:

@@ -23,6 +23,8 @@ class InvestigationOptions(BaseModel):
 
 
 class InvestigationRequest(BaseModel):
+    session_id: str | None = Field(default=None, min_length=1, max_length=128,
+                                  pattern=r"^[A-Za-z0-9_-]+$")
     contracts_version: str = "1.0"
     repository_path: str
     intent: Literal["verify", "investigate", "explain", "report"]

@@ -24,6 +24,7 @@ import os
 import time
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.completion import ConditionalCompleter, WordCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
@@ -35,7 +36,7 @@ from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
-from wizard.cli.parser.command_parser import COMMAND_TARGETS
+from wizard.cli.parser.command_parser import COMMAND_TARGETS, SLASH_COMMANDS
 from wizard.cli.parser.frontend import Frontend, suggestion_for
 from wizard.cli.tui import history
 from wizard.cli.tui.session import TuiSession
@@ -133,18 +134,24 @@ class WizardTUI:
         # false with the run, for the same reason `show_page` is: the next
         # investigation's page has not arrived yet. See _follow_page.
         self._page_followed = False
+        self._usage_report = None
+        self._status_input = False
+        self._status_request = None
+        self._exiting = False
+        self._input_notice = ""
 
-        # --- input box (used in INTENT; shown, inert, during WORKING) ---
+        # One input buffer remains editable while the worker drives the run.
         self.input = TextArea(
             prompt="› ",
             multiline=False,
             wrap_lines=False,
             accept_handler=self._on_accept,
             height=1,
-            # There is no mid-run steering endpoint, so a keystroke typed during
-            # a run goes nowhere. A live-looking box that silently drops what
-            # you type is worse than one that plainly does not take input.
-            read_only=Condition(lambda: self.state == WORKING),
+            read_only=Condition(lambda: False),
+            completer=ConditionalCompleter(
+                WordCompleter(list(SLASH_COMMANDS), sentence=True),
+                filter=Condition(lambda: self.input.text.lstrip().startswith("/")),
+            ),
         )
         self.input_frame = Frame(self.input, style="class:inputbox")
 
@@ -190,13 +197,22 @@ class WizardTUI:
         # and read by `_cursor_line` on the very next call, which is what makes
         # the scroll offset safe. See `_cursor_line`.
         self._body_lines = 1
+        self.usage_window = Window(
+            content=FormattedTextControl(self._render_usage), height=1,
+            wrap_lines=False, always_hide_cursor=True, style="class:usage",
+        )
 
-        input_visible = Condition(lambda: self.state in (INTENT, WORKING))
+        input_visible = Condition(lambda: self._status_input or (
+            self.state in (INTENT, WORKING, RESULT)))
         root = HSplit(
             [
                 self.top_window,
                 self.body,
+                ConditionalContainer(self.usage_window, filter=Condition(
+                    lambda: self.session is not None and self.state in (WORKING, RESULT))),
                 ConditionalContainer(self.input_frame, filter=input_visible),
+                Window(content=FormattedTextControl(self._command_help),
+                       height=2, wrap_lines=True, always_hide_cursor=True),
             ]
         )
 
@@ -208,6 +224,7 @@ class WizardTUI:
                 {
                     "inputbox": "#5b2d7a",           # violet frame border
                     "inputbox frame.border": "#5b2d7a",
+                    "usage": "#b8b1c5",
                 }
             ),
             full_screen=True,
@@ -254,6 +271,11 @@ class WizardTUI:
         """The command box — the whole current screen, inside one border."""
         width, _ = self._geometry()
         t = self._t()
+        if self._usage_report is not None:
+            from rich.text import Text
+            rendered = render_to_ansi(command_box(Text(self._usage_report)), width)
+            self._body_lines = rendered.value.count("\n") + 1
+            return rendered
 
         # Everything but WORKING and RESULT is static — nothing on those screens
         # is a function of time — so their frame is cached against everything
@@ -288,6 +310,7 @@ class WizardTUI:
             # that could carry the page is the frame that carries it.
             self._follow_page()
             snap = s.snapshot() if s else {}
+            snap["usage_in_footer"] = True
             if self.show_page:
                 content = page_content(snap, t, width)
             else:
@@ -301,6 +324,7 @@ class WizardTUI:
         elif self.state == RESULT:
             s = self.session
             snap = s.snapshot() if s else {}
+            snap["usage_in_footer"] = True
             if self.show_page:
                 content = page_content(snap, t, width)
             else:
@@ -326,6 +350,13 @@ class WizardTUI:
                 )
             self._static_frames[key] = rendered
         return rendered
+
+    def _render_usage(self):
+        """Pinned outside the scrollable flow, including page/status views."""
+        from wizard.cli.display.usage import counter
+        snap = self.session.snapshot() if self.session else {}
+        elapsed = (snap.get("ended_at") or time.monotonic()) - snap.get("started_at", time.monotonic())
+        return [("class:usage", counter(snap.get("usage"), elapsed, compact=True))]
 
 
     # ------------------------------------------------------------------
@@ -462,6 +493,9 @@ class WizardTUI:
     # State transitions
     # ------------------------------------------------------------------
     def _enter_menu(self) -> None:
+        self._status_request = None
+        self._usage_report = None
+        self._status_input = False
         self.state = MENU
         self.menu_level = "family"
         self.selected = 0
@@ -531,6 +565,12 @@ class WizardTUI:
         self.input.buffer.cursor_position = len(self.frontend.url)
 
     def _back(self) -> None:
+        if self._usage_report is not None or self._status_input:
+            self._status_request = None
+            self._usage_report = None
+            self._status_input = False
+            self.app.layout.focus(self.input if self.state in (INTENT, WORKING, RESULT) else self.body)
+            return
         if self.state == INTENT:
             # back to the menu step we came from
             self.state = MENU
@@ -562,6 +602,9 @@ class WizardTUI:
     def _begin_work(self, raw_intent: str) -> None:
         """Start the run, handing the typed text to the command that parses it."""
         self.raw_intent = raw_intent
+        self._status_request = None
+        self._usage_report = None
+        self._status_input = False
         self.session = TuiSession(
             family=self.family or "investigate",
             target=self.target,
@@ -584,10 +627,8 @@ class WizardTUI:
         self.show_page = False
         self._page_followed = False
         self._reset_scroll()
-        # Focus the flow, not the box: the box takes no input during a run, and
-        # a focused text box would swallow PgUp/PgDn/arrows before the pane
-        # could scroll.
-        self.app.layout.focus(self.body)
+        self._input_notice = ""
+        self.app.layout.focus(self.input)
         self.session.start()
 
     def _invalidate(self) -> None:
@@ -614,6 +655,15 @@ class WizardTUI:
         self.state = RESULT
         self._record_history(snap)
         self._reset_scroll()
+        def focus_result():
+            # Preserve report shortcuts when no draft is being edited. A
+            # finishing worker must never move focus away from typed text.
+            if self.state == RESULT and not self.input.text and not self._status_input:
+                self.app.layout.focus(self.body)
+        if self.app.loop:
+            self.app.loop.call_soon_threadsafe(focus_result)
+        else:
+            focus_result()
 
     def _record_history(self, snap: dict) -> None:
         """Append this run to the file the top panel reads.
@@ -641,14 +691,70 @@ class WizardTUI:
     # ------------------------------------------------------------------
     # Input accept (Enter in the text box)
     # ------------------------------------------------------------------
+    def _command_help(self):
+        help_text = " | ".join(f"{name}: {description}" for name, description in SLASH_COMMANDS.items())
+        return [("class:usage", help_text + ("\n" + self._input_notice if self._input_notice else ""))]
+
+    def _request_exit(self) -> None:
+        if self._exiting:
+            return
+        self._exiting = True
+        self._status_request = None
+        if self.session:
+            self.session.cancel()
+        self.app.exit()
+
     def _on_accept(self, buff) -> bool:
         text = buff.text
+        command = text.strip()
+        if command == "/exit":
+            self._request_exit()
+            return False
+        if command.startswith("/") and command not in SLASH_COMMANDS:
+            self._input_notice = "Unknown command. Available: " + ", ".join(SLASH_COMMANDS)
+            return True
+        if text.strip() == "/status":
+            self._status_input = False
+            buff.text = ""
+            self._usage_report = "Loading persisted usage..."
+            token = object()
+            self._status_request = token
+            self.app.layout.focus(self.body)
+            self._reset_scroll()
+            run_id = self.session.investigation_id if self.session else None
+            pending_run = bool(self.session and self.session.running and not run_id)
+            import threading
+            def load():
+                from wizard.cli.display.usage import format_status
+                from wizard.cli.runtime_client.usage import status
+                try:
+                    data = status(run_id=run_id) if run_id else status()
+                    if pending_run:
+                        data = {**data, "current_run": None, "current_run_pending": True}
+                    report = format_status(data)
+                except Exception as exc:
+                    from wizard.cli.tui.session import _safe_display
+                    report = _safe_display(str(exc)) or "Usage unavailable: check runtime and PostgreSQL configuration"
+                if self._status_request is token:
+                    self._usage_report = report + "\n\nEsc to return"
+                    self.app.invalidate()
+            threading.Thread(target=load, name="usage-status", daemon=True).start()
+            return False
+        if self._status_input:
+            self._status_input = False
         if self.state == INTENT:
             self._begin_work(text)
         elif self.state == WORKING:
-            # The box is read-only during a run, so this is belt-and-braces for
-            # a run that ended between the keystroke and the handler.
             self._sync_finished()
+            self._input_notice = "Run active; draft retained. /status shows usage; /exit cancels and quits."
+            return True
+        elif self.state == RESULT:
+            self._input_notice = "Draft retained. Esc returns to the command menu."
+            return True
+        elif self.state == MENU:
+            self._status_input = True
+            self._input_notice = "Choose a command from the menu; draft retained."
+            return True
         return False  # never keep the text; we manage it ourselves
 
     # ------------------------------------------------------------------
@@ -656,21 +762,27 @@ class WizardTUI:
     # ------------------------------------------------------------------
     def _bindings(self) -> KeyBindings:
         kb = KeyBindings()
+        @kb.add("/", filter=Condition(lambda: not self.app.layout.has_focus(self.input)))
+        def open_status(event):
+            self._status_input = True
+            self.input.buffer.insert_text("/")
+            self.app.layout.focus(self.input)
 
-        typing = Condition(lambda: self.state in (INTENT, WORKING))
-        navigating = Condition(lambda: self.state == MENU)
+        typing = Condition(lambda: self._status_input or self.state in (INTENT, WORKING) or self.app.layout.has_focus(self.input))
+        navigating = Condition(lambda: self.state == MENU and not self._status_input and self._usage_report is None)
         # The box has something to scroll in every state except the ones that
         # own the keyboard.
-        scrollable = Condition(lambda: self.state in (WORKING, RESULT))
+        scrollable = Condition(lambda: self.state in (WORKING, RESULT) or self._usage_report is not None)
+        pane_keys = scrollable & Condition(lambda: not self.app.layout.has_focus(self.input))
 
         @kb.add("c-c")
         def _(event):
-            event.app.exit()
+            self._request_exit()
 
         # q quits only when not typing: in the box, `q` is a letter.
         @kb.add("q", filter=~typing)
         def _(event):
-            event.app.exit()
+            self._request_exit()
 
 
         @kb.add("up", filter=navigating)
@@ -690,13 +802,13 @@ class WizardTUI:
         # --- right pane scrolling -------------------------------------
         # Bound in the states where the text box is not taking input, so these
         # reach the pane instead of moving a cursor in a box nobody is typing in.
-        @kb.add("up", filter=scrollable)
-        @kb.add("k", filter=scrollable)
+        @kb.add("up", filter=pane_keys)
+        @kb.add("k", filter=pane_keys)
         def _(event):
             self._scroll_by(-1)
 
-        @kb.add("down", filter=scrollable)
-        @kb.add("j", filter=scrollable)
+        @kb.add("down", filter=pane_keys)
+        @kb.add("j", filter=pane_keys)
         def _(event):
             self._scroll_by(1)
 
@@ -712,14 +824,14 @@ class WizardTUI:
             _, page = self._scroll_bounds()
             self._scroll_by(page)
 
-        @kb.add("home", filter=scrollable)
+        @kb.add("home", filter=pane_keys)
         def _(event):
             self.scroll = 0
             # Jumping to the top is a deliberate scroll away from the tail; say
             # so, or the next frame of a live run pulls the view straight back.
             self._pinned_top = 0
 
-        @kb.add("end", filter=scrollable)
+        @kb.add("end", filter=pane_keys)
         def _(event):
             top, _ = self._scroll_bounds()
             self.scroll = top
@@ -730,7 +842,7 @@ class WizardTUI:
         # offset above is read back off the Window rather than owned by us.
 
         # r is the explicit "do it again" on the result screen.
-        @kb.add("r", filter=Condition(lambda: self.state == RESULT))
+        @kb.add("r", filter=Condition(lambda: self.state == RESULT and not self.app.layout.has_focus(self.input)))
         def _(event):
             self._enter_menu()
 
@@ -739,7 +851,7 @@ class WizardTUI:
         # who opened it before the run went back to the flow would be stuck
         # looking at a page that is no longer there.
         @kb.add("b", filter=Condition(
-            lambda: self.state in (WORKING, RESULT) and (self.show_page or self._has_page())
+            lambda: self.state in (WORKING, RESULT) and not self.app.layout.has_focus(self.input) and (self.show_page or self._has_page())
         ))
         def _(event):
             self._toggle_page()
@@ -807,12 +919,16 @@ def run_tui(repo_path: str | None = None) -> None:
             f"{supervisor.log_dir}.",
             flush=True,
         )
+        supervisor.stop()
         return
 
     os.environ.update(supervisor.apply_env())
+    tui = WizardTUI(repo_path=repo_path)
     try:
-        WizardTUI(repo_path=repo_path).run()
+        tui.run()
     finally:
+        if tui.session:
+            tui.session.shutdown(timeout=2)
         # Only the children this run started; anything adopted outlives us.
         stopped = supervisor.stop()
         if stopped:

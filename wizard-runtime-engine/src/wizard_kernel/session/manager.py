@@ -15,11 +15,12 @@ import json
 from datetime import datetime, timezone
 
 from wizard_kernel.contracts.request import InvestigationRequest
-from wizard_kernel.contracts.status import LifecycleState
+from wizard_kernel.contracts.status import LifecycleState, TERMINAL_STATES, is_terminal
 from wizard_kernel.session.investigation import Investigation
 from wizard_kernel.storage import fs_store
 
 log = logging.getLogger(__name__)
+MAX_MODEL_CALLS = 32
 
 # States that signal an investigation is done — persist immediately on these
 _TERMINAL_STATES = {
@@ -28,6 +29,7 @@ _TERMINAL_STATES = {
     LifecycleState.blocked,
     LifecycleState.failed,
     LifecycleState.cancelled,
+    LifecycleState.timed_out,
 }
 
 
@@ -36,6 +38,44 @@ class InvestigationManager:
         self._store: dict[str, Investigation] = {}
         self._lock = __import__("threading").Lock()
         self._owners: set[str] = set()
+        self._runners: set[str] = set()
+
+    def acquire_run(self, inv_id: str) -> bool:
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv_id in self._runners or is_terminal(inv.state):
+                return False
+            self._runners.add(inv_id)
+            return True
+
+    def release_run(self, inv_id: str) -> None:
+        with self._lock:
+            self._runners.discard(inv_id)
+
+    def begin_step(self, inv_id: str, phase: LifecycleState, model: bool = False) -> dict:
+        with self._lock:
+            inv = self._store[inv_id]
+            if is_terminal(inv.state):
+                raise RuntimeError("Investigation is terminal")
+            if inv.active_step and inv.active_step['status'] in {'queued', 'running'}:
+                return {**inv.active_step, 'existing': True}
+            if model and inv.model_calls >= MAX_MODEL_CALLS:
+                raise RuntimeError("Model-call budget exhausted")
+            inv.generation += 1
+            inv.model_calls += int(model)
+            inv.state = phase
+            inv.active_step = {'id': f'{inv.id}:{phase.value}:{inv.generation}',
+                               'phase': phase.value, 'status': 'running'}
+            _persist(inv)
+            return dict(inv.active_step)
+
+    def end_step(self, inv_id: str, step_id: str, status: str) -> None:
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv.active_step and inv.active_step['id'] == step_id:
+                if inv.active_step['status'] == 'running':
+                    inv.active_step['status'] = status
+                    _persist(inv)
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
@@ -51,6 +91,7 @@ class InvestigationManager:
             question=req.question,
             submission_key=req.idempotency_key,
             submission_hash=signature,
+            usage_session_id=req.session_id,
             budget_total=req.options.budget,
             budget_remaining=req.options.budget,
         )
@@ -64,6 +105,8 @@ class InvestigationManager:
                         raise ValueError("Idempotency key already belongs to a different request")
                     return existing
             self._store[inv_id] = inv
+            from wizard_kernel.storage.usage import observe
+            observe("begin", inv, req.session_id)
             _persist(inv)   # write meta.json immediately on creation
         return inv
 
@@ -103,9 +146,13 @@ class InvestigationManager:
             for key, value in kwargs.items():
                 setattr(inv, key, value)
             inv.state = final
+            inv.report_ready = True
+            inv.finished_at = datetime.now(timezone.utc)
             inv.updated_at = datetime.now(timezone.utc)
             _persist(inv)
-            return final
+        from wizard_kernel.storage.usage import observe
+        observe("state", inv)
+        return final
 
     def get(self, inv_id: str) -> Investigation | None:
         with self._lock:
@@ -201,7 +248,7 @@ def _persist(inv: Investigation) -> None:
 def _from_dict(data: dict) -> Investigation:
     """Reconstruct Investigation from persisted dict — handle datetime + enum fields."""
     from datetime import datetime
-    for key in ("created_at", "updated_at"):
+    for key in ("created_at", "updated_at", "started_at", "deadline_at", "finished_at"):
         if isinstance(data.get(key), str):
             data[key] = datetime.fromisoformat(data[key])
     if isinstance(data.get("state"), str):

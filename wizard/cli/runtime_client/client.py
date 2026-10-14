@@ -24,12 +24,25 @@ import time
 import uuid
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 from wizard.cli.models.investigation_request import InvestigationRequest
+
+_cancel_scope = ContextVar("cli_run_cancellation", default=None)
+
+
+@contextmanager
+def listen_cancel(stop_event, register_monitor, on_run=None):
+    token = _cancel_scope.set((stop_event, register_monitor, on_run))
+    try:
+        yield
+    finally:
+        _cancel_scope.reset(token)
 
 # Where the Runtime Engine lives. Overridable so a run can target an engine on
 # another host or port without a code change — this is the only place the CLI
@@ -157,7 +170,7 @@ def cancel_investigation(inv_id: str) -> bool:
         # waiting for the UI to settle, so an unreachable engine must not hang
         # the cancel for the OS default (which can be minutes).
         req = urllib.request.Request(f"{base_url()}/{inv_id}", method="DELETE")
-        with urllib.request.urlopen(req, timeout=5) as response:
+        with urllib.request.urlopen(req, timeout=2) as response:
             body = json.loads(response.read().decode())
         return bool(body.get("cancelled", body.get("status") == "cancelled"))
     except (urllib.error.URLError, OSError, ValueError):
@@ -187,6 +200,16 @@ def _engine_error(exc: Exception) -> str:
 
 
 def stream_events(request: InvestigationRequest) -> Iterator[dict]:
+    """Keep the monitor lifecycle tied to the existing command generator."""
+    monitors = []
+    try:
+        yield from _stream_events(request, monitors)
+    finally:
+        for monitor in monitors:
+            monitor.close()
+
+
+def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
     """Start an investigation and yield engine events as they arrive.
 
     Yields plain dicts. Progress events are forwarded verbatim from the
@@ -207,6 +230,11 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
     """
     payload = _api_payload(request)
     api = base_url()
+    control = _cancel_scope.get()
+    def stopped():
+        return bool(control and control[0].is_set())
+    if stopped():
+        return
 
     # 1. Start investigation
     try:
@@ -224,6 +252,24 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
         return
 
     # 2. Poll events until the investigation reaches a terminal state
+    if control and control[2]:
+        control[2](inv_id)
+    if stopped():
+        # Cancellation may race the POST acknowledgement. Never abandon a run
+        # once its ID becomes available, even if the UI has already settled.
+        cancel_investigation(inv_id)
+        return
+    monitor = None
+    yield {"event_type": "usage.pending", "investigation_id": inv_id, "payload": {}}
+    if "usage_enabled" in data:
+        from wizard.cli.runtime_client.usage import UsageStream, usage_listener
+        monitor = UsageStream(f"{api}/{inv_id}/usage/stream", inv_id, on_update=usage_listener())
+        monitors.append(monitor)
+        if control:
+            control[1](monitor)
+    else:
+        yield {"event_type": "usage.updated", "investigation_id": inv_id,
+               "payload": {"incomplete": True, "persistence_error": "PostgreSQL usage persistence unavailable"}}
     seq = 0
     current_state = "unknown"
     status_data: dict = {}
@@ -243,7 +289,11 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
                 yield ev
 
     while True:
+        if stopped():
+            return
         try:
+            if monitor:
+                yield from monitor.drain()
             yield from _drain()
 
             status_req = urllib.request.Request(f"{api}/{inv_id}", method="GET")
@@ -254,7 +304,7 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
                 # list of terminal states here. The list this replaced named only
                 # completed/failed/cancelled, so when `incomplete` was added the
                 # poll never ended and the caller waited on a finished run forever.
-                if status_data.get("is_terminal"):
+                if status_data.get("is_terminal") and status_data.get('report_ready', True):
                     # Drain the tail before leaving.
                     #
                     # Reading the events and asking whether the run has stopped
@@ -297,7 +347,18 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
             yield {"event_type": "engine_unavailable", "error": _engine_error(e)}
             return
 
-        time.sleep(POLL_INTERVAL)
+        if monitor:
+            until = time.monotonic() + POLL_INTERVAL
+            while time.monotonic() < until:
+                if stopped():
+                    return
+                yield from monitor.drain()
+                time.sleep(min(0.1, max(0, until - time.monotonic())))
+        else:
+            if control:
+                control[0].wait(POLL_INTERVAL)
+            else:
+                time.sleep(POLL_INTERVAL)
 
     # 3. Fetch the report if the run wrote one.
     # Asked for on any terminal state, not just "completed": a run that ended
@@ -315,6 +376,8 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
             pass
 
     report_markdown = report_data.get("report_markdown", "")
+    final_usage = monitor.final() if monitor else {"incomplete": True}
+    yield {"event_type": "usage.updated", "investigation_id": inv_id, "payload": final_usage}
     yield {
         "event_type": "done",
         "status": current_state,
@@ -323,4 +386,5 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
         "report_markdown": report_markdown or "No report available.",
         "report_path": _write_report(report_markdown, request),
         "stats": status_data,
+        "usage": final_usage,
     }

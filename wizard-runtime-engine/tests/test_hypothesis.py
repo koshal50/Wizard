@@ -20,7 +20,7 @@ def _obs(payload: dict) -> Observation:
     return Observation(
         id="obs_001", investigation_id="inv_001", node_id="n_001",
         source_tool="execute_command", obs_type="command_result",
-        payload=payload, created_at=datetime.now(timezone.utc),
+        payload=payload, success=payload.get("ok", payload.get("exit_code", 0) == 0), created_at=datetime.now(timezone.utc),
     )
 
 
@@ -36,7 +36,7 @@ def test_exit_code_failure():
 
 def test_exit_code_unexpected():
     node = _node(HypothesisKind.exit_code_in, success_values=[0], failure_values=[1])
-    assert evaluate(node, _obs({"exit_code": 127})) == "unexpected"
+    assert evaluate(node, _obs({"exit_code": 127})) == "expected_failure"
 
 
 def test_stdout_contains_success():

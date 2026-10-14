@@ -12,6 +12,7 @@ import { safeParse } from "../../validation/schema.ts";
 import type { LLMProvider, LLMRequest, LLMResult } from "../LLMProvider.ts";
 import { llmErr, llmOk } from "../LLMProvider.ts";
 import { extractJson } from "../extractJson.ts";
+import { recordUsage } from "../usage.ts";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -57,8 +58,9 @@ export class AnthropicLLMProvider implements LLMProvider {
     };
 
     let response: Response;
+    let requested = false;
     try {
-      response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/messages`, {
+      const init = {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -67,10 +69,16 @@ export class AnthropicLLMProvider implements LLMProvider {
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.cfg.timeoutMs),
-      });
+      };
+      requested = true;
+      response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/messages`, init);
     } catch (e) {
+      if (requested) recordUsage(null, this.name, this.cfg.model, null, request.purpose);
       return llmErr<T>([`anthropic: request failed: ${(e as Error).message}`], "", this.name);
     }
+
+    recordUsage(await safeJson(response.clone()), this.name, this.cfg.model,
+      response.headers.get("request-id") ?? response.headers.get("x-request-id"), request.purpose);
 
     if (!response.ok) {
       const text = await safeText(response);

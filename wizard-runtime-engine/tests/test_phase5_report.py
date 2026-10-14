@@ -85,7 +85,7 @@ class TestReportGeneration:
         obs = _obs(inv.id, "node_001")
         kg = KnowledgeGraph(inv.id)
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         assert "# Verification Report" in md
         assert inv.id in md
         assert inv.repository_path in md
@@ -101,7 +101,7 @@ class TestReportGeneration:
         ev = _ev(cl.id, [obs.id], "execution")
         kg.insert(cl, ev)
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         assert "Verdict" in md
         assert "RUNTIME" in md
 
@@ -141,7 +141,7 @@ class TestReportGeneration:
         tech = _claim(inv.id, "RUNTIME", "node_version", "22")
         kg.insert(tech, _ev(tech.id, [obs.id], "execution"))
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         summary = md.split("## Verdict")[1].split("---")[0]
         assert "node_version" in summary
         assert "server/index.js" not in summary
@@ -163,7 +163,7 @@ class TestReportGeneration:
         read = _claim(inv.id, "FILE_READ", "server/index.js", True)
         kg.insert(read, _ev(read.id, [obs.id], "config_parse"))
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         summary = md.split("## Verdict")[1].split("---")[0]
         assert "belief threshold" not in summary
         assert "read" in summary, summary
@@ -192,7 +192,7 @@ class TestReportGeneration:
                          "unchanged")
         kg.insert(pressed, _ev(pressed.id, [obs.id], "execution"))
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         summary = md.split("## Verdict")[1].split("---")[0]
         assert "Sign in" in summary, summary
 
@@ -216,7 +216,7 @@ class TestReportGeneration:
         other = _claim(inv.id, "INTERACTION", "interacted:role=button", True)
         kg.insert(other, _ev(other.id, [obs.id], "execution"))
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         summary = md.split("## Verdict")[1].split("---")[0]
         assert summary.count("current_url") == 1, summary
         assert "interacted:role=button" in summary, summary
@@ -243,7 +243,7 @@ class TestReportGeneration:
         submit = _claim(inv.id, "INTERACTION", "effect:submit", "unchanged")
         kg.insert(submit, _ev(submit.id, [obs.id], "execution"))
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         summary = md.split("## Verdict")[1].split("---")[0]
         assert "effect:submit" in summary, summary
         # Still recorded — the Evidence Index is where every claim appears.
@@ -259,7 +259,7 @@ class TestReportGeneration:
         cl = _claim(inv.id, "RUNTIME", "node_version", "18")
         kg.insert(cl, _ev(cl.id, [obs.id], "execution"))
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         assert "Detected Technologies" in md
         assert "node_version" in md
 
@@ -273,7 +273,7 @@ class TestReportGeneration:
         goals.add(g)
         goals.get("goal_001").state = "satisfied"  # GoalEngine satisfies by evidence; force state for this report test
 
-        md = report_module.generate(inv, graph, [obs], kg, goals)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg, goals)
         assert "Goals Summary" in md
         assert "Verify Runtime" in md
         assert "satisfied" in md
@@ -301,7 +301,7 @@ class TestReportGeneration:
         cl3_ev = _ev(cl3.id, ["obs_nonexistent_99"], "documentation")
         kg.insert(cl3, cl3_ev)
 
-        md = report_module.generate(inv, graph, [obs1, obs2], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs1, obs2], kg)
         assert "Evidence Index" in md
 
         # obs1 and obs2 must appear as citations
@@ -322,7 +322,7 @@ class TestReportGeneration:
         kg.insert(cl2, _ev(cl2.id, [obs.id + "_2"], "execution"))
         kg.add_relationship(cl1.id, cl2.id, "CONTRADICTS")
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         assert "Contradictions" in md
 
     def test_report_unverified_areas(self, tmp_path):
@@ -333,7 +333,7 @@ class TestReportGeneration:
         goals.add(Goal(id="g1", name="Verify Security", required_claim_types=["SECURITY"]))
         # NOT satisfied
 
-        md = report_module.generate(inv, graph, [], kg, goals)
+        md = report_module.generate_diagnostics(inv, graph, [], kg, goals)
         assert "Unverified Areas" in md
         assert "Verify Security" in md
 
@@ -346,7 +346,7 @@ class TestReportGeneration:
         obs = _obs(inv.id, "node_001")
         kg = KnowledgeGraph(inv.id)
 
-        md = report_module.generate(inv, graph, [obs], kg)
+        md = report_module.generate_diagnostics(inv, graph, [obs], kg)
         fs_store.write_text(inv.id, "verification_report.md", md)
 
         report_file = tmp_path / "investigations" / inv.id / "verification_report.md"

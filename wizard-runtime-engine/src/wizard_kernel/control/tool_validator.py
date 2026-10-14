@@ -74,8 +74,9 @@ class ToolRequestValidator:
     """Per-investigation validator. Holds dedup state — never shared across investigations."""
 
     def __init__(self, workspace_root: str, allowed_domains: list[str] | None = None,
-                 browser_enabled: bool = False, navigation_targets: list[str] | None = None) -> None:
+                 browser_enabled: bool = False, navigation_targets: list[str] | None = None, read_only: bool = False) -> None:
         self._root = Path(workspace_root).resolve()
+        self._read_only = read_only
         self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
@@ -155,6 +156,9 @@ class ToolRequestValidator:
         def reject(reason: str) -> ValidationResult:
             self._rejected_fingerprints.add(raw_fingerprint)
             return ValidationResult(valid=False, reason=reason)
+
+        if self._read_only and request.tool not in {"read_file", "list_tree", "search_files", "path_exists"}:
+            return reject("Explain is read-only; execution, network and browser tools are disabled.")
 
         # 1. Tool existence check
         if request.tool not in _ALLOWED_TOOLS:

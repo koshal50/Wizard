@@ -288,6 +288,7 @@ class HttpPlanner:
 
     def __init__(self, base_url: str) -> None:
         self._url = base_url.rstrip("/")
+        self.deadline_at = None
         # The planner service mounts its three handlers at /plan/*, and _post()
         # appends the full "/plan/initial" path itself. A caller that configures
         # the base as "<origin>/plan" — the natural reading of "the planner's

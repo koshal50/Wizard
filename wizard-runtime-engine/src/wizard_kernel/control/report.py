@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from wizard_kernel.session.investigation import Investigation
 
 
-def generate(
+def generate_diagnostics(
     inv: "Investigation",
     graph: "InvestigationGraph",
     observations: "list[Observation]",
@@ -651,3 +651,10 @@ def _duration(start: datetime, end: datetime) -> str:
     if secs < 60:
         return f"{secs}s"
     return f"{secs // 60}m {secs % 60}s"
+
+
+
+def generate(inv, graph, observations, kg=None, goals=None):
+    """Normal template-shaped report; diagnostic rendering remains opt-in."""
+    from wizard_kernel.control.scoped_report import render
+    return render(inv, graph, observations, kg, goals)

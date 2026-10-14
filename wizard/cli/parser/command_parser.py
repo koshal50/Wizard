@@ -52,6 +52,12 @@ COMMAND_TARGETS: dict[str, list[str]] = {
 # All recognized command families
 VALID_COMMANDS: list[str] = list(COMMAND_TARGETS.keys())
 
+# Local TUI controls; these never enter the four core command dispatch paths.
+SLASH_COMMANDS = {
+    "/status": "Show persisted token usage",
+    "/exit": "Cancel work and quit Wizard",
+}
+
 
 # ---------------------------------------------------------------------------
 # Validation

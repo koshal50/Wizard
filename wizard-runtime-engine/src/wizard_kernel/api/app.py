@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from wizard_kernel.api import routes_health, routes_investigations, routes_browser
+from wizard_kernel.api import routes_health, routes_investigations, routes_browser, routes_usage
 from wizard_kernel.api.deps import get_manager
 
 log = logging.getLogger(__name__)
@@ -12,6 +12,13 @@ async def lifespan(app: FastAPI):
     # ── Startup: restore persisted investigations from disk ──────────────────
     manager = get_manager()
     restored = manager.restore()
+    from wizard_kernel.storage.usage import get_usage
+    usage = None
+    try:
+        usage = get_usage()
+        usage.start()
+    except Exception:  # noqa: BLE001 -- optional usage storage cannot prevent runtime startup
+        log.error("Usage storage unavailable; accounting is incomplete")
     log.info("kernel ready — %d investigations restored from disk", restored)
     if restored == 0:
         log.info("(no prior investigations found — clean start)")
@@ -19,7 +26,11 @@ async def lifespan(app: FastAPI):
         "MULTI-WORKER NOTICE: run with --workers 1 (default). "
         "State is in-process + disk. Multi-worker needs a shared store."
     )
-    yield
+    try:
+        yield
+    finally:
+        if usage:
+            usage.close()
     # ── Shutdown ─────────────────────────────────────────────────────────────
 
 
@@ -33,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_health.router)
     app.include_router(routes_investigations.router)
     app.include_router(routes_browser.router)
+    app.include_router(routes_usage.router)
     return app
 
 

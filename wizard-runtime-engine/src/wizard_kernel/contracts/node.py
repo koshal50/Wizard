@@ -40,6 +40,7 @@ NodeState = Literal["waiting", "running", "complete", "failed", "blocked"]
 
 
 class InvestigationNode(BaseModel):
+    executed_action: dict | None = None
     id: str
     type: NodeType
     action: dict[str, Any]

@@ -103,6 +103,9 @@ class TuiSession:
     running: bool = False
     finished: bool = False
     cancelled: bool = False
+    _stop_event: threading.Event = field(default_factory=threading.Event)
+    _monitors: list = field(default_factory=list)
+    _cancel_thread: threading.Thread | None = None
     status: str = "pending"       # pending|running|completed|failed|engine_unavailable
     report_markdown: str = ""
     report_path: str = ""
@@ -110,6 +113,7 @@ class TuiSession:
     now: str = ""                 # the latest real step — what it is doing
     nexts: list[str] = field(default_factory=list)  # the Runtime's own next steps
     started_at: float = field(default_factory=time.monotonic)
+    ended_at: float | None = None
     # The Runtime's id for this run, once it has accepted the request. Public
     # because cancelling needs it: the cancel endpoint is addressed by id, and
     # an investigation with no id has nothing upstream to stop.
@@ -156,6 +160,7 @@ class TuiSession:
     # rather than inside it: the page is every control, and this is the one the
     # reader wants pointed at. See `_absorb_browser`.
     last_act: dict | None = None
+    usage: dict | None = None
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _thread: "threading.Thread | None" = field(default=None, repr=False)
@@ -198,8 +203,10 @@ class TuiSession:
                 "now": self.now,
                 "nexts": list(self.nexts),
                 "started_at": self.started_at,
+                "ended_at": self.ended_at,
                 "page": self.page,
                 "last_act": self.last_act,
+                "usage": self.usage,
             }
 
     # ------------------------------------------------------------------
@@ -213,6 +220,8 @@ class TuiSession:
             self.running = True
             self.status = "running"
             self.started_at = time.monotonic()
+            self.usage = None
+            self.ended_at = None
             self._thread = threading.Thread(target=self._run, name="wiz-worker", daemon=True)
             # Publish and start under the same lock: concurrent start() callers
             # must not each create a worker and submit duplicate investigations.
@@ -235,8 +244,33 @@ class TuiSession:
             if self.finished or self.cancelled:
                 return
             self.cancelled = True
+            self._stop_event.set()
+            if self.usage and (self.usage.get("pending_requests") or self.usage.get("persistence_pending")):
+                self.usage = {**self.usage, "incomplete": True}
             self.now = ""
             inv_id = self.investigation_id
+
+        self._settle("cancelled")
+        for monitor in self._monitors:
+            monitor.stop.set()
+        self._cancel_thread = threading.Thread(
+            target=self._cancel_remote, args=(inv_id,), name="wiz-cancel", daemon=True,
+        )
+        self._cancel_thread.start()
+
+    def _register_monitor(self, monitor):
+        with self._lock:
+            self._monitors.append(monitor)
+            if self._stop_event.is_set():
+                monitor.stop.set()
+
+    def _accept_run(self, run_id):
+        # Record acknowledgement before progress pacing or cancellation can
+        # discard the first yielded event and lose the remote run's identity.
+        with self._lock:
+            self.investigation_id = str(run_id)
+
+    def _cancel_remote(self, inv_id):
 
         stopped = False
         if inv_id:
@@ -255,7 +289,16 @@ class TuiSession:
             self._log(f"cancellation requested for {inv_id} — saving results and cleaning up", "wiz.warn")
         else:
             self._log(f"cancelled {inv_id} — asked the runtime to stop", "wiz.warn")
-        self._settle("cancelled")
+        for monitor in self._monitors:
+            monitor.close()
+
+    def shutdown(self, timeout=2):
+        """Bounded cleanup; no network or worker join can hold the UI open."""
+        self.cancel()
+        deadline = time.monotonic() + timeout
+        for thread in (self._cancel_thread, self._thread):
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=max(0, deadline - time.monotonic()))
 
     def _get_event_generator(self) -> Iterator[dict]:
         """The command generator for this family, with the user's intent.
@@ -272,6 +315,12 @@ class TuiSession:
         # environment's — which `run_tui` fills in — or a wired run silently
         # degrades to an offline one.
         options = RequestOptions.from_env()
+        if self.family in {'verify', 'investigate'}:
+            from wizard.cli.parser.intent_parser import parse_intent
+            from wizard.cli.tui.services import ensure_chromium
+            parsed = parse_intent(self.intent_text, self.family, menu_target=self.target or None)
+            if parsed.urls or options.browser_enabled is True:
+                ensure_chromium(announce=False)
 
         # The browser window is the point: a reader who watches the agent work
         # wants to see the page it is driving, not only the pane this view draws
@@ -295,9 +344,17 @@ class TuiSession:
         raise ValueError(f"unknown command family: {self.family}")
 
     def _run(self) -> None:
+        from wizard.cli.runtime_client.client import listen_cancel
+        from wizard.cli.runtime_client.usage import listen_usage
+        with listen_usage(self._consume), listen_cancel(self._stop_event, self._register_monitor, self._accept_run):
+            self._drive()
+
+    def _drive(self) -> None:
         """Drive the stream. Failure is reported, never papered over."""
+        generator = None
         try:
-            for ev in self._get_event_generator():
+            generator = self._get_event_generator()
+            for ev in generator:
                 with self._lock:
                     cancelled = self.cancelled
                 if cancelled and ev.get("event_type") == "done":
@@ -318,11 +375,17 @@ class TuiSession:
                           "wiz.warn")
                 self._settle("incomplete")
         except Exception as exc:  # noqa: BLE001 — the real reason is the point
+            if self._stop_event.is_set():
+                return
             message = str(exc) or exc.__class__.__name__
             self._log(f"failed · {message}", "wiz.err")
             with self._lock:
                 self.status = "failed"
             self._settle("failed")
+        finally:
+            close = getattr(generator, "close", None)
+            if close:
+                close()
 
     # ------------------------------------------------------------------
     # Writes
@@ -368,6 +431,7 @@ class TuiSession:
             time.sleep(min(remaining, 0.05))
 
     def _log(self, text: str, style: str, kind: str = "step", role: str = "") -> None:
+        text = _safe_display(text)
         with self._lock:
             self.activity.append(LogLine(sanitize_terminal(text), style, kind, role))
             self.now = self.activity[-1].text
@@ -379,21 +443,41 @@ class TuiSession:
             self.status = status
             self.finished = True
             self.running = False
+            self.ended_at = time.monotonic()
         self.on_change()
 
     def _consume(self, ev: dict) -> None:
+        if not isinstance(ev, dict):
+            self._log('Runtime sent an unreadable event', 'wiz.warn', role='runtime')
+            return
         ev_type = ev.get("event_type", "")
         payload = ev.get("payload") or {}
+        if not isinstance(payload, dict):
+            self._log('Runtime sent an unreadable event', 'wiz.warn', role='runtime')
+            return
+
+        if ev_type in {"usage.pending", "usage.updated", "done"}:
+            found = ev.get("investigation_id") or payload.get("run_id")
+            if self.investigation_id and found and str(found) != self.investigation_id:
+                return
+            if payload.get("run_id") and found and str(payload["run_id"]) != str(found):
+                return
 
         # Every event carries the Runtime's id for the run, so the first one
         # seen is recorded here — `cancel()` addresses the cancel endpoint by
         # that id, and an investigation with no id has nothing upstream to stop.
         # The API puts it on the event and inside its payload; read either.
         if not self.investigation_id:
-            found = ev.get("investigation_id") or payload.get("investigation_id")
+            found = ev.get("investigation_id") or payload.get("investigation_id") or payload.get("run_id")
             if found:
                 with self._lock:
                     self.investigation_id = str(found)
+
+        if ev_type == "usage.pending":
+            with self._lock:
+                self.usage = None
+            self.on_change()
+            return
 
         if ev_type == "engine_unavailable":
             # The Runtime's own words — an HTTP refusal's `detail`, or the
@@ -406,11 +490,30 @@ class TuiSession:
             self._settle("engine_unavailable")
             return
 
+        if ev_type == "usage.updated":
+            with self._lock:
+                if self.cancelled or self.finished:
+                    return
+                previous = self.usage or {}
+                if payload.get("revision", previous.get("revision", 0)) < previous.get("revision", 0):
+                    return
+                # Snapshots replace totals; reconnection never adds them twice.
+                updated = {**previous, **payload}
+                if "total_tokens" in payload and not payload.get("transport_error"):
+                    updated.pop("transport_error", None)
+                if updated == previous:
+                    return
+                self.usage = updated
+            self.on_change()
+            return
+
         if ev_type == "done":
             with self._lock:
                 self.status = ev.get("status", "completed")
                 self.report_markdown = ev.get("report_markdown", "") or ""
                 self.report_path = ev.get("report_path") or ""
+                if ev.get("usage"):
+                    self.usage = {**(self.usage or {}), **ev["usage"]}
             verdict = {
                 "completed": "the investigation completed",
                 "cancelled": "the investigation was cancelled",
@@ -425,6 +528,7 @@ class TuiSession:
                 # not start, nothing listened — so this reads as "not our fault"
                 # rather than "we gave up".
                 "blocked": "the investigation was blocked by the application/environment",
+                'timed_out': 'Investigation timed out after 5 minutes',
             }.get(self.status, f"the investigation ended · {self.status}")
             if self.status != "completed":
                 reason = str((ev.get("stats") or {}).get("last_event") or "").strip()
@@ -451,7 +555,10 @@ class TuiSession:
         if ev_type.startswith("browser."):
             self._absorb_browser(ev_type, payload)
 
-        line, style = _narrate(ev_type, payload)
+        try:
+            line, style = _narrate(ev_type, payload)
+        except (TypeError, ValueError, AttributeError, KeyError):
+            line, style = 'Runtime update could not be displayed; details are in diagnostics', 'wiz.warn'
         if line:
             if ev_type == "context_supplied":
                 line = self._context_news(line, payload)
@@ -632,6 +739,8 @@ _DOING: dict[str, str] = {
     "browser_type":     "typing into",
     "browser_back":     "going back from",
     "browser_extract":  "extracting from the page",
+    "http_request": "requesting",
+    "browser_screenshot": "capturing screenshot",
 }
 
 _KIND: dict[str, str] = {"claim.admitted": "evidence"}
@@ -767,7 +876,19 @@ def _subject(tool: str, params: dict) -> str:
     return ""
 
 
+def _safe_display(value) -> str:
+    import re
+    text = str(value)
+    text = re.sub(r'\x1b\][^\x07]*(?:\x07|\x1b\\)', '', text)
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text)
+    return re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', text)[:400]
+
+
 def _narrate(ev_type: str, payload: dict) -> tuple[str, str]:
+    if ev_type == 'node.failed':
+        return '! Investigation step could not be verified', 'wiz.warn'
+    if ev_type == 'planner.node_skipped':
+        return '', 'wiz.dim'
     """Map a runtime event to a flow-narration line + style."""
     if ev_type == "seams.resolved":
         return _seams(payload)

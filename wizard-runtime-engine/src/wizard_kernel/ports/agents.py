@@ -44,6 +44,7 @@ class MockExplorer:
         params = node_action.get("params", {})
         return ExplorerResponse(
             investigation_id=context.get("investigation_id", ""),
+            node_id=context.get('current_node', {}).get('id'),
             tool_request=ToolRequest(tool=tool, parameters=params,
                                      reason="mock: executing planned node action"),
         )
@@ -64,6 +65,7 @@ class MockVerifier:
 class HttpExplorer:
     def __init__(self, url: str) -> None:
         self._url = url
+        self.deadline_at = None
 
     def request(self, context: dict) -> ExplorerResponse:
         import httpx
@@ -94,12 +96,18 @@ class HttpExplorer:
             error.detail = detail[:500]
             error.request_id = r.headers.get("x-request-id") or r.headers.get("request-id")
             raise error
-        return ExplorerResponse.model_validate(r.json())
+        data = r.json()
+        if not isinstance(data.get('node_id'), str) or not data['node_id'].strip():
+            error = RuntimeError('Explorer output failed validation: node_id is required')
+            error.detail = str(error)
+            raise error
+        return ExplorerResponse.model_validate(data)
 
 
 class HttpVerifier:
     def __init__(self, url: str) -> None:
         self._url = url
+        self.deadline_at = None
 
     def assess(self, claims: list[dict], investigation_id: str = "") -> VerifierAssessment:
         import httpx
@@ -126,3 +134,16 @@ def get_agents(options: dict) -> tuple[ExplorerPort, VerifierPort]:
     explorer: ExplorerPort = HttpExplorer(explorer_url) if explorer_url else MockExplorer()
     verifier: VerifierPort = HttpVerifier(verifier_url) if verifier_url else MockVerifier()
     return explorer, verifier
+
+
+def _remaining_timeout(deadline):
+    from datetime import datetime, timezone
+    remaining = (datetime.fromisoformat(deadline) - datetime.now(timezone.utc)).total_seconds() if deadline else 30
+    if remaining <= 0:
+        from wizard_kernel.session.control import DeadlineExceeded
+        raise DeadlineExceeded('Investigation deadline reached')
+    # This hop includes the shared provider rate-gate wait AND the provider's
+    # separately bounded HTTP call. A 30s transport cap could abandon a healthy
+    # agent while it was legitimately waiting its turn. Runtime still owns and
+    # enforces the absolute investigation deadline.
+    return remaining

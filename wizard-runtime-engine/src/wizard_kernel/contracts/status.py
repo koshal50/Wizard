@@ -6,6 +6,12 @@ class LifecycleState(str, Enum):
     scanning = "scanning"
     planning = "planning"
     investigation_loop = "investigation_loop"
+    ready = "ready"
+    exploring = "exploring"
+    executing = "executing"
+    observing = "observing"
+    replanning = "replanning"
+    verifying = "verifying"
     reporting = "reporting"
     completed = "completed"
     # The investigation ended without satisfying every goal: the Planner had no
@@ -23,6 +29,7 @@ class LifecycleState(str, Enum):
     blocked = "blocked"
     failed = "failed"
     cancelled = "cancelled"
+    timed_out = "timed_out"
 
 
 # The states from which an investigation never moves again. A client waiting on
@@ -36,6 +43,7 @@ TERMINAL_STATES: frozenset["LifecycleState"] = frozenset({
     LifecycleState.blocked,
     LifecycleState.failed,
     LifecycleState.cancelled,
+    LifecycleState.timed_out,
 })
 
 

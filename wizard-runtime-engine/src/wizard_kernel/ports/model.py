@@ -112,9 +112,13 @@ class ModelPolicy:
                                   headers={"Authorization": "Bearer " + self.key},
                                   timeout=timeout)
         except httpx.HTTPError as exc:
+            from wizard_kernel.storage.usage import observe
+            observe("provider_response", None, role, self.model)
             progress("failure", failure_kind="transport", detail=type(exc).__name__)
             raise ModelFailure("transport", type(exc).__name__) from exc
         request_id = response.headers.get("x-request-id") or response.headers.get("request-id")
+        from wizard_kernel.storage.usage import observe
+        observe("provider_response", response, role, self.model)
         self.last_metadata = {"provider_status": response.status_code, "request_id": request_id,
                               "model": self.model, "input_chars": size, "schema": response_model.__name__}
         progress("response", status=response.status_code, elapsed_seconds=round(time.monotonic()-started, 1), request_id=request_id)

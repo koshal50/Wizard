@@ -1111,7 +1111,7 @@ def test_actual_registration_then_login_through_agent_browser(tmp_path, monkeypa
 const route=location.pathname;
 if(route==='/enroll' || route==='/access'){
  document.body.innerHTML='<form>'+(route==='/enroll'?'<label>Name<input name="name" required></label>':'')+
- '<label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>'+ 
+ '<label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" required></label>'+
  '<button type="submit">'+(route==='/enroll'?'Create account':'Log in')+'</button></form>';
  document.querySelector('form').onsubmit=async(e)=>{e.preventDefault();
   const data=Object.fromEntries(new FormData(e.target));

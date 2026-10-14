@@ -29,7 +29,8 @@ dependencies = [
     "pydantic>=2.8",
     "httpx>=0.27",
     "python-dotenv>=1.0",
-
+    # Optional usage persistence uses the existing PostgreSQL integration.
+    "psycopg[binary,pool]>=3.2,<4",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "ruff>=0.6",
 ]
+usage = ["psycopg[binary,pool]>=3.2,<4"]
 
 [project.scripts]
 wizard = "wizard.cli.main:main"
@@ -55,6 +57,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = [".", "wizard-runtime-engine/src"]
 include = ["wizard", "wizard.*", "wizard_kernel", "wizard_kernel.*"]
+
+[tool.setuptools.package-data]
+wizard_kernel = ["storage/migrations/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["wizard/tests"]

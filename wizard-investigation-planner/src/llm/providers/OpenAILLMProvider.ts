@@ -12,6 +12,8 @@ import type { LLMProvider, LLMRequest, LLMResult } from "../LLMProvider.ts";
 import { llmErr, llmOk } from "../LLMProvider.ts";
 import { extractJson } from "../extractJson.ts";
 import { CerebrasRateGate, retryAfterMs } from "./CerebrasRateGate.ts";
+import { remainingMs } from '../deadline.ts';
+import { recordUsage } from "../usage.ts";
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
@@ -55,7 +57,10 @@ export class OpenAILLMProvider implements LLMProvider {
       model: this.cfg.model,
       temperature: request.temperature ?? 0,
       max_completion_tokens: 1024,
-      response_format: { type: "json_object" },
+      ...(this.cerebrasGate && this.cfg.model === 'gpt-oss-120b' ? {reasoning_effort: 'low'} : {}),
+      response_format: schema.jsonSchema
+        ? {type: 'json_schema', json_schema: {name: request.purpose, strict: true, schema: schema.jsonSchema}}
+        : { type: "json_object" },
       messages,
     };
 
@@ -98,9 +103,12 @@ export class OpenAILLMProvider implements LLMProvider {
     }
 
     const payload = (await safeJson(response)) as
-      | { choices?: Array<{ message?: { content?: string } }> }
+      | { choices?: Array<{ message?: { content?: string }, finish_reason?: string }>, usage?: {completion_tokens?: number} }
       | null;
     const text = payload?.choices?.[0]?.message?.content ?? "";
+    if (payload?.choices?.[0]?.finish_reason === 'length') {
+      return llmErr<T>([`openai: incomplete structured response; finish_reason=length; completion_tokens=${payload.usage?.completion_tokens ?? 'unknown'}`], '', this.name);
+    }
     if (!text) return llmErr<T>(["openai: empty completion"], JSON.stringify(payload), this.name);
 
     const extracted = extractJson(text);

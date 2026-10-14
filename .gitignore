@@ -44,3 +44,12 @@ package*node_modules/
 # TypeScript build output
 *.tsbuildinfo
 WIZARD_REBUILD_PLAN.md
+
+PROJECT_MAP.md
+wizard_dynamic_intent_report_template.md
+weather api/
+images/
+
+token-usage.md
+tui-control-commands.md
+tui-usage-environment.md

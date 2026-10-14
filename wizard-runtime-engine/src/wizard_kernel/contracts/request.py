@@ -1,8 +1,9 @@
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class InvestigationOptions(BaseModel):
+    max_context_tokens: int = 8192
     budget: int = 40
     sandbox_mode: Literal["docker", "local_dev"] = "local_dev"
     planner_url: str | None = None
@@ -27,6 +28,8 @@ class InvestigationOptions(BaseModel):
 
 
 class InvestigationRequest(BaseModel):
+    session_id: str | None = Field(default=None, min_length=1, max_length=128,
+                                  pattern=r"^[A-Za-z0-9_-]+$")
     contracts_version: str = "1.0"
     idempotency_key: str | None = None
     repository_path: str
@@ -40,3 +43,9 @@ class InvestigationRequest(BaseModel):
     # request.
     question: str = Field(default="", max_length=8000)
     options: InvestigationOptions = Field(default_factory=InvestigationOptions)
+
+    @model_validator(mode='after')
+    def explanation_is_read_only(self):
+        if self.intent == 'explain':
+            self.options.browser_enabled = False
+        return self

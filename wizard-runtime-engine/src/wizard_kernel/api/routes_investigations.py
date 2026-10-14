@@ -115,7 +115,13 @@ def create_investigation(
         name=f"loop-{inv.id}",
     )
     t.start()
-    return {"investigation_id": inv.id, "status": inv.state}
+    from wizard_kernel.storage.usage import get_usage
+    try:
+        usage_enabled = get_usage().database is not None
+    except Exception:  # noqa: BLE001 -- optional telemetry cannot reject a running investigation
+        usage_enabled = False
+    return {"investigation_id": inv.id, "status": inv.state,
+            "usage_enabled": usage_enabled}
 
 
 @router.get("/{inv_id}")
@@ -136,6 +142,9 @@ def get_investigation(
         # only completed/failed/cancelled, so it polled an `incomplete` run
         # forever and the TUI never showed a result.
         "is_terminal": is_terminal(inv.state),
+        'report_ready': inv.report_ready,
+        'deadline_at': inv.deadline_at.isoformat(),
+        'active_step': inv.active_step,
         "budget_remaining": inv.budget_remaining,
         "nodes_completed": inv.nodes_completed,
         "claims_count": inv.claims_count,

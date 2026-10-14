@@ -549,8 +549,10 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             state["provider_progress"] = {"agent": role, "stage": stage, **details}
             save(last_event=f"{role}: provider {stage}")
             bus.emit("provider.progress", state["provider_progress"])
-        result = policy.request(role, context, model, max_input_chars=max_input, cancel_check=guard,
-                                deadline=deadline, on_progress=progress)
+        from wizard_kernel.storage.usage import operation
+        with operation(inv):
+            result = policy.request(role, context, model, max_input_chars=max_input, cancel_check=guard,
+                                    deadline=deadline, on_progress=progress)
         state["provider_requests"] = getattr(policy, "provider_requests", 0)
         state["provider_metadata"] = getattr(policy, "last_metadata", {})
         # Persist a successfully validated response even if cancellation arrived

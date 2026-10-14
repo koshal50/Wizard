@@ -28,6 +28,7 @@ the user's selection into a structured request and stream the response.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Iterator
 
 from wizard.cli.parser.command_parser import validate_target
@@ -84,7 +85,7 @@ def explain(
     request = InvestigationRequest(
         repository=RepositoryInfo(path=repo_path),
         intent=intent,
-        options=options.for_urls(intent.urls),
+        options=replace(options, browser_enabled=False),
     )
 
     # Step 4: Runtime Engine Communication -- Stream events

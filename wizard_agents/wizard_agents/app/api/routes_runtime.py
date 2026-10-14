@@ -45,6 +45,7 @@ from app.contracts.verification import (
 )
 from app.explorer.agent import ExplorerAgent, ExplorerAgentError
 from app.llm.base import LLMProvider
+from app.llm.usage import usage_response
 from app.verification.agent import VerificationAgent, VerificationAgentError
 
 router = APIRouter(prefix="/agent", tags=["runtime-adapter"])
@@ -75,6 +76,7 @@ RUNTIME_TOOLS: List[ToolName] = [
     ToolName.BROWSER_FILL_FORM,
     ToolName.BROWSER_BACK,
     ToolName.BROWSER_EXTRACT,
+    ToolName.BROWSER_SCREENSHOT,
 ]
 
 # Kernel node types that imply a tool when the node carries no explicit action.
@@ -167,6 +169,14 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
                  f"{json.dumps(packet.get('resource_state') or {}, separators=(',', ':'))}"),
         missing_evidence=missing_evidence,
         previous_actions=packet.get("previous_actions") or [],
+        investigation=packet.get('investigation') or {},
+        goals=active_goals,
+        plan=packet.get('plan') or {},
+        node_selection=packet.get('node_selection') or {'valid_node_ids': [node_id]},
+        successful_results=packet.get('successful_results') or [],
+        recent_failures=packet.get('recent_failures') or [],
+        resources=packet.get('resource_state') or {},
+        http=packet.get('http') or {},
         available_tools=[
             tool for tool in RUNTIME_TOOLS
             if tool.value in set(packet.get("available_tools") or [])
@@ -183,12 +193,16 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
 
 def _to_kernel_response(investigation_id: str, output: Any) -> Dict[str, Any]:
     """Convert the one validated Explorer decision to the kernel ToolRequest."""
+    if output.decision != 'action':
+        return {'investigation_id': investigation_id, 'decision': output.decision,
+                'node_id': output.node_id, 'reason': output.reason, 'tool_request': None}
     request = output.to_tool_request()
     params = dict(request.parameters or {})
     if request.command:
         params["command"] = request.command
     return {
         "investigation_id": investigation_id,
+        "node_id": output.node_id,
         "tool_request": {
             "tool": request.tool.value,
             "parameters": params,
@@ -198,6 +212,7 @@ def _to_kernel_response(investigation_id: str, output: Any) -> Dict[str, Any]:
 
 
 @router.post("/explorer")
+@usage_response
 def explorer(
     packet: Dict[str, Any], provider: LLMProvider = Depends(get_provider)
 ) -> Dict[str, Any]:
@@ -249,7 +264,8 @@ def _to_verification_input(packet: Dict[str, Any]) -> VerificationInput:
                     evidence_id=str(ev.get("evidence_id") or f"ev_{claim_id}_{i}"),
                     description=(
                         f"{ev.get('support_type', 'support')} from a "
-                        f"{tier or 'unknown'}-tier source"
+                        f"{tier or 'unknown'}-tier source; observations: "
+                        f"{', '.join(str(oid) for oid in ev.get('observation_ids', [])) or 'not supplied'}"
                     ),
                     source=_TIER_TO_SOURCE.get(tier, EvidenceSource.OTHER),
                     supports_claim=supporting,
@@ -262,8 +278,10 @@ def _to_verification_input(packet: Dict[str, Any]) -> VerificationInput:
         )
     return VerificationInput(
         investigation_id=investigation_id,
+        deadline_at=packet.get('deadline_at'),
         claims=claims,
-        relevant_goals=[str(g) for g in packet.get("active_goals") or []],
+        relevant_goals=[str(g) for g in packet.get("relevant_goals") or packet.get("active_goals") or []],
+        context=packet.get('context'),
     )
 
 
@@ -286,10 +304,12 @@ def _to_kernel_assessment(investigation_id: str, output: Any) -> Dict[str, Any]:
         "assessment": "needs_more_work" if needs_more else "overall_sufficient",
         "weak_claims": weak_ids,
         "recommended_additional_investigations": recommended,
+        "report_markdown": output.report_markdown,
     }
 
 
 @router.post("/verifier")
+@usage_response
 def verifier(
     packet: Dict[str, Any], provider: LLMProvider = Depends(get_provider)
 ) -> Dict[str, Any]:

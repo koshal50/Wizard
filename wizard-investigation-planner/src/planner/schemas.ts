@@ -156,3 +156,16 @@ const technologyPlanItemSchema = object({
 export const technologyPlanSchema: Schema<TechnologyPlan> = object({
   technologies: array(technologyPlanItemSchema),
 });
+technologyPlanSchema.jsonSchema = {
+  type: 'object', additionalProperties: false, required: ['technologies'],
+  properties: {technologies: {type: 'array', items: {
+    type: 'object', additionalProperties: false,
+    required: ['name', 'confidence', 'signals', 'initialGoals', 'priorityFiles'],
+    properties: {
+      name: {type: 'string'}, confidence: {type: 'string', enum: ['high', 'medium', 'low']},
+      signals: {type: 'array', items: {type: 'string'}},
+      initialGoals: {type: 'array', items: {type: 'string'}},
+      priorityFiles: {type: 'array', items: {type: 'string'}},
+    },
+  }}},
+};

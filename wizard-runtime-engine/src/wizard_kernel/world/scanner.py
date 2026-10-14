@@ -28,7 +28,7 @@ _SKIP_DIRS: frozenset[str] = frozenset({
     ".idea", ".vscode", "coverage", ".pytest_cache", ".ruff_cache",
 })
 
-_MAX_DEPTH = 4
+_MAX_DEPTH = 8
 
 
 def scan(repo_path: str, investigation_id: str) -> RepositoryManifest:
@@ -47,7 +47,8 @@ def scan(repo_path: str, investigation_id: str) -> RepositoryManifest:
             continue
 
         # Prune noise dirs in-place so os.walk skips them
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")]
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not d.startswith(".")
+                      and not d.endswith('.egg-info')]
         total_dirs += 1
 
         for fname in filenames:

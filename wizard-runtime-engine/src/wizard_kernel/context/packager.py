@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from datetime import datetime, timezone
+from wizard_kernel.contracts.actions import safe_parameters, failure_reason
 from typing import TYPE_CHECKING
 
 from wizard_kernel.context.sections import ContextSection
@@ -174,6 +176,71 @@ def _discover_runnable_commands(repo_path: str) -> list[dict]:
 _VERIFIED_THRESHOLD = 0.6
 
 
+def _compact(value):
+    if isinstance(value, str):
+        return value[:3000]
+    if isinstance(value, dict):
+        return {key: _compact(item) for key, item in list(value.items())[:20]
+                if key.lower() not in {'password', 'token', 'secret', 'authorization'}}
+    if isinstance(value, list):
+        return [_compact(item) for item in value[:12]]
+    return value
+
+
+def _result_record(obs):
+    payload = obs.payload or {}
+    action = payload.get('action') or {}
+    return {'observation_id': obs.id, 'node_id': obs.node_id, 'goal_id': obs.goal_id,
+            'required_check': bool(payload.get('required_check')), 'evidence_categories': obs.evidence_categories,
+            'tool': payload.get('tool') if obs.obs_type == 'agent_failure' else obs.source_tool,
+            'params': safe_parameters(payload.get('parameters') or action.get('params') or payload.get('meta') or {}),
+            'status': payload.get('status') or ('EXECUTED' if obs.success else 'FAILED'),
+            'result': _compact(payload.get('data') or {k: payload[k] for k in ('stdout', 'stderr', 'exit_code') if k in payload}) if obs.success else None,
+            'reason': None if obs.success else _compact(failure_reason(payload)),
+            'failure_output': None if obs.success else _compact({k: payload[k] for k in ('stdout', 'stderr') if k in payload}),
+            'exit_code': payload.get('exit_code', (payload.get('data') or {}).get('exit_code')),
+            'provider_status': payload.get('status_code'),
+            'returned_node_id': payload.get('returned_node_id'),
+            'valid_node_ids': payload.get('valid_node_ids'),
+            'retryable': obs.success and obs.source_tool in {'read_process', 'check_port', 'browser_snapshot', 'browser_extract'},
+            'prohibited_from_repeating': not obs.success,
+            'required_next_behavior': payload.get('required_next_behavior') or (None if obs.success else 'choose a materially different action or return incomplete')}
+
+
+def _plan_view(inv_id, node):
+    from wizard_kernel.control.investigation_graph import get_graph
+    graph = get_graph(inv_id)
+    nodes = graph.all_nodes() if graph else [node]
+    settled = {n.id for n in nodes if n.state in {'complete', 'failed'}}
+    current = graph.get(node.id) if graph else node
+    return {'current_node': current.model_dump() if current else None,
+            'runnable_next_nodes': [{'id': n.id, 'action': n.action}
+                                    for n in nodes if n.state == 'waiting'
+                                    and set(n.depends_on).issubset(settled)],
+            'failed_nodes': [{'id': n.id, 'state': n.state}
+                             for n in nodes if n.state == 'failed'],
+            'completed_nodes': [{'id': n.id, 'state': n.state, 'executed_action': n.executed_action}
+                                for n in nodes if n.state == 'complete'][-8:],
+            'pending_nodes': [{'id': n.id, 'action': n.action} for n in nodes if n.state == 'waiting'][:8]}
+
+
+def _process_records(observations):
+    latest = {}
+    for obs in observations:
+        payload, data = obs.payload, obs.payload.get('data') or {}
+        if obs.source_tool == 'kill_process' and obs.success:
+            latest.pop(data.get('killed'), None)
+        if obs.source_tool not in {'start_process', 'read_process'} or not data.get('handle_id'):
+            continue
+        stdout = _compact(data.get('stdout_so_far') or payload.get('stdout') or '')
+        stderr = _compact(data.get('stderr_so_far') or payload.get('stderr') or '')
+        latest[data['handle_id']] = {**_compact(data), 'tool': obs.source_tool,
+            'observation_id': obs.id, 'inspected': obs.source_tool == 'read_process',
+            'running': data.get('is_running'), 'stdout': stdout, 'stderr': stderr,
+            'output_available': bool(stdout or stderr)}
+    return list(latest.values())[-8:]
+
+
 class Packager:
     """Builds agent context packets and sections from the loop's own handles.
 
@@ -210,7 +277,6 @@ class Packager:
                 "completed_evidence": evidence["completed"],
                 "missing_evidence": evidence["missing"],
             })
-        process_observations = [o for o in observations if o.source_tool in {"start_process", "read_process"}]
         port_observations = [
             o for o in observations
             if o.source_tool == "check_port" and (o.payload or {}).get("data", {}).get("active")
@@ -285,6 +351,19 @@ class Packager:
         return {
             "investigation_id": inv.id,
             "intent": inv.intent,
+            'question': getattr(inv, 'question', ''),
+            'deadline_at': inv.deadline_at.isoformat(),
+            'investigation': {'id': inv.id, 'intent': inv.intent, 'question': getattr(inv, 'question', ''),
+                              'phase': inv.state.value, 'deadline_at': inv.deadline_at.isoformat(),
+                              'remaining_seconds': max(0, int((inv.deadline_at - datetime.now(timezone.utc)).total_seconds()))},
+            'plan': _plan_view(inv.id, node),
+            'node_selection': {'valid_node_ids': [node.id],
+                               'ownership': 'Runtime reserved this node; Explorer chooses only its action'},
+            'successful_results': [_result_record(o) for o in observations if o.success][-8:],
+            'recent_failures': [_result_record(o) for o in observations if not o.success][-8:],
+            'http': {'allowed_domains': inv.options.get('allowed_domains', []),
+                     'runtime_authorized_readiness_target': (node.action.get('params') or {}).get('url') if node.action.get('readiness_check') else None,
+                     'responses': [_result_record(o) for o in observations if o.source_tool == 'http_request'][-3:]},
             "targets": inv.targets,
             "browser_enabled": bool(inv.options.get("browser_enabled")),
             "current_node": {
@@ -297,8 +376,10 @@ class Packager:
             "resource_state": resource_state,
             "available_tools": sorted(
                 tool for tool in _REGISTERED_TOOLS
+                if inv.intent != 'explain' or tool in {'read_file', 'list_tree', 'search_files', 'path_exists'}
+                if not node.action.get('runtime_required') or tool == node.action.get('tool')
                 if (inv.options.get("browser_enabled") or not tool.startswith("browser_"))
-                and (tool != "http_request" or inv.options.get("allowed_domains"))
+                and (tool != "http_request" or inv.options.get("allowed_domains") or node.action.get('readiness_check'))
             ),
             "kg_summary": kg.summary(),
             "remaining_budget": budget.remaining,
@@ -321,11 +402,12 @@ class Packager:
                     "outcome": _compact_outcome(obs),
                     "succeeded": (obs.payload or {}).get("ok"),
                 }
-                for obs in observations[-_RECENT_OBS_N:]
+                for obs in observations[-_RECENT_OBS_N:] if obs.success
                 if ((obs.payload or {}).get("tool")
                     if getattr(obs, "obs_type", "") == "agent_failure" else obs.source_tool) in _REGISTERED_TOOLS
             ],
         }
+
 
     # ── Explorer: the modular section view (KV cache / budget / audit) ──────────
 

@@ -17,6 +17,8 @@
  * private sidecar for the kernel, not a public endpoint. Front it accordingly.
  */
 import http from "node:http";
+import { deadlineContext } from "../llm/deadline.ts";
+import { usageContext, type UsageEvent } from "../llm/usage.ts";
 import { InvestigationPlanner } from "../planner/InvestigationPlanner.ts";
 import { createProviderFromEnv } from "../llm/providerFactory.ts";
 import { createLogger } from "../util/logger.ts";
@@ -208,7 +210,22 @@ async function handleInitial(body: Json): Promise<unknown> {
 async function handleNext(body: Json): Promise<unknown> {
   const heuristicContext = heuristicFrom(body);
   const plannerContext = plannerContextFrom(body, heuristicContext);
+  const state = JSON.stringify({
+    question: body.question, intent: body.intent, targets: body.targets,
+    goals: body.active_goals, missing_requirements: body.missing_requirements,
+    observations: body.file_observation_ids, queued_read_paths: body.queued_read_paths,
+    failures: body.recent_failures, plan: body.plan,
+    successful_results: body.successful_results, process_sessions: body.process_sessions,
+    runnable_nodes: body.runnable_nodes,
+    page: {url: body.page_url, controls: body.page_controls},
+    browser_enabled: body.browser_enabled, allowed_domains: body.allowed_domains,
+  });
+  plannerContext.openQuestions = [{question: state, missingClaimType: "Runtime evidence"}];
   const batch = await planner.planNext({ plannerContext, heuristicContext }, optsFrom(body));
+  if (batch.rationale?.startsWith('provider failed:')) throw new Error(batch.rationale);
+  if (!batch.accepted.length && batch.rejected.length) {
+    throw new Error(`Planner proposals rejected: ${batch.rejected.map(r => r.reason).join('; ')}`);
+  }
   return { new_nodes: proposalsToWire(batch.accepted) };
 }
 
@@ -268,9 +285,15 @@ const server = http.createServer(async (req, res) => {
   }
   const handler = req.method === "POST" ? routes[url] : undefined;
   if (!handler) return send(404, { error: "not found" });
+  const events: UsageEvent[] = [];
+  let usageEnabled = false;
   try {
     const body = await readBody(req);
-    send(200, await handler(body));
+    usageEnabled = body._usage === true;
+    const deadline = typeof body.deadline_at === 'string' ? Date.parse(body.deadline_at) : Date.now() + 30_000;
+    if (!Number.isFinite(deadline) || deadline <= Date.now()) throw new Error('Investigation deadline reached');
+    const result = await usageContext.run(events, () => deadlineContext.run(deadline, () => handler(body)));
+    send(200, usageEnabled ? {...result as Record<string, unknown>, usage_events: events} : result);
   } catch (e) {
     const message = (e as Error).message;
     const providerFailure = message.startsWith("PLANNER_PROVIDER_FAILURE");

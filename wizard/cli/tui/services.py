@@ -357,15 +357,42 @@ def _log_tail(path: Path, lines: int = 4) -> str:
     return "; " + " / ".join(line.strip() for line in content[-lines:] if line.strip())
 
 
-def _terminate(process: "subprocess.Popen", timeout: float = 5.0) -> None:
+def _terminate(process: "subprocess.Popen", timeout: float = 4.0, *, additional=()) -> None:
     """Stop a child we started, escalating only if it ignores the request."""
-    if process.poll() is not None:
+    processes = [proc for proc in (process, *additional) if proc.poll() is None]
+    if not processes:
         return
-    process.terminate()
-    try:
-        process.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
+    if os.name == "nt":
+        # A Windows venv executable redirects to a child Python process.
+        # Terminating only the launcher leaves uvicorn/LLM workers orphaned.
+        try:
+            args = ["taskkill", "/T", "/F"]
+            for proc in processes:
+                args.extend(["/PID", str(proc.pid)])
+            subprocess.run(
+                args,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired:
+            # WMI can finish killing the tree before taskkill itself exits.
+            # Reap the launcher instead of leaking a traceback on clean exit.
+            for proc in processes:
+                if proc.poll() is None:
+                    proc.kill()
+    else:
+        import signal
+        os.killpg(process.pid, signal.SIGTERM)
+    for proc in processes:
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            if os.name != "nt":
+                import signal
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+            proc.wait(timeout=1)
 
 
 # ── The browser binary ───────────────────────────────────────────────────────
@@ -506,11 +533,28 @@ class ServiceSupervisor:
         stopped: list[str] = []
         if self.report is None:
             return stopped
-        for state in self.report.states:
-            if state.process is not None:
-                _terminate(state.process)
-                stopped.append(state.spec.label)
-        return stopped
+        import threading
+        workers = []
+        failures = []
+        def terminate(states):
+            try:
+                _terminate(states[0].process, additional=[state.process for state in states[1:]])
+            except (OSError, subprocess.SubprocessError):
+                failures.extend(state.spec.label for state in states)
+        owned = [state for state in self.report.states if state.process is not None]
+        groups = [owned] if os.name == "nt" and owned else [[state] for state in owned]
+        for states in groups:
+            worker = threading.Thread(target=terminate, args=(states,), daemon=True)
+            worker.start()
+            workers.append(worker)
+            stopped.extend(state.spec.label for state in states)
+        deadline = time.monotonic() + 6
+        for worker in workers:
+            worker.join(timeout=max(0, deadline - time.monotonic()))
+        failures.extend(state.spec.label for state in owned if state.process.poll() is None)
+        if failures:
+            print("Could not stop owned services: " + ", ".join(failures), flush=True)
+        return [label for label in stopped if label not in failures]
 
 
 def probe_only(specs: list[ServiceSpec] | None = None) -> ServiceReport:

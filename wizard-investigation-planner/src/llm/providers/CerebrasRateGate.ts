@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { remainingMs } from '../deadline.ts';
 
 const DB_PATH = process.env.WIZARD_CEREBRAS_GATE_DB ?? join(homedir(), ".wizard", "cerebras-rate-gate.sqlite3");
 const MAX_INLINE_WAIT_SECONDS = 60;

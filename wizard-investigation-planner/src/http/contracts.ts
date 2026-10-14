@@ -124,7 +124,11 @@ export function manifestFromWire(m: WireManifest): RepositoryManifest {
     dependencies: [],
     databases: [],
     keyFiles,
-    entryFiles: [],
+    entryFiles: (m.directory_tree ?? []).filter((path) => {
+      const normalized = path.replace(/\\/g, '/');
+      return !/(?:^|\/)(?:tests?|__tests__|fixtures|demo)(?:\/|$)/i.test(normalized)
+        && /(?:^|\/)(?:main|app|index|server|agent|loop)\.(?:py|[cm]?js|tsx?)$/.test(normalized);
+    }).slice(0, 16),
     extensions: m.extensions ?? {},
     projectType: "unknown",
     // The kernel's `directory_tree` is a list of *files* — world/scanner.py
@@ -326,9 +330,10 @@ export function technologyPlanToWire(
   const seed_nodes: WireNode[] = [];
   for (const t of plan.technologies) {
     for (const f of t.priorityFiles) {
-      if (seen.has(f)) continue;
-      seen.add(f);
-      seed_nodes.push(seedReadNode(f));
+      const path = f.replace(/\\/g, '/');
+      if (seen.has(path)) continue;
+      seen.add(path);
+      seed_nodes.push(seedReadNode(path));
     }
   }
 
@@ -343,7 +348,9 @@ export function technologyPlanToWire(
     // guarantees the two halves agree rather than trusting the provider to.
     const hasWebGoal = technologies.some((t) =>
       t.initial_goals.some((g) => g.required_claim_types.includes("WEB")));
-    if (!hasWebGoal) {
+    const hasInteractionGoal = technologies.some((t) =>
+      t.initial_goals.some((g) => g.required_claim_types.includes("INTERACTION")));
+    if (!hasWebGoal || (operatesSurface && !hasInteractionGoal)) {
       // "Verify Web Surface" is closed by reaching a page; "Operate Web Surface"
       // only by acting on one, because the kernel types an interaction's claims
       // INTERACTION and a navigate produces none. Both are declared when the
@@ -358,9 +365,10 @@ export function technologyPlanToWire(
       // was proved twice.
       const carried = new Set<string>();
       for (const t of technologies) for (const g of t.initial_goals) carried.add(g.name);
-      const wanted = operatesSurface
-        ? ["Verify Web Surface", "Operate Web Surface"]
-        : ["Verify Web Surface"];
+      const wanted = [
+        ...(!hasWebGoal ? ["Verify Web Surface"] : []),
+        ...(operatesSurface && !hasInteractionGoal ? ["Operate Web Surface"] : []),
+      ];
       technologies.push({
         name: "Web",
         confidence: "high",

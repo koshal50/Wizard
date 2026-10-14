@@ -1714,16 +1714,12 @@ def test_browser_run_completion_replaces_page_with_saved_report(tui, monkeypatch
     assert tui.session.snapshot()["page"]["title"] == "Application"
 
 
-def test_the_run_screen_takes_no_typing(tui):
-    """The box is inert during a run: there is no mid-run steering endpoint.
-
-    It used to be focused and live, which also meant it swallowed the arrow and
-    page keys before the pane could scroll.
-    """
+def test_the_run_screen_keeps_the_existing_box_editable(tui):
+    """Control commands and drafts remain available during an active run."""
     tui.state = INTENT
     assert not tui.input.read_only(), "the box is inert on the intent screen"
     tui.state = WORKING
-    assert tui.input.read_only(), "the box takes typing during a run"
+    assert not tui.input.read_only(), "the box must stay editable during a run"
     tui.state = RESULT
     assert not tui.input.read_only(), "the box stayed locked after the run"
 
@@ -1773,6 +1769,7 @@ def _fake_browser_cache(root: Path) -> Path:
 
 def test_a_browser_on_disk_is_reported_ready(tmp_path, monkeypatch):
     from wizard.cli.tui import services
+    monkeypatch.setattr(services, "_kernel_python", lambda: services.sys.executable)
 
     exe = _fake_browser_cache(tmp_path)
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
@@ -1826,6 +1823,7 @@ def test_the_download_is_the_real_playwright_command(monkeypatch):
     earlier version of it very nearly fetched 700 MB while proving that.
     """
     from wizard.cli.tui import services
+    monkeypatch.setattr(services, "_kernel_python", lambda: services.sys.executable)
 
     calls = []
     monkeypatch.setattr(
@@ -1844,6 +1842,7 @@ def test_the_download_is_the_real_playwright_command(monkeypatch):
 def test_a_missing_playwright_package_is_reported_as_such(tmp_path, monkeypatch):
     """Binaries without the package that drives them are no use."""
     from wizard.cli.tui import services
+    monkeypatch.setattr(services, "_kernel_python", lambda: services.sys.executable)
 
     _fake_browser_cache(tmp_path)
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))

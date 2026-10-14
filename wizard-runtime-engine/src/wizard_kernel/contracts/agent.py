@@ -10,7 +10,10 @@ class ToolRequest(BaseModel):
 
 class ExplorerResponse(BaseModel):
     investigation_id: str
-    tool_request: ToolRequest
+    node_id: str | None = None
+    tool_request: ToolRequest | None = None
+    decision: Literal['action', 'complete', 'incomplete'] = 'action'
+    reason: str = ''
 
 
 class VerifierAssessment(BaseModel):
@@ -18,3 +21,4 @@ class VerifierAssessment(BaseModel):
     assessment: Literal["overall_sufficient", "needs_more_work"]
     weak_claims: list[str] = []
     recommended_additional_investigations: list[str] = []
+    report_markdown: str = ''

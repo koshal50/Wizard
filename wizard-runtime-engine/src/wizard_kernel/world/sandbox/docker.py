@@ -80,6 +80,19 @@ class DockerSandboxRuntime:
         self._container_id: str | None = None
         self._workspace: str | None = None
         self._bg: dict[str, _DockerBgHandle] = {}
+        self.deadline_at = None
+        self._closed = False
+
+    def _remaining(self, timeout):
+        if self._closed:
+            raise RuntimeError('Investigation sandbox is closed')
+        if self.deadline_at is None:
+            return timeout
+        from datetime import datetime, timezone
+        remaining = (self.deadline_at - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            raise TimeoutError('Investigation deadline reached')
+        return min(timeout, remaining)
 
     def start(self, workspace_path: str) -> None:
         self._workspace = str(Path(workspace_path).resolve())
@@ -96,16 +109,20 @@ class DockerSandboxRuntime:
                 self._image,
                 "sleep", "3600",
             ],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, timeout=self._remaining(60),
         )
         if result.returncode != 0:
             raise RuntimeError(f"docker start failed: {result.stderr.strip()}")
         self._container_id = result.stdout.strip()
+        if self._closed:
+            self.stop()
+            raise RuntimeError("Sandbox startup was cancelled")
 
     def stop(self) -> None:
+        self._closed = True
         if self._container_id:
             subprocess.run(["docker", "rm", "-f", self._container_id],
-                           capture_output=True, timeout=30)
+                           capture_output=True, timeout=3)
             self._container_id = None
         self._bg.clear()
 
@@ -122,7 +139,7 @@ class DockerSandboxRuntime:
                  "--workdir", workdir,
                  self._container_id,
                  "sh", "-c", command],
-                capture_output=True, text=True, timeout=timeout_sec,
+                capture_output=True, text=True, timeout=self._remaining(timeout_sec),
             )
             ms = (time.monotonic() - t0) * 1000
             return CommandResult(
@@ -147,7 +164,7 @@ class DockerSandboxRuntime:
         result = subprocess.run(
             ["docker", "exec", self._container_id,
              "head", "-c", str(max_bytes), f"/workspace/{path}"],
-            capture_output=True, timeout=30,
+            capture_output=True, timeout=self._remaining(30),
         )
         return result.stdout if result.returncode == 0 else b""
 
@@ -170,7 +187,7 @@ class DockerSandboxRuntime:
              "--workdir", workdir,
              self._container_id,
              "sh", "-c", bg_cmd],
-            capture_output=True, timeout=10,
+            capture_output=True, timeout=self._remaining(10),
         )
         handle = _DockerBgHandle(handle_id, self._container_id, command, cwd)
         self._bg[handle_id] = handle
@@ -188,7 +205,7 @@ class DockerSandboxRuntime:
             subprocess.run(
                 ["docker", "exec", self._container_id, "sh", "-c",
                  f"kill $(cat /tmp/{handle_id}.pid 2>/dev/null) 2>/dev/null || true"],
-                capture_output=True, timeout=10,
+                capture_output=True, timeout=self._remaining(10),
             )
             del self._bg[handle_id]
 

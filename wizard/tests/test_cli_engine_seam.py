@@ -13,6 +13,7 @@ against a stub engine that records what it was asked to do.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -314,9 +315,11 @@ def test_cancel_reports_failure_on_an_unreadable_reply(engine, monkeypatch):
 # ── Report on disk ────────────────────────────────────────────────────────────
 
 def test_a_completed_run_writes_its_report(engine, monkeypatch, tmp_path):
+    from dataclasses import replace
     monkeypatch.chdir(tmp_path)
-    done = [e for e in runtime_client.stream_events(
-        _request(RequestOptions(planner_url="http://p:8787")))][-1]
+    request = replace(_request(RequestOptions(planner_url="http://p:8787")),
+                      repository=RepositoryInfo(path=str(tmp_path)))
+    done = list(runtime_client.stream_events(request))[-1]
 
     assert done["event_type"] == "done"
     assert done["status"] == "completed"
@@ -324,6 +327,7 @@ def test_a_completed_run_writes_its_report(engine, monkeypatch, tmp_path):
     assert done["report_path"]
 
     written = tmp_path / "output"
+    assert Path(done["report_path"]).parent == written
     files = sorted(p.name for p in written.iterdir())
     assert files == ["verification_report(1).md"]
     assert (written / files[0]).read_text(encoding="utf-8") == "# Report\n\nbody\n"
@@ -418,6 +422,7 @@ def test_escape_cancels_the_investigation_in_the_engine(engine):
     assert session.investigation_id == "inv_stub001"
 
     session.cancel()
+    session._cancel_thread.join(timeout=3)
 
     assert session.status == "cancelled"
     assert session.finished and not session.running

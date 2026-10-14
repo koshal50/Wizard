@@ -15,6 +15,7 @@ class TextPredicate(StrictModel):
     expected: str = Field(min_length=1)
     target: str = ""
     after_submission: bool = False
+    case_sensitive: bool = True
 
     @model_validator(mode="after")
     def no_redaction_expectation(self):
@@ -57,6 +58,8 @@ class Assertion(RootModel[Annotated[Union[tuple(_predicates)], Field(discriminat
     def target(self): return self.root.target
     @property
     def after_submission(self): return self.root.after_submission
+    @property
+    def case_sensitive(self): return self.root.case_sensitive
 
 
 class CheckSpec(StrictModel):
@@ -91,6 +94,39 @@ class VerificationSpec(StrictModel):
                 visit(dependency, ancestors | {check_id})
         for check in self.checks:
             visit(check.id, set())
+        return self
+
+
+ARCHITECTURE_AREAS = ('structure', 'entry_points', 'startup', 'boundaries', 'packages', 'configuration')
+_repository_content = next(p for p in _predicates if p.model_fields['field'].annotation == Literal['content'])
+_architecture_content = create_model('ArchitectureContentPredicate', __base__=_repository_content,
+    expected=(str, Field(min_length=1, max_length=160, pattern=r'^[^\r\n\\\[\]{}]+$')))
+RepositoryContentAssertion = create_model('RepositoryContentAssertion', __base__=Assertion,
+                                         root=(_architecture_content, ...))
+
+
+class ArchitectureFinding(StrictModel):
+    area: Literal['structure', 'entry_points', 'startup', 'boundaries', 'packages', 'configuration']
+    summary: str
+    assertions: list[RepositoryContentAssertion] = Field(default_factory=list)
+    blocker: str = ''
+
+    @model_validator(mode='after')
+    def repository_proof(self):
+        if any(a.source != 'repository' or a.field != 'content' or not a.target for a in self.assertions):
+            raise ValueError('Architecture findings require targeted repository content proof')
+        if not self.assertions and not self.blocker:
+            raise ValueError('Missing architecture proof requires a concrete blocker')
+        return self
+
+
+class ArchitectureReport(StrictModel):
+    findings: list[ArchitectureFinding]
+
+    @model_validator(mode='after')
+    def complete_coverage(self):
+        if sorted(f.area for f in self.findings) != sorted(ARCHITECTURE_AREAS):
+            raise ValueError('Report each architecture area exactly once, including unresolved areas')
         return self
 
 
@@ -165,7 +201,7 @@ class DecisionEnvelope(StrictModel):
 def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, value_refs: list[str] | None = None,
                    allow_refine: bool = True, browser_refinement: bool = False, allow_blocked: bool = True,
                    browser_targets: list[str] | None = None, require_submission: bool | None = None,
-                   process_targets: list[str] | None = None):
+                   process_targets: list[str] | None = None, repository_refinement: bool = False):
     """Only advertise allowed tools, with structurally exclusive decision kinds."""
     registered = dict(TOOL_ACTIONS)
     if value_refs:
@@ -194,6 +230,11 @@ def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, v
         browser_assertion = RootModel[Annotated[Union[browser_predicates], Field(discriminator="field")]]
         refinement_type = create_model("BrowserRefinement", __base__=CheckRefinement,
                                       assertions=(list[browser_assertion], Field(min_length=1)))
+    elif repository_refinement:
+        predicates = tuple(p for p in _predicates if p.model_fields['source'].annotation == Literal['repository'])
+        predicate = RootModel[Annotated[Union[predicates], Field(discriminator='field')]]
+        refinement_type = create_model('RepositoryRefinement', __base__=CheckRefinement,
+                                      assertions=(list[predicate], Field(min_length=1)))
     elif process_targets is not None:
         targets = Literal[tuple(dict.fromkeys(process_targets or [""]))]
         predicates = tuple(create_model(p.__name__ + "_observed", __base__=p, target=(targets, ""))

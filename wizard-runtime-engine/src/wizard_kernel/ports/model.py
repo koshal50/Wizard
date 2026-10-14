@@ -79,14 +79,20 @@ class ModelPolicy:
         self.last_metadata = {}
 
     def request(self, role, context, response_model, *, max_input_chars=60000, cancel_check=None, deadline=None, on_progress=None):
-        from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY
+        from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY, REPOSITORY_DECIDE, ARCHITECTURE_SYNTHESIZE
         schema = strict_schema(response_model)
-        messages = [{"role": "system", "content": {"planner": PLAN, "explorer": DECIDE, "verifier": VERIFY}[role]},
+        instruction = {'planner': PLAN, 'explorer': DECIDE, 'verifier': VERIFY}[role]
+        if role == 'explorer':
+            if context.get('architecture_synthesis'):
+                instruction = ARCHITECTURE_SYNTHESIZE
+            elif context.get('available_tools') and set(context['available_tools']) <= {'read_file', 'search_files', 'list_tree', 'path_exists'}:
+                instruction = REPOSITORY_DECIDE
+        messages = [{"role": "system", "content": instruction},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
         size = len(json.dumps(messages)) + len(json.dumps(schema))
         if size > max_input_chars:
             raise ModelFailure("context_budget", f"Final request size {size} exceeds {max_input_chars} characters")
-        payload = {"model": self.model, "temperature": 0, "max_completion_tokens": 1024,
+        payload = {"model": self.model, "temperature": 0, "max_completion_tokens": 2048 if context.get('architecture_synthesis') else 1024,
                    "stream": False, "messages": messages,
                    "response_format": {"type": "json_schema", "json_schema": {
                        "name": response_model.__name__, "strict": True, "schema": schema}}}
@@ -97,10 +103,10 @@ class ModelPolicy:
                 on_progress(stage, {"model": self.model, **details})
         if self.gate:
             if on_progress:
-                self.gate.acquire(cancel_check=cancel_check,
+                self.gate.acquire(cancel_check=cancel_check, deadline=deadline,
                                   on_wait=lambda wait: progress("waiting", wait_seconds=round(wait, 1)))
             else:
-                self.gate.acquire(cancel_check=cancel_check)
+                self.gate.acquire(cancel_check=cancel_check, deadline=deadline)
         if cancel_check:
             cancel_check()
         timeout = min(60, max(0.1, deadline-time.monotonic())) if deadline else 60

@@ -784,7 +784,7 @@ def test_provider_progress_reports_gate_http_and_validation(monkeypatch):
     monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(200,
         json={"choices": [{"finish_reason": "stop", "message": {"content": spec.model_dump_json()}}]}))
     class Gate:
-        def acquire(self, cancel_check=None, on_wait=None):
+        def acquire(self, cancel_check=None, on_wait=None, deadline=None):
             on_wait(12)
     policy = ModelPolicy()
     policy.gate = Gate()

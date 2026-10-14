@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from contextlib import contextmanager
 
 _LOG = logging.getLogger(__name__)
 _DEFAULT_DB = Path.home() / ".wizard" / "cerebras-rate-gate.sqlite3"
@@ -30,13 +31,20 @@ class CerebrasRateGate:
         with self._connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS provider_gate (provider TEXT PRIMARY KEY, next_allowed REAL NOT NULL)")
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self):
         db = sqlite3.connect(self._path, timeout=30)
-        db.execute("PRAGMA busy_timeout=30000")
-        return db
+        try:
+            db.execute("PRAGMA busy_timeout=30000")
+            with db:
+                yield db
+        finally:
+            db.close()
 
-    def acquire(self, cancel_check=None, on_wait=None) -> None:
+    def acquire(self, cancel_check=None, on_wait=None, deadline=None) -> None:
         while True:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise InterruptedError('Provider capacity wait exceeded investigation deadline')
             if cancel_check:
                 cancel_check()
             with self._connect() as db:
@@ -58,10 +66,13 @@ class CerebrasRateGate:
             if on_wait:
                 on_wait(wait)
             _LOG.info('{"event":"provider_rate_limit_wait","provider":"cerebras","wait_seconds":%.3f}', wait)
-            if cancel_check:
+            if cancel_check or deadline is not None:
                 until = time.monotonic() + wait
                 while time.monotonic() < until:
-                    cancel_check()
+                    if cancel_check:
+                        cancel_check()
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise InterruptedError('Provider capacity wait exceeded investigation deadline')
                     time.sleep(min(0.25, max(0, until-time.monotonic())))
             else:
                 time.sleep(wait)

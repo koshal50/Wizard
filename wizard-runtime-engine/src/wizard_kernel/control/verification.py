@@ -218,6 +218,15 @@ def _context(inv, check, results, observations, available, discovery, authorized
             "public_test_inputs": {key: authorized[key] for key in public_refs},
             "test_input_usage": "Reuse authorized identity refs for signup/login. For requested local data-entry operations, use authorized text/description refs for discovered text fields. Never substitute email/password refs for ordinary record contents. Values are not proof; observe the actual submission and resulting record.",
             "remaining_tool_budget": inv.budget_remaining}
+    packet['repository_evidence'] = [
+        {'observation_id': o.id, 'path': (o.payload.get('data') or {}).get('path'),
+         'success': o.success, 'bytes_read': (o.payload.get('data') or {}).get('bytes_read')}
+        for o in observations if o.source_tool == 'read_file']
+    packet['evidence_instruction'] = 'Repository evidence is shared across checks. Reuse listed observation IDs; identical reads return cached evidence, not new information. Choose a different relevant file or evaluate satisfied predicates.'
+    if available and set(available) <= {'read_file', 'search_files', 'list_tree', 'path_exists'}:
+        for key in ('refinement_policy', 'discovery_required', 'discovery_instruction', 'authentication_progress',
+                    'form_instruction', 'browser_tool_usage', 'authorized_value_refs', 'public_test_inputs', 'test_input_usage'):
+            packet.pop(key, None)
     if page:
         # Once a page is observed, its structure drives tactics. Repository
         # contracts remain accessible through read_file without retransmission.
@@ -401,11 +410,12 @@ def _render(inv, state):
         if previous is not None:
             return "Saved report from " + state["report_source"] + "; no new verification was executed.\n\n" + previous
     def text(value):
-        return str(value).replace("|", "\\|").replace("\n", " ")
+        return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
     def witness(assertion):
         observed = str(assertion["actual"])
         expected = str(assertion.get("assertion", {}).get("expected", ""))
-        offset = observed.find(expected) if expected and assertion.get("verdict") == "passed" else -1
+        sensitive = assertion.get('assertion', {}).get('case_sensitive', True)
+        offset = (observed if sensitive else observed.casefold()).find(expected if sensitive else expected.casefold()) if expected and assertion.get("verdict") == "passed" else -1
         start = max(0, offset - 40)
         return ("…" if start else "") + observed[start:start + max(180, len(expected) + 40)]
     lines = ["# Wizard verification report", "", f"Request: {text(flow_trace.safe_text(inv.question or " ".join([inv.intent, *inv.targets]), limit=8000))}",
@@ -420,12 +430,25 @@ def _render(inv, state):
         expected = "; ".join(f"{a['field']} {a['operator']} {a['expected']}" for a in check["assertions"]) or "Unspecified: discovery required"
         observed = "; ".join(witness(a) for a in assertions if a.get("actual") is not None)
         refs = ", ".join(a["observation_id"] for a in assertions if a.get("observation_id"))
-        reason = result.get("reason") or ""
-        lines.append(f"| {text(check['description'])} | {text(expected)} | {text(observed or 'Not observed')} | "
-                     f"{result.get('status', 'unverified').upper()} | {text(refs or reason or 'Not evaluated')} |")
+        reason = "; ".join(a.get('reason', '') for a in assertions if a.get('verdict') != 'passed' and a.get('reason')) or result.get("reason") or ""
+        evidence = "; ".join(part for part in (refs, reason) if part)
+        label = {'passed': 'PASS', 'failed': 'FAIL', 'evaluation_error': 'EVALUATION ERROR'}.get(result.get('status'), 'UNVERIFIED')
+        fallback = 'Evaluation failed' if result.get('status') == 'evaluation_error' else 'Not observed'
+        lines.append(f"| {text(check['description'])} | {text(expected)} | {text(observed or fallback)} | "
+                     f"{label} | {text(evidence or 'Not evaluated')} |")
     if state.get("plan_adjustments"):
         lines.extend(["", "Plan admission:"])
         lines.extend(f"- {text(item['check_id'])}: {text(item['reason'])}" for item in state["plan_adjustments"])
+    if state.get('architecture_findings'):
+        lines += ['', '## Architecture findings', '']
+        for finding in state['architecture_findings']:
+            check_id = state.get('architecture_coverage_ids', {}).get(finding['area'], 'architecture_' + finding['area'])
+            result = state['results'].get(check_id, {})
+            if result.get('status') == 'passed':
+                refs = ', '.join(dict.fromkeys(a['observation_id'] for a in result['assertions'] if a.get('observation_id')))
+                lines.append(f"- **{text(finding['area'])}**: {text(finding['summary'])} (evidence: {text(refs)})")
+            else:
+                lines.append(f"- **{text(finding['area'])}**: unresolved — {text(finding.get('blocker') or 'Content proof did not pass; see verification table')}")
     if state.get("stop_reason"):
         lines += ["", "Stopped: " + text(state["stop_reason"])]
     lines += ["", "Cleanup: " + text(state.get("cleanup", "Pending")), "",
@@ -587,10 +610,10 @@ def run(inv, manager, policy=None, *, browser_factory=None):
         payload = _redact(tools.execute({"tool": tool, "params": params}), authorized, public_refs)
         if "url" in params:
             payload.setdefault("meta", {})["target_url"] = flow_trace.safe_parameters({"url": params["url"]})["url"]
-        validator.record_execution(tool, params, payload)
         obs = store.append(node_id=execution["id"], goal_id=check_id, source_tool=tool,
                            obs_type=_TOOL_TO_OBS_TYPE.get(tool, "command_result"), payload=payload,
                            tool_request_id=execution["id"], execution_id=execution["id"])
+        validator.record_execution(tool, params, payload, observation_id=obs.id)
         execution.update(state="observed", observation_id=obs.id, success=obs.success, finished_at=time.time())
         execution["result_fingerprint"] = hashlib.sha256(json.dumps([tool, payload], sort_keys=True, default=str).encode()).hexdigest()
         inv.budget_remaining -= 1
@@ -664,6 +687,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 payload = _redact(reader.execute({"tool": "read_file", "params": validation.sanitised_params}), authorized, public_refs)
                 obs = store.append(node_id="discovery_" + uuid.uuid4().hex[:10], source_tool="read_file",
                                    obs_type="file_content", payload=payload, evidence_categories=["repository_read"])
+                validator.record_execution('read_file', validation.sanitised_params, payload, observation_id=obs.id)
                 if obs.success:
                     documents.append({"path": path, "observation_id": obs.id,
                                       "content": (payload.get("data") or {}).get("content", "")[:3000]})
@@ -671,8 +695,12 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                          "extensions": manifest.extensions, "documents": documents,
                          "command_candidates": _discover_runnable_commands(inv.repository_path)}
             save(state=LifecycleState.planning)
+            planning_discovery = discovery
+            if inv.intent == 'investigate' and 'architecture' in inv.targets:
+                planning_discovery = {**discovery, 'documents': [
+                    {**d, 'content': d['content'][:1000]} for d in discovery['documents']]}
             spec = request("planner", {"original_request": flow_trace.safe_text(_redact(_effective_request(inv), authorized, public_refs), limit=8000),
-                                      "command_family": inv.intent, "targets": inv.targets, "discovery": discovery,
+                                      "command_family": inv.intent, "targets": inv.targets, "discovery": planning_discovery,
                                       "knowledge": [{"id": c.id, "type": c.claim_type, "key": c.key, "value": c.value}
                                                     for c in kg.all_claims()[:16]],
                                       "authorized_value_refs": list(authorized)},
@@ -727,6 +755,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     save()
                     continue
                 rejected = {}
+                reused = set()
                 def resource_identity():
                     current = _resources(store.all())
                     for endpoint in current["reachable_endpoints"]:
@@ -738,6 +767,10 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     # decision; historical process liveness is not current state.
                     refresh_processes(check)
                     results = checks.evaluate(check, store.all())
+                    if checks.verdict(results) == 'evaluation_error':
+                        state['results'][check.id] = {'status': 'evaluation_error', 'assertions': results}
+                        save()
+                        break
                     if checks.verdict(results) == "passed":
                         state["results"][check.id] = {"status": "passed", "assertions": results}
                         save()
@@ -748,6 +781,12 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     browser_grounded = any(o.goal_id == check.id and o.success and o.source_tool.startswith("browser_")
                                            for o in store.all())
                     context = _context(inv, check, results, store.all(), available, discovery, authorized, public_refs)
+                    context['repository_requests'] = [
+                        {'parameters': e['parameters'], 'observation_id': e.get('observation_id'),
+                         'success': e.get('success'),
+                         'error': (store.get(e.get('observation_id')).payload.get('error')
+                                   if store.get(e.get('observation_id')) else None)}
+                        for e in state['executions'] if e['tool'] == 'read_file'][-24:]
                     relevant_ids = {o.id for o in store.all() if o.goal_id == check.id or o.source_tool == "read_file"}
                     context["knowledge"] = [{"id": c.id, "type": c.claim_type, "key": c.key,
                         "value": flow_trace.safe_text(json.dumps(_redact(c.value, authorized, public_refs), default=str), limit=350),
@@ -779,7 +818,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                                                               and "browser_navigate" in available),
                                            browser_targets=[(_resources(store.all())["browser"] or {}).get("url", "")],
                                            require_submission=auth_check,
-                                           process_targets=process_commands if process_only else None)
+                                           process_targets=process_commands if process_only else None,
+                                           repository_refinement=set(available) <= {'read_file', 'search_files', 'list_tree', 'path_exists'})
                     decision = request("explorer", context, model)
                     refresh_processes(check)
                     results = checks.evaluate(check, store.all())
@@ -850,6 +890,16 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                             for assertion in refinement.assertions:
                                 if assertion.source == "browser":
                                     assertion.root.after_submission = True
+                        if inv.intent == 'investigate' and 'architecture' in inv.targets and not check.assertions:
+                            # An unspecified architecture goal needs the complete
+                            # coverage report, not arbitrary exploratory predicates.
+                            state.setdefault('architecture_tactical_refinements', []).append({
+                                'check_id': check.id, 'refinement': refinement.model_dump(),
+                                'evaluation': checks.evaluate(check.model_copy(update={'assertions': refinement.assertions}), store.all())})
+                            state['results'][check.id] = {'status': 'unverified', 'assertions': [],
+                                'reason': 'Evaluate required architecture coverage against collected contents'}
+                            save()
+                            break
                         check.assertions = refinement.assertions
                         check.unresolved_reason = ""
                         next(c for c in state["checks"] if c["id"] == check.id).update(check.model_dump())
@@ -897,6 +947,13 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         params.pop("body", None)
                     action_id = hashlib.sha256(json.dumps([tool, proposed], sort_keys=True).encode()).hexdigest()
                     if rejected.get(action_id) == resource_identity():
+                        if inv.intent == 'investigate' and 'architecture' in inv.targets and not check.assertions:
+                            state['results'][check.id] = {'status': 'unverified', 'assertions': [],
+                                'reason': 'Repeated failed action; evaluate architecture coverage from existing evidence'}
+                            state.setdefault('cycle_recovery', []).append({'check_id': check.id,
+                                'tool': tool, 'parameters': flow_trace.safe_parameters(proposed)})
+                            save()
+                            break
                         raise InterruptedError("No progress: identical rejected or failed action repeated")
                     if tool in {"browser_click", "browser_type", "browser_fill_form"}:
                         page = _resources(store.all()).get("browser") or {}
@@ -917,6 +974,23 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                             save(last_event=reason)
                             continue
                     validation = validator.validate(ToolRequest(tool=tool, parameters=params), inv.budget_remaining)
+                    if validation.observation_id:
+                        existing = store.get(validation.observation_id)
+                        if existing is None or not existing.success:
+                            raise ValueError('Cached observation is unavailable')
+                        if existing.id in reused:
+                            state['results'][check.id] = {'status': checks.verdict(results), 'assertions': results,
+                                'reason': 'No progress: cached evidence requested repeatedly; required predicates remain unresolved'}
+                            save()
+                            break
+                        reused.add(existing.id)
+                        state.setdefault('evidence_reuse', []).append({'check_id': check.id, 'tool': tool,
+                            'observation_id': existing.id, 'reason': validation.reason})
+                        context_discovery = discovery.setdefault('documents', [])
+                        context_discovery.insert(0, {'path': (existing.payload.get('data') or {}).get('path'),
+                            'observation_id': existing.id, 'content': (existing.payload.get('data') or {}).get('content', '')})
+                        save(last_event=validation.reason)
+                        continue
                     if not validation.valid:
                         rejected[action_id] = resource_identity()
                         store.append(node_id=check.id, goal_id=check.id, source_tool="explorer", obs_type="agent_failure",
@@ -936,9 +1010,84 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         break
                     save()
                     if len(state["executions"]) > 1 and state["executions"][-2].get("result_fingerprint") == state["executions"][-1]["result_fingerprint"]:
+                        if inv.intent == 'investigate' and 'architecture' in inv.targets and not check.assertions:
+                            state['results'][check.id] = {'status': 'unverified', 'assertions': [],
+                                'reason': 'Repeated unchanged tool result; evaluate architecture coverage from existing evidence'}
+                            state.setdefault('cycle_recovery', []).append({'check_id': check.id,
+                                'tool': tool, 'observation_id': obs.id})
+                            save()
+                            break
                         raise InterruptedError("No progress: repeated execution produced no new result")
                 else:
                     raise InterruptedError("Tool execution budget exhausted")
+            # Architecture completion requires coverage and synthesis, independent
+            # of tactical checks such as existence. Every finding has content proof.
+            if inv.intent == 'investigate' and 'architecture' in inv.targets and state['results'] and all(
+                    state['results'].get(c['id'], {}).get('status') == 'passed' or not c['assertions']
+                    for c in state['checks']):
+                from wizard_kernel.contracts.verification import ArchitectureReport, CheckSpec
+                latest = {(o.payload.get('data') or {}).get('path'): o for o in store.all()
+                          if o.success and o.source_tool == 'read_file'}
+                evidence = []
+                remaining = 24000
+                for path, o in reversed(list(latest.items())):
+                    content = (o.payload.get('data') or {}).get('content', '')
+                    excerpt = content[:min(4000, remaining)]
+                    evidence.append({'observation_id': o.id, 'path': path, 'content': excerpt,
+                                     'excerpt_truncated': len(excerpt) < len(content)})
+                    remaining -= len(excerpt)
+                    if remaining <= 0:
+                        break
+                synthesis_context = {'original_request': _effective_request(inv),
+                    'command_family': inv.intent, 'targets': inv.targets,
+                    'architecture_synthesis': True, 'repository_evidence': evidence,
+                    'instruction': 'Synthesize all six architecture areas from supplied evidence. Explain actual entry files and startup flow, client/server component boundaries (not account isolation), workspace packages, directories and configuration relationships. Each statement must follow from cited content. Use short exact verbatim substrings as targeted content predicates, preserving JSON whitespace and escapes; use separate predicates for separate terms. Do not reformat JSON or treat a database healthcheck as application startup. File existence alone is insufficient. For missing evidence use empty assertions and an exact blocker; do not invent facts.'}
+                for attempt in range(2):
+                    synthesis = request('explorer', synthesis_context, ArchitectureReport)
+                    evaluated_findings = []
+                    for finding in synthesis.findings:
+                        coverage_id = 'architecture_' + finding.area
+                        while any(c['id'] == coverage_id for c in state['checks']):
+                            coverage_id += '_coverage'
+                        coverage = CheckSpec(id=coverage_id, description=finding.area + ': ' + finding.summary,
+                            assertions=finding.assertions, unresolved_reason=finding.blocker, capabilities=['repository'])
+                        evaluated_findings.append((coverage, checks.evaluate(coverage, store.all())))
+                    if attempt or not any(checks.verdict(r) == 'failed' for _, r in evaluated_findings):
+                        break
+                    fs_store.write(inv.id, 'architecture_proposed_report.json', synthesis.model_dump())
+                    feedback = []
+                    for c, rows in evaluated_findings:
+                        details = []
+                        for a in rows:
+                            actual = str(a.get('actual') or '')
+                            tokens = list(dict.fromkeys(re.findall(r'[\w.-]{2,80}', str(a['assertion'].get('expected', '')))))[:12]
+                            sensitive = a['assertion'].get('case_sensitive', True)
+                            present = [t for t in tokens if (t if sensitive else t.casefold()) in
+                                       (actual if sensitive else actual.casefold())]
+                            details.append({**a, 'actual': actual[:500] if a.get('actual') is not None else None,
+                                            'present_literal_tokens': present})
+                        feedback.append({'area': c.id, 'results': details})
+                    synthesis_context['evaluation_feedback'] = feedback
+                    synthesis_context['recovery_instruction'] = 'One bounded correction is allowed for your synthesized predicates. A formatting mismatch does not mean the file or JSON fields are absent. Present literal tokens are diagnostics, not proof. Consult the supplied actual contents; for JSON use separate short exact predicates for keys and values instead of reformatted arrays. Preserve the architectural relation in the explanation and proof; do not weaken user requirements. If evidence does not support the finding, report its blocker.'
+                state['architecture_findings'] = synthesis.model_dump()['findings']
+                state['architecture_coverage_ids'] = {f.area: c.id for f, (c, _) in zip(synthesis.findings, evaluated_findings)}
+                for coverage, evaluated in evaluated_findings:
+                    state['checks'].append(coverage.model_dump())
+                    graph.add(InvestigationNode(id='check_' + coverage.id, type='checkpoint', goal_id=coverage.id,
+                        action={'description': coverage.description, 'assertions': [a.model_dump() for a in coverage.assertions]},
+                        hypothesis=Hypothesis(kind=HypothesisKind.manual_escalate)))
+                    state['results'][coverage.id] = {'status': checks.verdict(evaluated), 'assertions': evaluated,
+                                                   'reason': coverage.unresolved_reason}
+                # Resolve unspecified architecture goals from the measured
+                # coverage predicates, never from a tool-rejection count.
+                if all(checks.verdict(r) == 'passed' for _, r in evaluated_findings):
+                    proof = [a for c, _ in evaluated_findings for a in c.model_dump()['assertions']]
+                    for c in state['checks']:
+                        if not c['assertions']:
+                            c.update(assertions=proof, unresolved_reason='')
+                            resolved = checks.evaluate(CheckSpec.model_validate(c), store.all())
+                            state['results'][c['id']] = {'status': checks.verdict(resolved), 'assertions': resolved}
+                save()
             # One review after meaningful work, never after every file read.
             # Review cannot manufacture evidence or overwrite goal predicates.
             if inv.intent == "verify" and getattr(policy, "requires_verifier", False) and any(
@@ -994,7 +1143,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
         state["cleanup"] = "Completed" if not cleanup_errors else "Failed: " + ", ".join(cleanup_errors)
         for check in state["checks"]:
             result = state["results"].setdefault(check["id"], {})
-            if result.get("status") not in {"passed", "failed"}:
+            if result.get("status") not in {"passed", "failed", 'evaluation_error'}:
                 result.update(status="unverified", reason=state["stop_reason"] or result.get("reason") or "Not evaluated")
         statuses = [r.get("status") for r in state["results"].values()]
         final = LifecycleState.completed if statuses and all(s == "passed" for s in statuses) else LifecycleState.incomplete
@@ -1002,7 +1151,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             final = LifecycleState.incomplete
         if inv.intent == "report" and state.get("report_source"):
             final = LifecycleState.completed
-        if "failed" in statuses or state.get("failure_kind") in {"runtime", "configuration", "schema", "provider_shape"} or cleanup_errors:
+        if "failed" in statuses or 'evaluation_error' in statuses or state.get("failure_kind") in {"runtime", "configuration", "schema", "provider_shape"} or cleanup_errors:
             final = LifecycleState.failed
         if inv.cancel_requested or inv.state == LifecycleState.cancelled:
             final = LifecycleState.cancelled

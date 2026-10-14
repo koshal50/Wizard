@@ -33,6 +33,14 @@ these distinct submissions. Service/repository/API checks use workflow=general.
 Registration's authenticated session alone is not a login test.
 For explain/investigate use repository discovery unless the original request explicitly
 asks to execute application behavior. Do not start processes merely to explain code.
+For architecture investigations, cover repository structure and major directories,
+entry points and startup flow, client/server boundaries when applicable, package/workspace
+organization, and important configuration and relationships. Ground predicates in actual
+repository contracts; missing required coverage stays unresolved. Do not reduce architecture
+to the presence of a few generic words in one document. Reuse discovery evidence.
+Repository assertion target is a repository file path or a supplied observation ID.
+Use case_sensitive=false only for natural-language term matching where case is irrelevant;
+exact identifiers, paths and semantic requirements retain exact matching.
 Each check needs a concrete measurable expected outcome supported by the user's
 request or actual repository contracts. Categories, source-file existence, clicks,
 or a live PID are not proof of application behavior. For API checks specify the
@@ -69,12 +77,45 @@ unresolved_reason must explain what discovery is needed. Check IDs must be uniqu
 depends_on references existing IDs and cannot contain cycles or self-dependencies.
 Return only the schema-constrained specification."""
 
+REPOSITORY_DECIDE = """Choose one schema-constrained action for current_check and the original request.
+Runtime executes tools and evaluates predicates; do not invent facts or observations.
+Use repository_evidence, repository_requests, discovery documents, knowledge and recent results.
+Repository reads are shared across checks. Targets are file paths or supplied observation IDs.
+Do not reread known files with identical parameters; cached reads provide no new information.
+A failed missing-file read is not recovered by changing max_bytes. Use observed tree paths.
+Choose another relevant file or strategy if required evidence is missing; blocked must explain
+the actual missing evidence. Use evaluate once explicit predicates are satisfied.
+For unspecified goals use refine with successful observation_ids and measurable content
+predicates from actual files. File existence alone does not explain architecture.
+Cover directories, actual entry points, startup flow, component boundaries, packages/workspaces
+and configuration relationships. Quote exact source substrings, preserving whitespace and escapes.
+Use case_sensitive=false only for natural language terms where case is irrelevant.
+Return only the canonical decision schema."""
+
+ARCHITECTURE_SYNTHESIZE = """Return the ArchitectureReport schema using the supplied repository evidence.
+Explain each required architecture area with targeted content predicates quoting exact source
+text and stable observation IDs or paths. Each statement must follow from its cited evidence.
+Proof excerpts must be short single-line literal fragments without backslash escapes or
+JSON/array/object delimiters. For structured declarations cite separate keys and values.
+Do not reformat quoted JSON, infer startup from incidental healthchecks, or replace component
+boundaries with user-data isolation. Use empty assertions and an explicit blocker for missing
+evidence. Runtime evaluates all predicates and owns completion. Do not fabricate success."""
+
 DECIDE = """Choose exactly one useful action for CURRENT_CHECK. Runtime owns execution and
 verdicts. Use the original request, accepted predicates, actual resource/page/form
 state, bounded knowledge, recent results/rejections, and available tools.
+When architecture_synthesis=true, return the ArchitectureReport schema instead of
+a tactical decision: explain each required area using supplied repository contents,
+with targeted content assertions as proof, or an explicit missing-evidence blocker.
 Discovery is preparation, not proof. Unknown routes/fields/outcomes require discovery,
 not blocked, when relevant tools are available. Read repository contracts if needed;
 do not reread known files. Commands are discovered candidates, not the only commands.
+Repository observations are shared evidence across checks. An assertion target may identify
+an existing observation ID or its file path. Reuse repository_evidence and discovery documents;
+a cached duplicate is not new evidence. Stop with evaluate once predicates are satisfied;
+otherwise inspect another relevant source or explain the actual missing evidence.
+repository_requests includes failed reads and their paths: a missing file cannot be
+recovered by changing max_bytes. Use observed tree paths or existing evidence instead.
 For a startup check, start the documented process and establish actual readiness.
 For a UI workflow start all documented components needed to serve that UI; a
 backend listener alone is insufficient. Prefer an appropriate combined startup

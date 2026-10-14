@@ -68,6 +68,7 @@ class ValidationResult:
     valid: bool
     reason: str = ""
     sanitised_params: dict = field(default_factory=dict)
+    observation_id: str | None = None
 
 
 class ToolRequestValidator:
@@ -80,6 +81,7 @@ class ToolRequestValidator:
         self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
+        self._observed_reads: dict[str, str] = {}
         self._rejected_fingerprints: set[str] = set()
         # Fail-closed egress allowlist for browser_navigate. Empty → block all navigation.
         self._allowed_domains = tuple(allowed_domains or ())
@@ -91,9 +93,11 @@ class ToolRequestValidator:
         self._enforce_discovered_routes = navigation_targets is not None
         self._discovered_urls = {self._navigation_key(url) for url in (navigation_targets or []) if url.startswith(("http://", "https://"))}
 
-    def record_execution(self, tool: str, params: dict, payload: dict) -> None:
+    def record_execution(self, tool: str, params: dict, payload: dict, observation_id: str | None = None) -> None:
         """Advance prerequisites only from successful executor results."""
         data = payload.get("data") or {}
+        if tool == 'read_file' and payload.get('ok') and observation_id:
+            self._observed_reads[self._fingerprint(tool, params)] = observation_id
         if payload.get("ok") and tool in BROWSER_TOOLS:
             page = data.get("page_observation") or data
             for link in page.get("links", []):
@@ -252,6 +256,10 @@ class ToolRequestValidator:
         if not repeatable_observation:
             fingerprint = self._fingerprint(request.tool, params)
             if fingerprint in self._seen_fingerprints:
+                if request.tool == 'read_file' and fingerprint in self._observed_reads:
+                    return ValidationResult(valid=True, sanitised_params=params,
+                                            observation_id=self._observed_reads[fingerprint],
+                                            reason='Duplicate read: reuse existing observation')
                 return reject(
                     (
                         f"Duplicate request: {request.tool!r} with identical parameters has already "

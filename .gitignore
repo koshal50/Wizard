@@ -37,6 +37,7 @@ output/
 # Local environment / secrets (keep .env.example, ignore the real .env)
 .env
 
+
 # Node dependencies
 node_modules/
 package*node_modules/

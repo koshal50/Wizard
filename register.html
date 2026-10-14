@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="css/wizard.css">
+  <title>Create account · Wizard</title>
+</head>
+<body class="scene">
+  <div class="scene-veil"></div>
+  <main class="auth-shell">
+    <div class="auth-panel">
+      <aside class="auth-aside">
+        <div><a class="brand" href="https://www.wizagents.dev/">Wizard</a></div>
+        <div>
+          <h2 class="aside-title">Build with AI. Verify with Wizard.</h2>
+          <p class="aside-copy">Let Wizard investigate, execute, and verify your software automatically.</p>
+        </div>
+        <div class="scan-card" aria-hidden="true">
+          <h2>Fast scan</h2>
+          <p>Wizard starts with metadata. File names, directories, extensions and sizes are available before source contents are requested.</p>
+          <div class="scan-file">package.json</div>
+          <div class="scan-tags"><span>metadata</span><span>indexed</span><span>available</span></div>
+        </div>
+      </aside>
+
+      <section class="auth-main">
+        <h1>Create your Wizard account</h1>
+        <p class="lede">Start verifying the code your AI writes.</p>
+
+        <!-- Set action to your registration endpoint -->
+        <form id="register-form" data-form="register" method="post" action="/register" novalidate>
+          <div id="form-alert" class="alert error" role="alert" tabindex="-1"></div>
+
+          <div class="two-col">
+            <div class="field">
+              <label for="fullName">Full name</label>
+              <input id="fullName" name="fullName" type="text" autocomplete="name" required aria-describedby="fullName-error">
+              <p class="field-error" id="fullName-error"></p>
+            </div>
+            <div class="field">
+              <label for="email">Email address</label>
+              <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required aria-describedby="email-error">
+              <p class="field-error" id="email-error"></p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <div class="input-wrap">
+              <input id="password" name="password" type="password" autocomplete="new-password" required aria-describedby="password-error pw-reqs">
+              <button type="button" class="toggle-pw" aria-controls="password" aria-pressed="false">Show</button>
+            </div>
+            <div class="meter" id="meter" data-score="0" role="img" aria-label="Password strength: none"><span></span><span></span><span></span><span></span></div>
+            <ul class="reqs" id="pw-reqs">
+              <li data-rule="len">10+ characters</li>
+              <li data-rule="letter">A letter</li>
+              <li data-rule="number">A number</li>
+            </ul>
+            <p class="field-error" id="password-error"></p>
+          </div>
+
+          <div class="field">
+            <label for="confirmPassword">Confirm password</label>
+            <input id="confirmPassword" name="confirmPassword" type="password" autocomplete="new-password" required aria-describedby="confirmPassword-error">
+            <p class="field-error" id="confirmPassword-error"></p>
+          </div>
+
+          <div class="field">
+            <label class="check"><input type="checkbox" id="acceptTerms" name="acceptTerms" aria-describedby="acceptTerms-error"> <span>I agree to the <a href="https://www.wizagents.dev/terms">terms</a> and <a href="https://www.wizagents.dev/privacy">privacy policy</a>.</span></label>
+            <p class="field-error" id="acceptTerms-error"></p>
+          </div>
+
+          <button class="btn" type="submit" data-loading="Creating account…">Create account</button>
+        </form>
+
+        <p class="switch">Already have an account? <a href="login.html">Sign in</a></p>
+      </section>
+    </div>
+  </main>
+  <footer class="auth-foot">
+    <span>© 2026 Wizard</span>
+    <a href="https://www.wizagents.dev/privacy">Privacy policy</a>
+    <a href="https://www.wizagents.dev/terms">Terms and conditions</a>
+    <a href="https://www.wizagents.dev/cookies">Cookie policy</a>
+    <a href="https://www.wizagents.dev/refunds">Refund policy</a>
+  </footer>
+  <script src="js/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="css/wizard.css">
+  <title>Sign in · Wizard</title>
+</head>
+<body class="scene">
+  <div class="scene-veil"></div>
+  <main class="auth-shell">
+    <div class="auth-panel">
+      <aside class="auth-aside">
+        <div><a class="brand" href="https://www.wizagents.dev/">Wizard</a></div>
+        <div>
+          <h2 class="aside-title">AI writes the code. Wizard checks the reality.</h2>
+          <p class="aside-copy">Wizard works inside the workflow you already use.</p>
+        </div>
+        <div class="scan-card" aria-hidden="true">
+          <h2>Fast scan</h2>
+          <p>Wizard starts with metadata. File names, directories, extensions and sizes are available before source contents are requested.</p>
+          <div class="scan-file">package.json</div>
+          <div class="scan-tags"><span>metadata</span><span>indexed</span><span>available</span></div>
+        </div>
+      </aside>
+
+      <section class="auth-main">
+        <h1>Welcome back to Wizard</h1>
+        <p class="lede">Sign in to continue building and verifying with AI.</p>
+
+        <!-- Set action to your sign-in endpoint -->
+        <form id="login-form" data-form="login" method="post" action="/login" novalidate>
+          <div id="form-alert" class="alert error" role="alert" tabindex="-1"></div>
+
+          <div class="field">
+            <label for="email">Email address</label>
+            <input id="email" name="email" type="email" autocomplete="email" inputmode="email" required aria-describedby="email-error">
+            <p class="field-error" id="email-error"></p>
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <div class="input-wrap">
+              <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="password-error">
+              <button type="button" class="toggle-pw" aria-controls="password" aria-pressed="false">Show</button>
+            </div>
+            <p class="field-error" id="password-error"></p>
+          </div>
+
+          <div class="row">
+            <label class="check"><input type="checkbox" id="remember" name="remember"> Keep me signed in for 30 days</label>
+            <a href="forgot-password.html">Forgot password?</a>
+          </div>
+
+          <button class="btn" type="submit" data-loading="Signing in…">Sign in</button>
+        </form>
+
+        <p class="switch">Don't have an account? <a href="register.html">Create one</a></p>
+      </section>
+    </div>
+  </main>
+  <footer class="auth-foot">
+    <span>© 2026 Wizard</span>
+    <a href="https://www.wizagents.dev/privacy">Privacy policy</a>
+    <a href="https://www.wizagents.dev/terms">Terms and conditions</a>
+    <a href="https://www.wizagents.dev/cookies">Cookie policy</a>
+    <a href="https://www.wizagents.dev/refunds">Refund policy</a>
+  </footer>
+  <script src="js/auth.js"></script>
+</body>
+</html>

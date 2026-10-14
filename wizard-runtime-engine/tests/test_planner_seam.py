@@ -329,7 +329,7 @@ def test_active_technology_follows_the_open_goal_not_the_plan_order():
     goals = GoalEngine("inv_test")
     goals.add(Goal(id="g0", name="Verify Containerization", required_claim_types=["DEPLOYMENT"]))
     goals.add(Goal(id="g1", name="Verify Runtime", required_claim_types=["RUNTIME"]))
-    goals.mark_satisfied("g0")
+    goals.get("g0").state = "satisfied"  # evidence-only API; set state directly for this selection test
 
     assert kernel_loop._active_technology(plan, goals) == "Python"
 
@@ -337,7 +337,7 @@ def test_active_technology_follows_the_open_goal_not_the_plan_order():
 def test_active_technology_falls_back_when_nothing_is_open():
     goals = _fixture_goals()
     for g in goals.all():
-        goals.mark_satisfied(g.id)
+        g.state = "satisfied"  # evidence-only API; set state directly for this selection test
     assert kernel_loop._active_technology(_fixture_plan(), goals) == "Python"
     assert kernel_loop._active_technology(TechnologyPlan(technologies=[]), goals) == "unknown"
 

@@ -29,12 +29,7 @@ dependencies = [
     "pydantic>=2.8",
     "httpx>=0.27",
     "python-dotenv>=1.0",
-    # The agentic browser. The package is all pip can install: Playwright
-    # downloads its browser binaries from its own CDN, and pip has no
-    # post-install step to run that for you. `wizard` fetches Chromium itself on
-    # first launch — see ensure_chromium in wizard/cli/tui/services.py — so this
-    # dependency plus a first run is enough.
-    "playwright>=1.48",
+
 ]
 
 [project.optional-dependencies]
@@ -64,3 +59,11 @@ include = ["wizard", "wizard.*", "wizard_kernel", "wizard_kernel.*"]
 [tool.pytest.ini_options]
 testpaths = ["wizard/tests"]
 pythonpath = ["."]
+
+# npm dependencies cannot be declared as Python distributions. This records the
+# external browser requirement; pip does not execute npm installation hooks.
+[tool.wizard.browser]
+provider = "agent-browser"
+package = "agent-browser@0.27.0"
+install = "npm install -g agent-browser@0.27.0"
+install-browser = "agent-browser install"

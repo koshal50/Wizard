@@ -18,6 +18,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import re
+import shlex
+from pathlib import PureWindowsPath
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -32,6 +36,14 @@ _PATH_TOOLS = frozenset({"read_file", "path_exists", "search_files"})
 # Tools that execute arbitrary commands — require extra scrutiny
 _EXEC_TOOLS = frozenset({"execute_command", "start_process"})
 
+# Preserve the legacy Planner's safety policy at the actual execution boundary.
+_COMMAND_LEADERS = frozenset("npm pnpm yarn node npx python python3 pip pip3 pytest go cargo docker java mvn gradle ls cat echo true test netstat ss ps lsof".split())
+_DANGEROUS_COMMANDS = tuple(re.compile(p, re.I) for p in (
+    r"\brm\s+-rf?\b", r"\bmkfs\b", r"\bdd\s+if=", r":\(\)\s*\{\s*:\|:&\s*\}",
+    r"\bshutdown\b", r"\breboot\b", r"\bchmod\s+-R\s+777\b", r"\bcurl\b[^\n]*\|\s*(sh|bash)\b",
+    r"\bwget\b[^\n]*\|\s*(sh|bash)\b", r">\s*/dev/sd[a-z]", r"\bgit\s+push\b",
+))
+
 # Browser tools — a browser action is just another tool. Navigation is URL-guarded
 # (the egress analog of the path-traversal guard); ALL browser tools are excluded
 # from dedup because identical params (e.g. browser_snapshot {}) address a *changed*
@@ -39,7 +51,8 @@ _EXEC_TOOLS = frozenset({"execute_command", "start_process"})
 _URL_TOOLS = frozenset({"browser_navigate", "http_request"})
 BROWSER_TOOLS = frozenset({
     "browser_navigate", "browser_snapshot", "browser_click",
-    "browser_type", "browser_back", "browser_extract",
+    "browser_type", "browser_fill_form", "browser_back", "browser_extract",
+    "browser_assertion",
 })
 
 # The full set of tools the Runtime accepts from agents
@@ -61,7 +74,7 @@ class ToolRequestValidator:
     """Per-investigation validator. Holds dedup state — never shared across investigations."""
 
     def __init__(self, workspace_root: str, allowed_domains: list[str] | None = None,
-                 browser_enabled: bool = False) -> None:
+                 browser_enabled: bool = False, navigation_targets: list[str] | None = None) -> None:
         self._root = Path(workspace_root).resolve()
         self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
@@ -71,22 +84,58 @@ class ToolRequestValidator:
         self._allowed_domains = tuple(allowed_domains or ())
         # Runtime observations, not agent assertions, advance resource state.
         self._reachable_local_endpoints: set[tuple[str, int]] = set()
+        self._endpoint_owners: dict[tuple[str, int], str] = {}
+        self._process_handles: set[str] = set()
         self._browser_navigated = False
+        self._enforce_discovered_routes = navigation_targets is not None
+        self._discovered_urls = {self._navigation_key(url) for url in (navigation_targets or []) if url.startswith(("http://", "https://"))}
 
     def record_execution(self, tool: str, params: dict, payload: dict) -> None:
         """Advance prerequisites only from successful executor results."""
         data = payload.get("data") or {}
-        if tool == "check_port" and payload.get("ok") and data.get("active"):
+        if payload.get("ok") and tool in BROWSER_TOOLS:
+            page = data.get("page_observation") or data
+            for link in page.get("links", []):
+                if isinstance(link, dict) and link.get("href", "").startswith(("http://", "https://")):
+                    self._discovered_urls.add(self._navigation_key(link["href"]))
+            if page.get("url"):
+                self._discovered_urls.add(self._navigation_key(page["url"]))
+        if tool in _URL_TOOLS and not payload.get("ok") and params.get("url"):
+            parsed = urlsplit(params["url"])
+            endpoint = (self._endpoint_host(parsed.hostname or ""), parsed.port or (443 if parsed.scheme == "https" else 80))
+            self._reachable_local_endpoints.discard(endpoint)
+            self._endpoint_owners.pop(endpoint, None)
+        if tool == "check_port" and payload.get("ok"):
             host = str(data.get("host", params.get("host", "localhost"))).lower()
             port = data.get("port", params.get("port"))
             if isinstance(port, int):
                 endpoint = (self._endpoint_host(host), port)
+                if not data.get("active"):
+                    self._reachable_local_endpoints.discard(endpoint)
+                    self._endpoint_owners.pop(endpoint, None)
+                    return
+                handle = (payload.get("meta") or {}).get("handle_id")
+                if handle:
+                    self._endpoint_owners[endpoint] = handle
                 if endpoint not in self._reachable_local_endpoints:
                     self._reachable_local_endpoints.add(endpoint)
                     self._rejected_fingerprints.clear()
-        elif tool == "browser_navigate" and payload.get("ok"):
-            self._browser_navigated = True
-            self._rejected_fingerprints.clear()
+        elif tool == "start_process" and payload.get("ok"):
+            handle = data.get("handle_id") or (payload.get("meta") or {}).get("handle_id")
+            if handle:
+                self._process_handles.add(handle)
+        elif (tool == "read_process" and data.get("is_running") is False) or tool == "kill_process":
+            handle = data.get("handle_id") or data.get("killed")
+            for endpoint, owner in list(self._endpoint_owners.items()):
+                if owner == handle:
+                    self._reachable_local_endpoints.discard(endpoint)
+                    self._endpoint_owners.pop(endpoint, None)
+        elif tool == "browser_navigate":
+            self._browser_navigated = bool(payload.get("ok"))
+            if self._browser_navigated:
+                self._rejected_fingerprints.clear()
+            else:
+                self._rejected_fingerprints.add(self._fingerprint(tool, params))
         elif tool in BROWSER_TOOLS:
             if payload.get("ok"):
                 self._rejected_fingerprints.clear()
@@ -120,6 +169,37 @@ class ToolRequestValidator:
 
         # 3. Path traversal guard for tools that accept paths
         params = dict(request.parameters)
+        if request.tool in {"read_process", "kill_process"} and params.get("handle_id") not in self._process_handles:
+            return reject("Process handle does not belong to this investigation")
+        if request.tool in _EXEC_TOOLS:
+            command = params.get("command")
+            if not isinstance(command, str) or not command.strip():
+                return reject("Command must be a nonempty string")
+            if any(pattern.search(command) for pattern in _DANGEROUS_COMMANDS):
+                return reject("Command matched the existing destructive/exfiltration restriction")
+            try:
+                words = shlex.split(command, posix=False)
+                leader = next(w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)).strip("\"'")
+            except (ValueError, StopIteration):
+                return reject("Command has invalid quoting or no executable")
+            base = PureWindowsPath(leader).name.lower().removesuffix(".exe")
+            allowed = _COMMAND_LEADERS | set(os.environ.get("WIZARD_ALLOWED_COMMANDS", "").split(","))
+            if base not in allowed:
+                return reject("Command executable is not authorized; configure WIZARD_ALLOWED_COMMANDS for an additional declared entry point")
+            try:
+                cwd = (self._root / params.get("cwd", ".")).resolve()
+                params["cwd"] = str(cwd.relative_to(self._root))
+            except (ValueError, TypeError):
+                return reject("Command working directory must stay inside the investigation workspace")
+        if request.tool == "check_port":
+            port = params.get("port")
+            if type(port) is not int or not 1 <= port <= 65535:
+                return reject("check_port port must be an integer from 1 to 65535")
+            host = params.get("host", "localhost")
+            if not isinstance(host, str):
+                return reject("check_port host must be a string")
+            if self._endpoint_host(host) != "loopback" and not any(host == d or host.endswith("." + d) for d in self._allowed_domains):
+                return reject("check_port target is outside allowed_domains")
         if request.tool in _PATH_TOOLS:
             result = self._validate_path(params)
             if not result.valid:
@@ -131,7 +211,13 @@ class ToolRequestValidator:
             url_result = self._validate_url(params)
             if not url_result.valid:
                 return reject(url_result.reason)
-            if self._is_loopback_url(params.get("url", "")):
+            if request.tool == "browser_navigate" and self._enforce_discovered_routes:
+                parsed = urlsplit(params.get("url", ""))
+                # A reachable endpoint permits initial origin discovery only.
+                # Application paths must come from an explicit target or real links.
+                if (parsed.path not in {"", "/"} or parsed.query) and self._navigation_key(params["url"]) not in self._discovered_urls:
+                    return reject("UNDISCOVERED_BROWSER_TARGET: navigate to the discovered origin, take a snapshot, and use an observed link/ref; do not invent application routes")
+            if (request.tool != "http_request" or params.get("require_ready", False)) and self._is_loopback_url(params.get("url", "")):
                 parsed = urlsplit(params["url"])
                 port = parsed.port or (443 if parsed.scheme == "https" else 80)
                 endpoint = (self._endpoint_host(parsed.hostname or ""), port)
@@ -174,6 +260,12 @@ class ToolRequestValidator:
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    @staticmethod
+    def _navigation_key(url):
+        parsed = urlsplit(url)
+        return (parsed.scheme.lower(), ToolRequestValidator._endpoint_host(parsed.hostname or ""),
+                parsed.port or (443 if parsed.scheme == "https" else 80), parsed.path or "/", parsed.query)
+
     def _validate_path(self, params: dict) -> ValidationResult:
         """Resolve and enforce that path param stays inside the workspace root."""
         raw_path = params.get("path", "")
@@ -211,6 +303,8 @@ class ToolRequestValidator:
         if not raw_url:
             return ValidationResult(valid=False, reason="browser_navigate requires a 'url' parameter.")
         parsed = urlparse(raw_url)
+        if parsed.username or parsed.password:
+            return ValidationResult(valid=False, reason="Credential-bearing URLs are not allowed")
         if parsed.scheme not in ("http", "https"):
             return ValidationResult(
                 valid=False,
@@ -248,8 +342,14 @@ class ToolRequestValidator:
             required = {"url": str}
         elif tool == "browser_click":
             required = {"selector": str}
+        elif tool == "browser_assertion":
+            required = {"field": str, "operator": str, "expected": str}
+            if params.get("field") not in {"url", "title", "snapshot", "text"} or params.get("operator") not in {"equals", "contains", "not_contains"}:
+                return ValidationResult(valid=False, reason="Unsupported browser assertion")
         elif tool == "browser_type":
             required = {"selector": str, "text": str}
+        elif tool == "browser_fill_form":
+            required = {"fields": list}
         elif tool == "http_request":
             required = {"url": str}
 
@@ -267,6 +367,19 @@ class ToolRequestValidator:
                         f"{param_type.__name__}, got {type(params[param_name]).__name__}."
                     ),
                 )
+        if tool == "browser_fill_form":
+            fields = params["fields"]
+            if not fields:
+                return ValidationResult(valid=False, reason="browser_fill_form fields must not be empty.")
+            for index, field in enumerate(fields):
+                if (not isinstance(field, dict)
+                        or not isinstance(field.get("selector"), str)
+                        or not field.get("selector")
+                        or not isinstance(field.get("text"), str)):
+                    return ValidationResult(
+                        valid=False,
+                        reason=f"browser_fill_form fields[{index}] requires string selector and text.",
+                    )
         if tool == "http_request":
             method = str(params.get("method", "GET")).upper()
             if method not in {"GET", "HEAD", "POST"}:

@@ -47,6 +47,7 @@ class ToolName(str, Enum):
     BROWSER_SNAPSHOT = "browser_snapshot"
     BROWSER_CLICK = "browser_click"
     BROWSER_TYPE = "browser_type"
+    BROWSER_FILL_FORM = "browser_fill_form"
     BROWSER_BACK = "browser_back"
     BROWSER_EXTRACT = "browser_extract"
 

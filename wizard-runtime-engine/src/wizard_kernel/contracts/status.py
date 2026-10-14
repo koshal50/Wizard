@@ -14,6 +14,13 @@ class LifecycleState(str, Enum):
     # three read identically to a caller otherwise, and a run that gave up is
     # not a run that verified anything.
     incomplete = "incomplete"
+    # Wizard ran correctly, but a real external/environmental limitation — the
+    # application would not start, a required endpoint never came up, a documented
+    # setup step was not performed — prevented the runtime evidence a goal needs.
+    # Distinct from `incomplete` (Wizard ran out of ideas) and from `failed`
+    # (Wizard itself malfunctioned): the thing that stopped verification was the
+    # target, not the runtime, and the report names the exact boundary.
+    blocked = "blocked"
     failed = "failed"
     cancelled = "cancelled"
 
@@ -26,6 +33,7 @@ class LifecycleState(str, Enum):
 TERMINAL_STATES: frozenset["LifecycleState"] = frozenset({
     LifecycleState.completed,
     LifecycleState.incomplete,
+    LifecycleState.blocked,
     LifecycleState.failed,
     LifecycleState.cancelled,
 })

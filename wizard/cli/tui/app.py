@@ -36,7 +36,7 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
 from wizard.cli.parser.command_parser import COMMAND_TARGETS
-from wizard.cli.parser.frontend import Frontend, suggestion_for
+from wizard.cli.parser.frontend import Frontend
 from wizard.cli.tui import history
 from wizard.cli.tui.session import TuiSession
 from wizard.cli.tui.widgets import (
@@ -211,8 +211,17 @@ class WizardTUI:
                 }
             ),
             full_screen=True,
-            # The wheel is how anyone actually scrolls a pane. Capture turns off
-            # the terminal's own click-drag selection; Shift+drag still selects.
+            # Mouse support ON, deliberately. The failure the user hit with it
+            # OFF is the decisive evidence: scrolling the wheel made the terminal
+            # fall back to emitting arrow-key sequences (`^[[A`/`^[[B`), which
+            # leaked onto the screen as literal text. With mouse reporting ON the
+            # terminal sends SGR mouse events instead, which prompt_toolkit
+            # consumes (and maps wheel-up/down to scrolling) rather than letting
+            # them fall through as keys. Disabling the wheel is not the fix — the
+            # terminal still has to report the wheel somehow, and the arrow-key
+            # fallback is the one shape that leaks. External text (page DOM,
+            # control labels) is still scrubbed by sanitize_terminal(); this
+            # setting governs the live INPUT the terminal sends back.
             mouse_support=True,
             refresh_interval=0.08,  # drives the ember animation
         )
@@ -504,14 +513,9 @@ class WizardTUI:
         self.app.layout.focus(self.input)
 
     def _find_frontend(self) -> None:
-        """Look for a servable client in the project, and say what to do about it."""
-        try:
-            self.frontend, self.frontend_hint = suggestion_for(self.repo_path)
-        except Exception:
-            # A discovery step that raises must not take the screen with it: the
-            # project may be unreadable, mid-clone, or not a project at all, and
-            # none of those is a reason the user cannot type an intent.
-            self.frontend, self.frontend_hint = None, ""
+        """Runtime discovers endpoints; the UI never guesses one before submission."""
+        self.frontend = None
+        self.frontend_hint = "Runtime discovers startup commands and actual application endpoints."
 
     def _use_suggested_url(self) -> None:
         """Put the discovered client's URL in the box, where it can be seen and edited.
@@ -553,6 +557,7 @@ class WizardTUI:
 
     def _show_result(self) -> None:
         self.state = RESULT
+        self.show_page = False
         self._reset_scroll()
         self.app.layout.focus(self.body)
 
@@ -608,9 +613,8 @@ class WizardTUI:
         snap = self.session.snapshot()
         if not snap.get("finished"):
             return
-        self.state = RESULT
+        self._show_result()
         self._record_history(snap)
-        self._reset_scroll()
 
     def _record_history(self, snap: dict) -> None:
         """Append this run to the file the top panel reads.
@@ -790,22 +794,21 @@ def run_tui(repo_path: str | None = None) -> None:
             )
             return
 
-    from wizard.cli.tui.services import ServiceSupervisor, ensure_chromium
+    from wizard.cli.tui.services import ServiceSupervisor, find_chromium
 
-    # Before the services: the browser binary is a large one-time download, and
-    # this is the only moment it can be done with the user watching and no
-    # investigation already waiting on it.
-    print(ensure_chromium(), flush=True)
+    # Startup only checks existing browser availability; it never installs one.
+    print("agent-browser available" if find_chromium() else "agent-browser unavailable; run npm install -g agent-browser@0.27.0 and agent-browser install", flush=True)
 
     supervisor = ServiceSupervisor()
     report = supervisor.ensure_all()
     for line in report.lines():
         print(line, flush=True)
 
-    if not report.kernel_ok:
+    if not report.investigation_stack_ok:
         print(
-            "\nthe Runtime Engine is not up, so there is nothing to investigate "
-            "with.\nthe reason is in the lines above, and in "
+            "\nThe current Wizard Runtime service must be "
+            "available before an investigation can start.\nResolve the [x] service "
+            "shown above, then run wizard again. Details are also in "
             f"{supervisor.log_dir}.",
             flush=True,
         )

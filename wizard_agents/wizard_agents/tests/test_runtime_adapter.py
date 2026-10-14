@@ -154,6 +154,33 @@ def test_explorer_receives_required_and_missing_evidence(client):
     assert "process_execution" in adapted.context
 
 
+def test_explorer_receives_only_the_goal_bound_to_its_current_node():
+    from app.api.routes_runtime import _to_explorer_input
+    packet = _kernel_explorer_packet()
+    packet["current_node"]["goal_id"] = "goal_current"
+    packet["active_goals"] = [
+        {"id": "goal_current", "name": "Verify the signup form", "state": "open",
+         "required_evidence": ["browser_form_input"],
+         "completed_evidence": [], "missing_evidence": ["browser_form_input"]},
+        {"id": "goal_unrelated", "name": "Inspect container deployment", "state": "open",
+         "required_evidence": ["docker_execution"],
+         "completed_evidence": [], "missing_evidence": ["docker_execution"]},
+    ]
+    adapted = _to_explorer_input(packet)
+    assert adapted.active_goals == ["Verify the signup form"]
+    assert adapted.missing_evidence == ["browser_form_input"]
+
+
+def test_explorer_does_not_replace_a_closed_node_goal_with_an_unrelated_open_goal():
+    from app.api.routes_runtime import _to_explorer_input
+    packet = _kernel_explorer_packet()
+    packet["current_node"]["goal_id"] = "already_closed_goal"
+    packet["active_goals"] = [{"id": "other_goal", "name": "Unrelated deployment", "state": "open"}]
+    adapted = _to_explorer_input(packet)
+    assert adapted.active_goals == []
+    assert adapted.missing_evidence == []
+
+
 def test_http_tool_is_available_only_when_runtime_advertises_it(client):
     packet = _kernel_explorer_packet()
     packet["available_tools"].append("http_request")

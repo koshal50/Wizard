@@ -3,13 +3,15 @@ import uuid
 from datetime import datetime, timezone
 from wizard_kernel.contracts.observation import Observation
 from wizard_kernel.storage import fs_store
+from wizard_kernel.control import flow_trace
 
 
 class ObservationStore:
-    def __init__(self, inv_id: str) -> None:
+    def __init__(self, inv_id: str, *, on_append=None) -> None:
         self._inv_id = inv_id
         self._seq = 0
         self._cache: dict[str, Observation] = {}
+        self._on_append = on_append
 
     def append(self, *, node_id: str, source_tool: str, obs_type: str,
                 payload: dict, goal_id: str | None = None,
@@ -34,6 +36,10 @@ class ObservationStore:
         self._seq += 1
         fs_store.write_observation(self._inv_id, self._seq, obs.model_dump())
         self._cache[obs.id] = obs
+        if self._on_append is not None:
+            self._on_append(obs)
+        flow_trace.record(self._inv_id, "observation.persisted",
+                          **flow_trace.observation_summary(obs))
         return obs  # frozen — Pydantic ConfigDict(frozen=True)
 
     def get(self, obs_id: str) -> Observation | None:

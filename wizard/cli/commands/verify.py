@@ -73,12 +73,6 @@ def verify(
     # client the checkout is already serving is browsed without being asked
     # for. See the comment there for why only a listening one qualifies.
     urls = list(parsed.urls)
-    if not urls:
-        from wizard.cli.parser.frontend import browsable
-
-        found = browsable(repo_path)
-        if found is not None:
-            urls = [found.url]
 
     intent = build_intent(
         action="verify",

@@ -1,16 +1,16 @@
 import threading
-from fastapi import APIRouter, Depends, HTTPException
+from pathlib import Path
+from fastapi import APIRouter, Depends, HTTPException, Header
 from wizard_kernel.contracts.report import ReportResponse
 from wizard_kernel.contracts.request import InvestigationRequest
 from wizard_kernel.contracts.status import LifecycleState, is_terminal
 from wizard_kernel.session.manager import InvestigationManager
 from wizard_kernel.api.deps import get_manager
 from wizard_kernel.storage import fs_store
-from wizard_kernel.ports.planner import get_planner
-from wizard_kernel.control import loop as kernel_loop
+from wizard_kernel.control import flow_trace
+from wizard_kernel.control import verification as kernel_loop
 from wizard_kernel.control.investigation_graph import get_graph
 from wizard_kernel.world.sandbox import docker_status
-from wizard_kernel.ports.goal_policy import goal_evidence_for, names_operation_for
 from urllib.parse import urlparse
 
 # The tools that put a page on screen. A node that ran one of these and reached
@@ -49,7 +49,18 @@ def list_investigations(
 def create_investigation(
     req: InvestigationRequest,
     manager: InvestigationManager = Depends(get_manager),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    submitted = {
+        "intent": req.intent,
+        "question": req.question,
+        "targets": req.targets,
+        "repository_name": Path(req.repository_path).name,
+        "budget": req.options.budget,
+        "browser_enabled": req.options.browser_enabled,
+        "sandbox_mode": req.options.sandbox_mode,
+    }
+    browser_requested = bool(req.options.browser_enabled)
     # Refuse a docker-mode request the machine cannot honour, HERE, rather than
     # letting the loop discover it: a container that cannot start fails inside
     # the sandbox, minutes in, as a raw docker error on an investigation that
@@ -67,23 +78,39 @@ def create_investigation(
     # A request that explicitly asks to operate a UI opts into its existing
     # browser plane. Keep navigation fail-closed: absent a caller allowlist,
     # only local development hosts are permitted.
-    requested_evidence = goal_evidence_for(" ".join([req.question, *req.targets])).required_evidence
     declared_hosts = [urlparse(target).hostname for target in req.targets
                       if urlparse(target).scheme in {"http", "https"}]
     if not req.options.allowed_domains and declared_hosts:
         req.options.allowed_domains = list(dict.fromkeys(host for host in declared_hosts if host))
-    if (names_operation_for(req.intent, req.targets, req.question)
-            or "browser_navigation" in requested_evidence):
-        req.options.browser_enabled = True
-        if not req.options.allowed_domains:
-            req.options.allowed_domains = ["localhost", "127.0.0.1"]
+    if not req.options.allowed_domains:
+        req.options.allowed_domains = ["localhost", "127.0.0.1"]
 
-    inv = manager.create(req)
+    req.idempotency_key = idempotency_key if isinstance(idempotency_key, str) else req.idempotency_key
+    try:
+        inv = manager.create(req)
+    except ValueError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    if not manager.claim_execution(inv.id):
+        return {"investigation_id": inv.id, "status": inv.state}
+    flow_trace.record(
+        inv.id, "request.received",
+        source="runtime_http_api", request=submitted,
+    )
+    flow_trace.record(
+        inv.id, "request.normalized",
+        intent=inv.intent,
+        question=inv.question,
+        targets=inv.targets,
+        browser_enabled=bool(inv.options.get("browser_enabled")),
+        browser_enabled_by_runtime=(not browser_requested and bool(inv.options.get("browser_enabled"))),
+        allowed_domains=inv.options.get("allowed_domains", []),
+        sandbox_mode=inv.options.get("sandbox_mode"),
+        budget=inv.budget_total,
+    )
     # manager.create() persists meta.json — no duplicate write here
-    planner = get_planner(req.options.planner_url)
     t = threading.Thread(
         target=kernel_loop.run,
-        args=(inv, manager, planner),
+        args=(inv, manager),
         daemon=True,
         name=f"loop-{inv.id}",
     )
@@ -146,6 +173,17 @@ def get_frontier(
 
     graph = get_graph(inv_id)
     frontier = graph.frontier() if graph else {"now": None, "next": [], "counts": {}}
+    verification = fs_store.read(inv_id, "verification.json")
+    if verification and verification.get("version") == 2:
+        executions = verification.get("executions", [])
+        pending = [e for e in executions if e["state"] == "accepted"]
+        frontier = {
+            "now": ({"node_id": pending[-1]["id"], "tool": pending[-1]["tool"],
+                     "params": pending[-1]["parameters"]} if pending else None),
+            "next": [{"node_id": c["id"], "type": "check", "description": c["description"]}
+                     for c in verification["checks"] if verification["results"].get(c["id"], {}).get("status") not in {"passed", "failed"}],
+            "counts": {"complete": sum(e["state"] == "observed" for e in executions)},
+        }
 
     # Did a page actually open? A blank pane has two opposite causes — the agent
     # never opened a page, or it did and the viewer connected after the run ended
@@ -160,6 +198,9 @@ def get_frontier(
         if n.state == "complete"
         and (n.action or {}).get("tool") in _NAVIGATION_TOOLS
     ]
+    if verification and verification.get("version") == 2:
+        opened_urls = [e["parameters"].get("url", "") for e in executions
+                       if e["tool"] == "browser_navigate" and e.get("success")]
 
     finished = is_terminal(inv.state)
     never_ran = list(frontier.get("next") or []) if finished else []
@@ -231,6 +272,28 @@ def get_report(
     )
 
 
+@router.get("/{inv_id}/trace", summary="Get the redacted investigation flow trace")
+def get_flow_trace(
+    inv_id: str,
+    manager: InvestigationManager = Depends(get_manager),
+):
+    """Return the persisted boundary trace without prompts or submitted values."""
+    if not manager.get(inv_id):
+        raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
+    raw = fs_store.read_text(inv_id, "flow_trace.jsonl")
+    if raw is None:
+        return {"investigation_id": inv_id, "events": [],
+                "detail": "No flow trace was recorded for this investigation."}
+    import json
+    events = []
+    for line in raw.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    return {"investigation_id": inv_id, "events": events}
+
+
 @router.delete("/{inv_id}", status_code=200)
 def cancel_investigation(
     inv_id: str,
@@ -250,11 +313,11 @@ def cancel_investigation(
     inv = manager.get(inv_id)
     if not inv:
         raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
-    manager.update(inv_id, state=LifecycleState.cancelled, last_event="cancelled by user")
+    accepted = manager.request_cancel(inv_id)
     return {
         "investigation_id": inv.id,
         "status": inv.state,
-        "cancelled": inv.state == LifecycleState.cancelled,
+        "cancelled": accepted or inv.state == LifecycleState.cancelled,
     }
 
 

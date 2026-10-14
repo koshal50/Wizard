@@ -20,18 +20,22 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from wizard_kernel.belief import extractors
 from wizard_kernel.belief.evidence import EvidenceEngine
 from wizard_kernel.belief.knowledge_graph import KnowledgeGraph
 from wizard_kernel.belief.trust import source_tier_for_tool
-from wizard_kernel.contracts.node import InvestigationNode
+from wizard_kernel.contracts.node import InvestigationNode, Hypothesis, HypothesisKind
 from wizard_kernel.contracts.plan import TechnologyPlan
 from wizard_kernel.contracts.status import LifecycleState
 from wizard_kernel.context.engine import ContextEngine
 from wizard_kernel.control import hypothesis as hyp_eval
+from wizard_kernel.control import flow_trace
 from wizard_kernel.control.goals import Goal, GoalEngine, evidence_categories_for_tool
 from wizard_kernel.ports.goal_policy import goal_evidence_for
 from wizard_kernel.control.investigation_graph import InvestigationGraph, register_graph
@@ -65,14 +69,211 @@ _TOOL_TO_OBS_TYPE: dict[str, str] = {
     "browser_navigate": "browser_action",
     "browser_click":    "browser_action",
     "browser_type":     "browser_action",
+    "browser_fill_form": "browser_action",
     "browser_back":     "browser_action",
     "browser_snapshot": "page_content",
+    "browser_assertion": "page_content",
     "browser_extract":  "page_content",
     "http_request": "http_response",
 }
 
 # How many nodes complete before the Verifier Agent is consulted
 _VERIFIER_INTERVAL = 5
+
+# A served local endpoint printed by a dev server / app on startup. Deliberately
+# generic — a URL to a loopback host, or a "listening/running on port N" line —
+# never a framework- or sample-specific route. The port group is optional so a
+# bare `http://localhost` still yields the scheme's default.
+_SERVED_URL_RE = re.compile(
+    r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::(\d{2,5}))?\b", re.I
+)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
+_SERVED_PORT_RE = re.compile(
+    r"(?:listening|running|started|serving|ready).{0,40}?\bport\s*[:=]?\s*(\d{2,5})", re.I
+)
+
+
+def _extract_endpoints(text: str) -> list[tuple[str, int]]:
+    """All loopback endpoints a process actually announced in its output."""
+    # Strip terminal colors before parsing: a sequence inserted between the
+    # host colon and port otherwise makes `localhost:5173` look like port 80.
+    text = _ANSI_ESCAPE_RE.sub("", text or "")
+    endpoints: list[tuple[str, int]] = []
+    for match in _SERVED_URL_RE.finditer(text):
+        url = match.group(0).rstrip("/")
+        port = int(match.group(1)) if match.group(1) else (443 if url.lower().startswith("https") else 80)
+        if 1 <= port <= 65535 and (url, port) not in endpoints:
+            endpoints.append((url, port))
+    for match in _SERVED_PORT_RE.finditer(text):
+        port = int(match.group(1))
+        endpoint = (f"http://localhost:{port}", port)
+        if 1 <= port <= 65535 and endpoint not in endpoints:
+            endpoints.append(endpoint)
+    return endpoints
+
+
+def _extract_endpoint(text: str) -> "tuple[str | None, int | None]":
+    """Compatibility view of the first endpoint found in process output."""
+    endpoints = _extract_endpoints(text)
+    return endpoints[0] if endpoints else (None, None)
+
+
+def _start_declared_servers(tools, obs_store, repo_path, bus, probed) -> None:
+    """Start every `long_running` command the repository declares, and probe it.
+
+    The whole application, not one service: a sign-up flow fills a client form
+    that POSTs to a backend, so both must be up before the browser submits or it
+    lands in nothing. Discovered from the repo's own manifest
+    (`_discover_runnable_commands`) — nothing here names a workspace, script,
+    port or route. Each server is started once and its endpoint discovered +
+    probed via the existing readiness path. Best-effort: a server that fails to
+    start is recorded and the run continues.
+    """
+    from wizard_kernel.context.packager import _discover_runnable_commands
+    try:
+        commands = _discover_runnable_commands(repo_path)
+    except Exception:  # noqa: BLE001 — discovery must never abort a run
+        return
+    for cmd in [c for c in commands if c.get("lifecycle") == "long_running"][:4]:
+        command, cwd = cmd.get("command"), cmd.get("cwd") or "."
+        key = f"bringup:{command}@{cwd}"
+        if not command or key in probed:
+            continue
+        probed.add(key)
+        payload = tools.execute({"tool": "start_process",
+                                 "params": {"command": command, "cwd": cwd}})
+        obs_store.append(
+            node_id="runtime_server_bringup", source_tool="start_process",
+            obs_type=_TOOL_TO_OBS_TYPE.get("start_process", "command_result"),
+            payload=payload, goal_id=None, tool_request_id=None,
+            execution_id=uuid.uuid4().hex,
+            evidence_categories=evidence_categories_for_tool("start_process", payload),
+        )
+        if payload.get("ok"):
+            node = InvestigationNode(
+                id="runtime_server_bringup", type="execute", action={},
+                hypothesis=Hypothesis(kind=HypothesisKind.always_success))
+            try:
+                _probe_started_process(tools, obs_store, node, None, payload)
+            except Exception:  # noqa: BLE001 — probing is best-effort
+                pass
+
+
+def _probe_started_process(
+    tools: "ToolExecutor",
+    obs_store: ObservationStore,
+    node: InvestigationNode,
+    active_goal_id: "str | None",
+    payload: dict,
+    *,
+    validator: ToolRequestValidator | None = None,
+    timeout_seconds: float = 20.0,
+    poll_interval: float = 0.25,
+    attempts: int | None = None,
+    delay: float | None = None,
+    cancel_check=None,
+    sanitize=None,
+) -> "str | None":
+    """Runtime-owned readiness + endpoint discovery after a server is started.
+
+    `start_process` proves the process is *alive*, not that it is *ready* or that
+    anything is listening — the gap that left a run reading files forever after
+    `npm run dev` came up, because nothing turned a live process into a reachable
+    endpoint for the browser to use. The Runtime does that here, deterministically
+    (invariant 3: no LLM): read the process output, extract the URL/port the
+    process itself printed, and probe it with bounded polling. Every step is
+    appended as a real observation, so the discovered endpoint and its readiness
+    land in the Explorer's `resource_state` — which is what lets the browser phase
+    begin — and the evidence is provenanced, never guessed.
+
+    Returns the reachable URL once a probe succeeds, else None. The deadline
+    bounds startup waiting; readiness is established only by a successful
+    `check_port`, never by elapsed time or process liveness. `attempts`/`delay`
+    remain available for deterministic callers/tests.
+    """
+    handle = ((payload.get("meta") or {}).get("handle_id")
+              or ((payload.get("data") or {}).get("handle_id")))
+    if not handle:
+        return None
+    # A parent process may print its child-launch banner well before the child
+    # server binds. Keep observing the same process until it announces an
+    # endpoint and that endpoint actually accepts connections, or the bounded
+    # startup deadline/process exit is reached. A one-shot five-second window
+    # handed control back to Explorer with a live-but-unready process, where the
+    # model repeatedly requested the already-running command.
+    interval = max(0.0, delay if delay is not None else poll_interval)
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    max_reads = max(1, attempts) if attempts is not None else None
+    endpoints: dict[int, str] = {}
+    last_probe_at: dict[int, float] = {}
+    last_process_signature = None
+    reads = 0
+    while reads == 0 or (max_reads is not None and reads < max_reads) or (
+        max_reads is None and time.monotonic() < deadline
+    ):
+        if cancel_check:
+            cancel_check()
+        rp = tools.execute({"tool": "read_process", "params": {"handle_id": handle}})
+        if sanitize:
+            rp = sanitize(rp)
+        reads += 1
+        data = rp.get("data") or {}
+        output = " ".join(str(data.get(k) or "") for k in
+                           ("stdout_so_far", "stderr_so_far", "stdout", "stderr"))
+        text = " ".join((output, str(data.get("command") or ""),
+                         str(data.get("cwd") or "")))
+        running = data.get("is_running", rp.get("is_running"))
+        signature = (running, data.get("exit_code"), text)
+        if signature != last_process_signature:
+            obs_store.append(
+                node_id=node.id, source_tool="read_process",
+                obs_type=_TOOL_TO_OBS_TYPE.get("read_process", "command_result"),
+                payload=rp, goal_id=active_goal_id, tool_request_id=None,
+                execution_id=uuid.uuid4().hex,
+                evidence_categories=evidence_categories_for_tool("read_process", rp),
+            )
+            last_process_signature = signature
+        for url, port in _extract_endpoints(output):
+            endpoints.setdefault(port, url)
+        now = time.monotonic()
+        ready_url = None
+        for port, url in endpoints.items():
+            if now - last_probe_at.get(port, 0.0) < 1.0:
+                continue
+            cp = tools.execute({"tool": "check_port", "params": {"port": port}})
+            if sanitize:
+                cp = sanitize(cp)
+            cp.setdefault("meta", {})["handle_id"] = handle
+            if validator is not None:
+                # These Runtime-owned readiness probes use the same executor but
+                # happen outside Explorer's ToolRequest path. Keep the validator's
+                # prerequisite state in sync with the persisted real observation;
+                # otherwise it rejects navigation despite a successful probe.
+                validator.record_execution(
+                    "check_port", {"host": "localhost", "port": port}, cp)
+            last_probe_at[port] = now
+            obs_store.append(
+                node_id=node.id, source_tool="check_port",
+                obs_type=_TOOL_TO_OBS_TYPE.get("check_port", "command_result"),
+                payload=cp, goal_id=active_goal_id, tool_request_id=None,
+                execution_id=uuid.uuid4().hex,
+                evidence_categories=evidence_categories_for_tool("check_port", cp),
+            )
+            if (cp.get("data") or {}).get("active"):
+                ready_url = ready_url or url
+        if ready_url:
+            return ready_url
+        if running is False:
+            break
+        if max_reads is not None and reads >= max_reads:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        if interval:
+            time.sleep(min(interval, remaining))
+    return None
+
 
 
 def run(
@@ -124,6 +325,9 @@ def run(
     if inv.options.get("browser_enabled"):
         from wizard_kernel.world import browser as browser_mod
         browser = browser_mod.get_browser(inv.options)
+        # Register the investigation-scoped runtime for the browser viewer, but
+        # defer Chromium startup until an accepted browser ToolRequest executes.
+        browser_mod.register_runtime(inv.id, browser)
 
     from wizard_kernel.ports.agents import get_agents
     explorer, verifier = get_agents(inv.options)
@@ -142,18 +346,28 @@ def run(
         "agent_explorer_url": inv.options.get("agent_explorer_url"),
         "agent_verifier_url": inv.options.get("agent_verifier_url"),
     })
+    flow_trace.record(inv.id, "runtime.seams", planner=type(planner).__name__,
+                      explorer=type(explorer).__name__, verifier=type(verifier).__name__,
+                      browser_enabled=bool(inv.options.get("browser_enabled")),
+                      sandbox_mode=sandbox_mode)
 
     try:
         sandbox.start(inv.repository_path)
-        if browser is not None:
-            browser.start()
-            browser_mod.register_runtime(inv.id, browser)
         tools = ToolExecutor(sandbox, inv.repository_path, browser=browser)
         _run_loop(inv, manager, planner, explorer, verifier, kg, ev_engine, graph, goals,
                   obs_store, tools, budget, bus, validator, completed_ids, context_engine)
     except Exception as exc:  # noqa: BLE001
-        manager.update(inv.id, state=LifecycleState.failed,
-                       last_event=f"fatal: {exc}", error=str(exc))
+        # A fatal Runtime error must still leave a report and a truthful terminal
+        # state. _finalize is idempotent, so if _run_loop already finalized before
+        # the raise, this call is a no-op; otherwise it generates the report from
+        # whatever evidence survived and marks the run `failed` without masking exc.
+        log.exception("investigation %s raised; finalizing as failed", inv.id)
+        try:
+            _finalize(inv, manager, graph, kg, goals, obs_store, bus, error=str(exc))
+        except Exception:  # noqa: BLE001 — never let finalize's own failure hide the original
+            log.exception("investigation %s: finalize failed after fatal error", inv.id)
+            manager.update(inv.id, state=LifecycleState.failed,
+                           last_event=f"fatal: {exc}", error=str(exc))
     finally:
         # The graph deliberately stays registered after the run ends: a viewer that
         # opens the live page once the investigation is already complete should see
@@ -185,11 +399,18 @@ def _run_loop(
 ) -> None:
     # ── Scanning ──────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.scanning, last_event="fast scan started")
+    flow_trace.record(inv.id, "runtime.lifecycle", state=LifecycleState.scanning.value)
     manifest = scanner.scan(inv.repository_path, inv.id)
     fs_store.write(inv.id, "manifest.json", manifest.model_dump())
+    flow_trace.record(inv.id, "repository.scan.completed",
+                      key_file_count=len(manifest.key_files),
+                      key_files=[p for p in manifest.key_files[:60]
+                                 if not str(p).lower().endswith(".env")],
+                      manifest_fingerprint=flow_trace.fingerprint(manifest.model_dump(mode="json")))
 
     # ── Planning ──────────────────────────────────────────────────────────────
     manager.update(inv.id, state=LifecycleState.planning, last_event="initial planner call")
+    flow_trace.record(inv.id, "runtime.lifecycle", state=LifecycleState.planning.value)
     # inv.options is passed through because the planner is what decides whether to
     # plan a browser phase, and it can only do that if it is told a browser plane
     # exists (browser_enabled) and which hosts are reachable (allowed_domains).
@@ -198,10 +419,27 @@ def _run_loop(
     # Passed by keyword, unlike the four before it, so an implementation still on
     # the old four-parameter signature fails with "got an unexpected keyword
     # argument 'question'" instead of a bare arity error that reads as a mystery.
-    plan = planner.initial(
-        manifest, inv.intent, inv.targets, inv.options, question=inv.question
+    flow_trace.record(
+        inv.id, "planner.initial.request",
+        planner=type(planner).__name__, intent=inv.intent, question=inv.question,
+        targets=inv.targets, repository_name=Path(inv.repository_path).name,
+        manifest_key_file_count=len(manifest.key_files),
+        browser_enabled=bool(inv.options.get("browser_enabled")),
     )
+    planner_started = time.monotonic()
+    try:
+        plan = planner.initial(
+            manifest, inv.intent, inv.targets, inv.options, question=inv.question
+        )
+    except Exception as exc:
+        flow_trace.record(inv.id, "planner.initial.failure", planner=type(planner).__name__,
+                          elapsed_ms=int((time.monotonic() - planner_started) * 1000),
+                          error=flow_trace.safe_text(exc))
+        raise
     fs_store.write(inv.id, "plan.json", plan.model_dump())
+    flow_trace.record(inv.id, "planner.initial.response",
+                      elapsed_ms=int((time.monotonic() - planner_started) * 1000),
+                      **flow_trace.plan_summary(plan))
 
     # The Runtime strengthens Planner declarations with its deterministic policy;
     # a model cannot weaken a goal by omitting or under-declaring its evidence.
@@ -221,12 +459,17 @@ def _run_loop(
                 requires_execution_evidence=(goal_def.requires_execution_evidence
                                              or policy.requires_execution_evidence),
             ))
+    flow_trace.record(inv.id, "runtime.goal_contracts.applied",
+                      goals=flow_trace.goal_states(goals, obs_store.all()))
 
     for node in plan.seed_nodes:
         graph.add(node)
+    flow_trace.record(inv.id, "runtime.graph.seeded",
+                      nodes=[flow_trace.node_summary(n) for n in plan.seed_nodes])
 
     manager.update(inv.id, state=LifecycleState.investigation_loop,
                    last_event="loop started", active_goals=goals.to_api_list(obs_store.all()))
+    flow_trace.record(inv.id, "runtime.lifecycle", state=LifecycleState.investigation_loop.value)
     bus.emit(event_bus.InvestigationStarted, {"repository_path": inv.repository_path})
 
     nodes_since_last_verify = 0
@@ -234,6 +477,28 @@ def _run_loop(
     # Why the loop stopped. Set only on the give-up path; the other two exits
     # are read off the budget and the goals when the loop is over.
     gave_up = False
+    stop_reason: str | None = None
+
+    # Deterministic convergence guards (Runtime-owned, no LLM). These are
+    # distinct from the tool-call `budget`: that bounds *total* work, these bound
+    # *unproductive* work so a stuck run ends in a handful of steps instead of
+    # draining the whole budget one 12s-gated agent call at a time. Conservative
+    # defaults, overridable per investigation.
+    max_no_progress = int(inv.options.get("max_no_progress_steps", 6))
+    max_consecutive_failures = int(inv.options.get("max_consecutive_failures", 4))
+    max_replans_without_new_work = int(inv.options.get("max_replans_without_new_work", 3))
+    no_progress_steps = 0
+    consecutive_failures = 0
+    replans_without_new_work = 0
+    # start_process handles the Runtime has already run readiness discovery on,
+    # so a node revisited does not re-probe the same server.
+    _probed_handles: set[str] = set()
+    # Nodes that FAILED (as opposed to merely completed). `completed_ids` holds
+    # both — it only guards against re-running — so a separate set is what lets a
+    # dependent of a failed node be cascade-failed instead of run on a
+    # precondition that never happened.
+    failed_ids: set[str] = set()
+
 
     # ── Core loop ─────────────────────────────────────────────────────────────
     while not budget.is_exhausted():
@@ -262,43 +527,123 @@ def _run_loop(
         if node is None:
             if goals.all_satisfied():
                 break
-            new_nodes = planner.next_nodes(
-                _planner_next_context(inv, goals, kg, plan, budget, obs_store, "need_more_work",
-                                      graph=graph, completed_ids=completed_ids)
+            planner_context = _planner_next_context(
+                inv, goals, kg, plan, budget, obs_store, "need_more_work",
+                graph=graph, completed_ids=completed_ids)
+            flow_trace.record(
+                inv.id, "planner.next.request", planner=type(planner).__name__,
+                context=flow_trace.planner_context_summary(planner_context),
+                open_goals=[{"id": g.id, "name": g.name,
+                             "missing": goals.evidence_status(g.id, obs_store.all())["missing"]}
+                            for g in goals.open_goals()],
+                existing_nodes=[flow_trace.node_summary(n) | {"state": n.state}
+                                for n in graph.all_nodes()],
+                observations=[{"id": o.id, "tool": o.source_tool,
+                               "categories": o.evidence_categories, "success": o.success}
+                              for o in obs_store.all()[-12:]],
             )
+            planner_started = time.monotonic()
+            try:
+                new_nodes = planner.next_nodes(planner_context)
+            except Exception as exc:
+                flow_trace.record(inv.id, "planner.next.failure",
+                                  elapsed_ms=int((time.monotonic() - planner_started) * 1000),
+                                  error=flow_trace.safe_text(exc))
+                raise
+            flow_trace.record(inv.id, "planner.next.response",
+                              elapsed_ms=int((time.monotonic() - planner_started) * 1000),
+                              proposed_nodes=[flow_trace.node_summary(n) for n in new_nodes])
             if not new_nodes:
                 # The Planner has no further steps to propose. That is the run
                 # running out of ideas, not the run finishing — recorded so the
                 # report can say which of the two happened.
                 gave_up = True
+                stop_reason = "Planner returned no additional nodes"
+                flow_trace.record(inv.id, "runtime.no_progress", reason=stop_reason)
                 break
+            added_executable = False
             for n in new_nodes:
                 if _already_scheduled(graph, completed_ids, n):
+                    flow_trace.record(inv.id, "planner.node.deduplicated",
+                                      proposed=flow_trace.node_summary(n),
+                                      matching_candidates=[
+                                          flow_trace.node_summary(existing) | {"state": existing.state}
+                                          for existing in graph.all_nodes()
+                                          if flow_trace.node_summary(existing).get("action_fingerprint")
+                                          == flow_trace.node_summary(n).get("action_fingerprint")
+                                      ],
+                                      completed_node_count=len(completed_ids))
                     bus.emit(event_bus.PlannerNodeSkipped, {
                         "node_id": n.id, "type": n.type,
                         "reason": "a node for the same action is already queued",
                     })
                     continue
                 graph.add(n)
+                flow_trace.record(inv.id, "planner.node.accepted",
+                                  node=flow_trace.node_summary(n))
+                added_executable = True
+            if added_executable:
+                replans_without_new_work = 0
+            else:
+                # The Planner answered, but every node it proposed is already
+                # scheduled or done. Nothing new to execute, no budget consumed —
+                # left alone this spins forever re-asking for the same work. Count
+                # it as a replan that made no progress and give up once the
+                # Planner has proven it is only repeating itself.
+                replans_without_new_work += 1
+                if replans_without_new_work >= max_replans_without_new_work:
+                    gave_up = True
+                    stop_reason = ("the planner kept proposing work that was "
+                                   "already scheduled")
+                    flow_trace.record(inv.id, "runtime.no_progress",
+                                      reason=stop_reason,
+                                      repeated_replans=replans_without_new_work)
+                    log.info("investigation %s halting: %s", inv.id, stop_reason)
+                    break
             continue
 
         # Planner seed nodes are often intentionally goal-agnostic. Keep the
         # Runtime's context choice and evidence provenance aligned by assigning
         # their execution to the first still-open goal unless the Planner named
+        # A node whose dependency FAILED must not run: its plan was written for a
+        # state the failed step was supposed to produce. Browser form steps are
+        # chained (fill → fill → submit), so running a later step after an earlier
+        # one failed is exactly the stale-page execution the audit traced — the
+        # submit landing on a page the fills never reached. Cascade the failure
+        # instead of executing on a precondition that never happened.
+        if failed_ids.intersection(getattr(node, "depends_on", []) or []):
+            graph.mark_failed(node.id)
+            completed_ids.add(node.id)
+            failed_ids.add(node.id)
+            bus.emit(event_bus.NodeFailed, {"node_id": node.id, "type": node.type,
+                                            "reason": "DEPENDENCY_FAILED"})
+            continue
+
         # one explicitly.
         active_goal_id = node.goal_id
         if active_goal_id is None and goals.open_goals():
             active_goal_id = goals.open_goals()[0].id
+            # Seed nodes can be goal-agnostic, but once Runtime attributes one
+            # to a goal that identity must survive in the graph. Previously the
+            # observations used this ID while the Explorer packet still showed
+            # goal_id=None, so action context and evidence ownership disagreed.
+            graph.assign_goal(node.id, active_goal_id)
+            node = graph.get(node.id)
 
         graph.set_state(node.id, "running")
         manager.update(inv.id, last_event=f"executing {node.id} ({node.type})")
+        flow_trace.record(inv.id, "runtime.node.selected",
+                          node=flow_trace.node_summary(node), goal_id=active_goal_id,
+                          already_completed=node.id in completed_ids)
 
-        # ── Phase 6: Explorer Agent determines HOW to execute this node ───────
-        # Context Engine builds the trust-stripped packet (agent contract) plus the
-        # modular section view that drives KV-cache ordering + audit (invariant 3).
+        # ── Decide HOW to execute this node ───────────────────────────────────
+        # A planned node is a proposal, not an executable browser action.
+        # Ask Explorer against the latest observation each time; otherwise a
+        # queued form script can act on a page that has since navigated away.
         ctx = context_engine.build_context("explorer", inv, node, goals, kg, budget, obs_store)
         tool_action, decision_failure = _resolve_tool_action(
             node, explorer, ctx.packet, validator, budget, bus,
+            observations=obs_store.all(),
         )
 
         # A deterministic validator rejection is actionable feedback, not a
@@ -321,6 +666,7 @@ def _run_loop(
             ctx = context_engine.build_context("explorer", inv, node, goals, kg, budget, obs_store)
             tool_action, decision_failure = _resolve_tool_action(
                 node, explorer, ctx.packet, validator, budget, bus,
+                observations=obs_store.all(),
             )
 
         if tool_action is None:
@@ -339,6 +685,7 @@ def _run_loop(
             )
             graph.mark_failed(node.id, obs_ids=[obs.id])
             completed_ids.add(node.id)
+            failed_ids.add(node.id)
             budget.consume()
             manager.update(inv.id, budget_remaining=budget.remaining,
                            nodes_completed=inv.nodes_completed + 1)
@@ -346,6 +693,27 @@ def _run_loop(
                                             "reason": failure["error_type"]})
             if failure["error_type"].startswith("EXPLORER_"):
                 gave_up = True
+                break
+            # A decision-stage failure (e.g. a validator TOOL_REQUEST_REJECTED,
+            # typically a duplicate the Explorer keeps re-proposing) is still a
+            # failure and still no progress — count it toward the convergence
+            # guards here, not only in the post-execution path below. Without
+            # this, repeated rejections drained the ENTIRE budget (28 duplicate
+            # start_process/execute_command rejections ran a 100-node budget for
+            # 9 minutes) because the guard never saw them. Now a stuck re-proposal
+            # loop halts in a handful of steps and still finalizes with a report.
+            consecutive_failures += 1
+            no_progress_steps += 1
+            if consecutive_failures >= max_consecutive_failures:
+                gave_up = True
+                stop_reason = (f"{consecutive_failures} consecutive rejected/failed "
+                               f"decisions with no recovery")
+                log.info("investigation %s halting: %s", inv.id, stop_reason)
+                break
+            if no_progress_steps >= max_no_progress:
+                gave_up = True
+                stop_reason = f"{no_progress_steps} steps produced no new evidence"
+                log.info("investigation %s halting: %s", inv.id, stop_reason)
                 break
             continue
 
@@ -376,6 +744,14 @@ def _run_loop(
         })
 
         # Execute — failures become observations, never crashes (invariant 4)
+        execution_id = uuid.uuid4().hex
+        flow_trace.record(inv.id, "runtime.execution.started", node_id=node.id,
+                          goal_id=active_goal_id,
+                          tool_request_id=tool_action.get("tool_request_id"),
+                          execution_id=execution_id,
+                          tool=tool_action.get("tool"),
+                          parameters=flow_trace.safe_parameters(tool_action.get("params") or {}))
+        execution_started = time.monotonic()
         payload = _safe_execute(tools, tool_action)
         # The validator's resource prerequisites advance only from the actual
         # executor result. A requested/planned action never marks a resource ready.
@@ -392,9 +768,16 @@ def _run_loop(
             payload=payload,
             goal_id=active_goal_id,
             tool_request_id=tool_action.get("tool_request_id"),
-            execution_id=uuid.uuid4().hex,
+            execution_id=execution_id,
             evidence_categories=evidence_categories_for_tool(tool_name, payload),
         )
+        flow_trace.record(inv.id, "runtime.execution.finished", node_id=node.id,
+                          goal_id=active_goal_id, observation_id=obs.id,
+                          tool_request_id=tool_action.get("tool_request_id"), tool=tool_name,
+                          execution_id=execution_id,
+                          success=bool(payload.get("ok", True)),
+                          elapsed_ms=int((time.monotonic() - execution_started) * 1000),
+                          evidence_categories=obs.evidence_categories)
 
         # Narration plane: discrete browser.* events on the EventBus. Pixels stream
         # separately over the screencast WebSocket and never enter event history.
@@ -402,15 +785,53 @@ def _run_loop(
             _emit_browser_narration(bus, tool_name, payload.get("data", {}) or {},
                                     page=_current_page(tools))
 
+        # A started server is a liveness signal, not a readiness one. The Runtime
+        # follows it up itself — read the process output, discover the endpoint it
+        # printed, probe it — so a reachable URL lands in context and the browser
+        # phase can begin, rather than the run stalling because nothing turned a
+        # running process into an endpoint. Once per handle; the extra read/probe
+        # observations it files are what the Explorer then reasons over.
+        process_not_ready = False
+        if tool_name == "start_process" and payload.get("ok") and node.id not in _probed_handles:
+            _probed_handles.add(node.id)
+            ready_endpoint = _probe_started_process(
+                tools, obs_store, node, active_goal_id, payload,
+                validator=validator)
+            flow_trace.record(
+                inv.id, "runtime.process_readiness", node_id=node.id,
+                goal_id=active_goal_id,
+                state="ready" if ready_endpoint else "not_established",
+                endpoint=ready_endpoint,
+            )
+            if not ready_endpoint:
+                # Do not send another LLM decision while this process is still
+                # running without a discovered/reachable endpoint. That caused
+                # repeated identical start_process requests and burned provider
+                # calls. Finish recording this actual execution first; then stop
+                # with an honest incomplete state.
+                process_not_ready = True
+                stop_reason = (
+                    "process started but no endpoint was announced and confirmed "
+                    "reachable before the readiness deadline"
+                )
+
         # ── Deterministic hypothesis evaluation (invariant 3 — no LLM needed) ─
         source_tier = source_tier_for_tool(tool_name)
         node_outcome = hyp_eval.evaluate(node, obs)
+        # Whether the tool ACTUALLY succeeded, independent of the node's
+        # hypothesis. An `always_success` node otherwise reports a failed
+        # navigation/click/fill as `expected_success`, the node is marked
+        # complete, and the queued follow-up steps run against a page that never
+        # changed (or changed underneath them) — the stale-page execution the
+        # audit traced. A tool that returned ok=False never completes its node, so
+        # dependents do not proceed on it.
+        action_ok = bool(payload.get("ok", True))
         planned_action_matches = _planned_action_matches(node.action, tool_name,
                                                           tool_action.get("params") or {})
         new_claims_this_node = 0
 
         match node_outcome:
-            case "expected_success" if node.on_success and planned_action_matches:
+            case "expected_success" if node.on_success and planned_action_matches and action_ok:
                 result = ev_engine.admit(
                     inv_id=inv.id,
                     claim_type=node.on_success.claim_type,
@@ -458,7 +879,14 @@ def _run_loop(
                 pass
             case _:
                 # Unexpected — escalate to Planner (invariant 3: Planner never writes KG)
-                for n in planner.interpret(node, obs):
+                flow_trace.record(inv.id, "planner.interpret.request",
+                                  node_id=node.id,
+                                  observation=flow_trace.observation_summary(obs))
+                interpreted = planner.interpret(node, obs)
+                flow_trace.record(inv.id, "planner.interpret.response",
+                                  node_id=node.id,
+                                  proposed_nodes=[flow_trace.node_summary(n) for n in interpreted])
+                for n in interpreted:
                     graph.add(n)
 
         # ── Run deterministic extractors on every observation ─────────────────
@@ -484,12 +912,14 @@ def _run_loop(
         # ── Update goals based on all new claims ──────────────────────────────
         satisfied_before = {g.id for g in goals.all() if g.state == "satisfied"}
         goals.evaluate_all(kg, obs_store.all())
+        flow_trace.record(inv.id, "goal.evaluation",
+                          goals=flow_trace.goal_states(goals, obs_store.all()))
         for g in goals.all():
             if g.state == "satisfied" and g.id not in satisfied_before:
                 bus.emit(event_bus.GoalSatisfied, {"goal_id": g.id, "goal_name": g.name})
 
         # ── Complete or fail the node in the graph ────────────────────────────
-        if node_outcome in ("expected_success", "expected_failure"):
+        if node_outcome in ("expected_success", "expected_failure") and action_ok:
             graph.set_state(node.id, "complete", obs_ids=[obs.id])
             # A failure has always been narrated; a success has not, which left
             # the bus carrying only what went wrong. A viewer watching a run
@@ -508,11 +938,26 @@ def _run_loop(
             })
         else:
             graph.mark_failed(node.id, obs_ids=[obs.id])
+            failed_ids.add(node.id)
             bus.emit(event_bus.NodeFailed, {"node_id": node.id, "type": node.type})
 
         completed_ids.add(node.id)
         budget.consume()
         nodes_since_last_verify += 1
+
+        # ── Deterministic convergence accounting (no LLM) ─────────────────────
+        # Progress = this step admitted new evidence. A node that merely
+        # "completed" without producing a claim is not progress toward a goal.
+        made_progress = new_claims_this_node > 0
+        step_failed = not bool(payload.get("ok", True))
+        if made_progress:
+            no_progress_steps = 0
+        else:
+            no_progress_steps += 1
+        if step_failed:
+            consecutive_failures += 1
+        else:
+            consecutive_failures = 0
 
         manager.update(
             inv.id,
@@ -521,6 +966,23 @@ def _run_loop(
             claims_count=inv.claims_count + new_claims_this_node,
             active_goals=goals.to_api_list(obs_store.all()),
         )
+
+        if process_not_ready:
+            gave_up = True
+            log.info("investigation %s halting: %s", inv.id, stop_reason)
+            break
+
+        if consecutive_failures >= max_consecutive_failures:
+            gave_up = True
+            stop_reason = (f"{consecutive_failures} consecutive tool/agent failures "
+                           f"with no recovery")
+            log.info("investigation %s halting: %s", inv.id, stop_reason)
+            break
+        if no_progress_steps >= max_no_progress:
+            gave_up = True
+            stop_reason = (f"{no_progress_steps} steps produced no new evidence")
+            log.info("investigation %s halting: %s", inv.id, stop_reason)
+            break
 
         if budget.is_low():
             bus.emit(event_bus.BudgetLow, {"remaining": budget.remaining, "total": budget.total})
@@ -582,58 +1044,227 @@ def _run_loop(
     if budget.is_exhausted():
         bus.emit(event_bus.BudgetExhausted, {"used": budget.used, "total": budget.total})
 
-    # ── Report ────────────────────────────────────────────────────────────────
-    # The cancel check at the top of the loop only fires between nodes, so a
-    # cancel that lands after the last node — while the goals are being closed
-    # out — arrives here instead. Generating a report for a run the user stopped
-    # is work nobody asked for, and the manager will refuse the state change
-    # anyway, so stop before writing anything.
+    _finalize(inv, manager, graph, kg, goals, obs_store, bus,
+              gave_up=gave_up, stop_reason=stop_reason, budget=budget)
+
+
+def _finalize(
+    inv: Investigation,
+    manager: InvestigationManager,
+    graph: InvestigationGraph,
+    kg: KnowledgeGraph,
+    goals: GoalEngine,
+    obs_store: ObservationStore,
+    bus: event_bus.EventBus,
+    *,
+    gave_up: bool = False,
+    stop_reason: str | None = None,
+    budget: BudgetManager | None = None,
+    error: str | None = None,
+) -> None:
+    """The single exit every run passes through — normal end OR fatal exception.
+
+    Idempotent: a second call (e.g. the loop finished AND then run() unwinds, or
+    two error paths race) must not write a second report or flip a settled
+    terminal state. Guarded on a report already being on disk.
+
+    `error` is set only by run()'s exception handler. Its presence forces the
+    terminal state to `failed` (a Wizard malfunction, not an incomplete
+    investigation) while still generating a report from whatever evidence was
+    collected before the crash — so a run that dies mid-flight still leaves the
+    developer the trace it had, and the original error is preserved in
+    `last_event`/`error`, never masked by a cleanup problem.
+    """
+    # Cancellation is absorbing and owns its own messaging; never overwrite it.
     if inv.state == LifecycleState.cancelled:
-        log.info("investigation %s was cancelled before reporting; not completing it.", inv.id)
+        flow_trace.record(inv.id, "runtime.terminal", state="cancelled",
+                          reason=inv.last_event, cleanup="runtime finally block")
+        log.info("investigation %s was cancelled; not finalizing.", inv.id)
         return
+    # Already finalized — a report exists. Do not duplicate work or events.
+    try:
+        if fs_store.read_text(inv.id, "verification_report.md"):
+            return
+    except OSError:
+        pass
+
+    flow_trace.record(
+        inv.id, "runtime.finalizing", gave_up=gave_up, stop_reason=stop_reason,
+        failure=flow_trace.safe_text(error) if error else None,
+        budget_remaining=budget.remaining if budget else None,
+        observation_count=obs_store.count(),
+        graph_node_count=len(graph.all_nodes()),
+        goals=flow_trace.goal_states(goals, obs_store.all()),
+    )
 
     manager.update(inv.id, state=LifecycleState.reporting, last_event="generating report")
-    graph.persist()
-    kg.persist()
-    goals.persist()
+    # Persist state best-effort: a crash may have left a sub-store unhappy, but a
+    # failure to persist one must not stop the report or the terminal transition.
+    for persist in (graph.persist, kg.persist, goals.persist):
+        try:
+            persist()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("investigation %s: %s failed during finalize: %s",
+                        inv.id, getattr(persist, "__qualname__", persist), exc)
 
-    from wizard_kernel.control.report import generate
-    report_md = generate(inv, graph, obs_store.all(), kg, goals)
-    report_path = fs_store.write_text(inv.id, "verification_report.md", report_md)
-    # Absolute, not the ".wizard/investigations/<id>/..." shape it used to emit.
-    # That path is relative to *this process's* working directory, which is not
-    # the directory of anyone reading the event — the Engine runs as its own
-    # process, and a watcher, a CLI and a browser all sit elsewhere. Printed as
-    # written it named a file that could not be opened from where it was read,
-    # which is the whole of "the report is missing".
-    bus.emit(event_bus.ReportGenerated, {"path": str(report_path)})
+    report_path = None
+    try:
+        from wizard_kernel.control.report import generate
+        report_md = generate(inv, graph, obs_store.all(), kg, goals, failure=error)
+        report_path = fs_store.write_text(inv.id, "verification_report.md", report_md)
+        bus.emit(event_bus.ReportGenerated, {"path": str(report_path)})
+    except Exception as exc:  # noqa: BLE001 — a report failure must not erase the primary error
+        log.warning("investigation %s: report generation failed during finalize: %s",
+                    inv.id, exc)
 
     # ── Terminal state ────────────────────────────────────────────────────────
-    # What the run actually achieved, not what a report was written for. The
-    # loop can end three ways, and they used to be indistinguishable: every one
-    # of them reported `completed`. A run that satisfied its goals and a run
-    # that ran out of steps both said "complete", which is how a partial
-    # investigation came to read as a verified one.
-    satisfied = goals.all_satisfied()
-    if satisfied:
-        state, last_event = LifecycleState.completed, "complete"
-    else:
-        state = LifecycleState.incomplete
-        if gave_up:
-            reason = "the planner proposed no further steps"
-        elif budget.is_exhausted():
-            reason = "the budget ran out"
-        else:
-            reason = "the loop ended"
-        open_goals = [g.name for g in goals.open_goals()]
-        last_event = (f"{reason}; still open: " + ", ".join(open_goals)
-                      if open_goals else f"{reason}; the plan defined no goals")
-        log.info("investigation %s ended %s: %s", inv.id, state.value, last_event)
-        bus.emit(event_bus.InvestigationIncomplete,
-                 {"reason": reason, "open_goals": open_goals})
+    if error is not None:
+        # Wizard malfunctioned. Honest terminal state; the original error wins.
+        manager.update(inv.id, state=LifecycleState.failed,
+                       last_event=f"fatal: {error}", error=error,
+                       active_goals=goals.to_api_list(obs_store.all()))
+        flow_trace.record(inv.id, "runtime.terminal", state="failed",
+                          reason=flow_trace.safe_text(error), report="verification_report.md")
+        return
 
-    manager.update(inv.id, state=state, last_event=last_event,
+    if goals.all_satisfied():
+        manager.update(inv.id, state=LifecycleState.completed, last_event="complete",
+                       active_goals=goals.to_api_list(obs_store.all()))
+        flow_trace.record(inv.id, "runtime.terminal", state="completed",
+                          reason="all goal requirements satisfied",
+                          report="verification_report.md")
+        return
+
+    # Did the *application* stop us, or did Wizard run out of ideas? If an open
+    # goal needs runtime evidence and the observations hold a clear external
+    # failure — a start/exec command that exited non-zero, or an endpoint that
+    # never came up — the honest terminal state is `blocked`, naming the real
+    # boundary, not a vague "incomplete" that buries it under a list of goals.
+    blocker = _external_blocker(obs_store)
+    open_goals = [g.name for g in goals.open_goals()]
+    needs_runtime = any(getattr(g, "requires_execution_evidence", False)
+                        for g in goals.open_goals())
+    if blocker and (needs_runtime or not any(
+            getattr(g, "requires_execution_evidence", False) for g in goals.all())):
+        last_event = f"blocked: {blocker}"
+        log.info("investigation %s blocked: %s", inv.id, blocker)
+        bus.emit(event_bus.InvestigationIncomplete,
+                 {"reason": blocker, "open_goals": open_goals, "classification": "blocked"})
+        manager.update(inv.id, state=LifecycleState.blocked, last_event=last_event,
+                       active_goals=goals.to_api_list(obs_store.all()))
+        flow_trace.record(inv.id, "runtime.terminal", state="blocked",
+                          reason=blocker, open_goals=open_goals,
+                          report="verification_report.md")
+        return
+
+    if gave_up:
+        reason = stop_reason or "the planner proposed no further steps"
+    elif budget is not None and budget.is_exhausted():
+        reason = "the budget ran out"
+    else:
+        reason = "the loop ended"
+    last_event = (f"{reason}; still open: " + ", ".join(open_goals)
+                  if open_goals else f"{reason}; the plan defined no goals")
+    log.info("investigation %s ended incomplete: %s", inv.id, last_event)
+    bus.emit(event_bus.InvestigationIncomplete,
+             {"reason": reason, "open_goals": open_goals})
+    manager.update(inv.id, state=LifecycleState.incomplete, last_event=last_event,
                    active_goals=goals.to_api_list(obs_store.all()))
+    flow_trace.record(inv.id, "runtime.terminal", state="incomplete",
+                      reason=reason, open_goals=open_goals,
+                      report="verification_report.md")
+
+
+def _external_blocker(obs_store: ObservationStore) -> str | None:
+    """A one-line reason the *application*, not Wizard, prevented verification.
+
+    Scans observations for the two unambiguous external-failure signatures and
+    returns the most informative one, or None when there is no such evidence (in
+    which case the run is genuinely `incomplete`, not `blocked`). Deliberately
+    narrow: only the application's own process/port tools count, never an agent
+    or seam failure — misclassifying a Wizard defect as an environmental blocker
+    is the one thing this must not do.
+
+    1. A start/exec command that exited non-zero — the app refused to boot. The
+       command's stderr tail is the actionable part (e.g. a required env var).
+    2. A readiness probe (`check_port`) that stayed inactive with no later probe
+       of the same port ever going active — nothing ever listened.
+
+    Gated on reachability: if the application became reachable by ANY means —
+    an active port, a successful HTTP response from a loopback host, or a browser
+    navigation that returned a status — then it is NOT externally blocked, and
+    neither a stray failed command (a build, a one-off probe) nor an inactive
+    probe of a *different* port that the agent happened to guess can say
+    otherwise. Without this gate a run whose app answered on :5173 was reported
+    `blocked: nothing listened on :80` because the agent probed :80 once — a
+    false blocker that buried a working application and an unfinished agent
+    decision underneath it.
+    """
+    observations = obs_store.all()
+
+    def _reachable(obs) -> bool:
+        payload = obs.payload or {}
+        data = payload.get("data") or {}
+        if obs.source_tool == "check_port" and data.get("active"):
+            return True
+        if obs.source_tool == "http_request" and payload.get("ok"):
+            url = str(data.get("url") or payload.get("url") or "")
+            return any(h in url for h in ("localhost", "127.0.0.1", "0.0.0.0", "[::1]"))
+        if obs.source_tool == "browser_navigate" and payload.get("ok"):
+            return data.get("status") is not None or bool(data.get("url"))
+        return False
+
+    if any(_reachable(o) for o in observations):
+        # The application answered. Whatever else failed, the boundary that
+        # stopped verification was not "the app never came up".
+        return None
+
+    # (1) a failed start/exec, OR a server that crashed after starting. A
+    # background server started with start_process reports success and
+    # `is_running` immediately — its crash only shows up in a later read_process
+    # as a non-zero exit, which is exactly how `npm run dev` dying with
+    # "Cannot find module …" was reported as a generic "a start command" failure:
+    # the real command and error live on the read_process observation, so scan
+    # those too and name the actual command and its output.
+    for obs in reversed(observations):
+        if obs.source_tool not in ("execute_command", "start_process", "read_process"):
+            continue
+        payload = obs.payload or {}
+        data = payload.get("data") or {}
+        exit_code = payload.get("exit_code", data.get("exit_code"))
+        # A read_process for a still-running server is not a failure; only a
+        # process that has EXITED non-zero is.
+        if obs.source_tool == "read_process":
+            running = data.get("is_running", payload.get("is_running"))
+            if running or not (isinstance(exit_code, int) and exit_code != 0):
+                continue
+        if payload.get("ok") is False or (isinstance(exit_code, int) and exit_code != 0):
+            stderr = (payload.get("stderr") or data.get("stderr")
+                      or data.get("stderr_so_far") or data.get("stdout_so_far")
+                      or payload.get("stdout") or "").strip()
+            cmd = (data.get("command") or payload.get("command") or "a start command")
+            tail = " ".join(stderr.split())[:200]
+            if tail:
+                return f"the application did not start: `{cmd}` exited {exit_code}: {tail}"
+            if payload.get("ok") is False or (isinstance(exit_code, int) and exit_code != 0):
+                return f"the application did not start: `{cmd}` exited {exit_code}"
+    # (2) a port probed but never active.
+    active_ports, inactive_ports = set(), {}
+    for obs in observations:
+        if obs.source_tool != "check_port":
+            continue
+        data = (obs.payload or {}).get("data") or {}
+        port = data.get("port")
+        if data.get("active"):
+            active_ports.add(port)
+        elif port is not None:
+            inactive_ports[port] = True
+    dead = [p for p in inactive_ports if p not in active_ports]
+    if dead:
+        return (f"no service ever listened on port {', '.join(map(str, dead))}; "
+                f"the application never became reachable")
+    return None
+
 
 
 # ── Phase 6 helpers ───────────────────────────────────────────────────────────
@@ -645,6 +1276,7 @@ def _resolve_tool_action(
     validator: ToolRequestValidator,
     budget: BudgetManager,
     bus: event_bus.EventBus,
+    observations: list | None = None,
 ) -> tuple[dict | None, dict | None]:
     """Ask the Explorer Agent for a ToolRequest and validate it deterministically.
 
@@ -657,6 +1289,11 @@ def _resolve_tool_action(
     this lights up the file-investigation flow too.
     """
     # Ask the Explorer Agent — it must return a ToolRequest
+    inv_id = str(context.get("investigation_id", "unknown"))
+    flow_trace.record(inv_id, "explorer.request", explorer=type(explorer).__name__,
+                      node_id=node.id,
+                      context=flow_trace.context_summary(context, observations))
+    explorer_started = time.monotonic()
     try:
         response = explorer.request(context)
         agent_request = response.tool_request
@@ -693,6 +1330,10 @@ def _resolve_tool_action(
             status if status is not None else "unknown", request_id or "unknown",
             context.get("model", "unknown"), detail,
         )
+        flow_trace.record(inv_id, "explorer.failure", node_id=node.id,
+                          elapsed_ms=int((time.monotonic() - explorer_started) * 1000),
+                          failure_kind=error_type, http_status=status,
+                          request_id=request_id, model=context.get("model"), detail=detail)
         return None, {
             "error_type": error_type,
             "status": status,
@@ -703,8 +1344,19 @@ def _resolve_tool_action(
 
     # If agent returned a request, validate it
     if agent_request is not None:
+        tool_request_id = uuid.uuid4().hex
+        flow_trace.record(inv_id, "explorer.tool_request", node_id=node.id,
+                          tool_request_id=tool_request_id,
+                          elapsed_ms=int((time.monotonic() - explorer_started) * 1000),
+                          tool=agent_request.tool,
+                          parameters=flow_trace.safe_parameters(agent_request.parameters),
+                          reason_chars=len(agent_request.reason or ""))
         validation = validator.validate(agent_request, budget.remaining)
         if validation.valid:
+            flow_trace.record(inv_id, "runtime.validation", node_id=node.id,
+                              result="accepted", tool=agent_request.tool,
+                              tool_request_id=tool_request_id,
+                              parameters=flow_trace.safe_parameters(validation.sanitised_params))
             bus.emit(event_bus.AgentDecided, {
                 "node_id": node.id, "source": "explorer",
                 "tool": agent_request.tool, "reason": agent_request.reason,
@@ -717,9 +1369,13 @@ def _resolve_tool_action(
             })
             # Use agent's suggested tool with sanitised parameters
             return ({"tool": agent_request.tool, "params": validation.sanitised_params,
-                     "tool_request_id": uuid.uuid4().hex}, None)
+                     "tool_request_id": tool_request_id}, None)
         else:
-            request_id = uuid.uuid4().hex
+            request_id = tool_request_id
+            flow_trace.record(inv_id, "runtime.validation", node_id=node.id,
+                              result="rejected", tool=agent_request.tool,
+                              parameters=flow_trace.safe_parameters(agent_request.parameters),
+                              reason=validation.reason, tool_request_id=request_id)
             bus.emit(event_bus.ToolRejected, {
                 "node_id": node.id, "tool": agent_request.tool, "reason": validation.reason,
                 "tool_request_id": request_id,
@@ -743,6 +1399,10 @@ def _resolve_tool_action(
                                for key, value in agent_request.parameters.items()},
             }
 
+    flow_trace.record(inv_id, "explorer.failure", node_id=node.id,
+                      elapsed_ms=int((time.monotonic() - explorer_started) * 1000),
+                      failure_kind="EXPLORER_DECISION_FAILED",
+                      detail="Explorer returned no ToolRequest")
     return None, {"error_type": "EXPLORER_DECISION_FAILED",
                   "detail": "Explorer returned no ToolRequest"}
 
@@ -801,6 +1461,11 @@ def _consult_verifier(
 
     bus.emit(event_bus.AgentConsulted,
              {"agent_type": "verifier", "claims_reviewed": len(claims_payload)})
+    flow_trace.record(inv.id, "verifier.request",
+                      verifier=type(verifier).__name__, claims_reviewed=len(claims_payload),
+                      claim_types=sorted({c.get("type", "") for c in claims_payload}),
+                      evidence_observations=[o.id for o in obs_store.all()
+                                             if o.evidence_categories][-20:])
     try:
         assessment = verifier.assess(claims_payload, inv.id)
     except Exception as exc:  # noqa: BLE001 — verifier failure is non-fatal (invariant 4)
@@ -814,7 +1479,16 @@ def _consult_verifier(
         )
         log.warning("Verifier agent failed (HTTP %s): %s — continuing without assessment",
                     getattr(response, "status_code", "unknown"), exc)
+        flow_trace.record(inv.id, "verifier.failure",
+                          http_status=getattr(response, "status_code", None),
+                          error=flow_trace.safe_text(exc))
         return
+
+    flow_trace.record(inv.id, "verifier.response",
+                      assessment=assessment.assessment,
+                      weak_claims=assessment.weak_claims,
+                      recommendations=assessment.recommended_additional_investigations,
+                      runtime_authority="goal engine remains authoritative")
 
     log.info("Verifier assessment for %s: %s, weak_claims=%s",
              inv.id, assessment.assessment, assessment.weak_claims)
@@ -850,10 +1524,20 @@ def _consult_verifier(
             completed_ids=completed_ids if completed_ids is not None else set(),
         )
         try:
+            flow_trace.record(inv.id, "planner.next.request",
+                              trigger="verifier_recommendation",
+                              context=flow_trace.planner_context_summary(context))
             new_nodes = planner.next_nodes(context)
+            flow_trace.record(inv.id, "planner.next.response",
+                              trigger="verifier_recommendation",
+                              proposed_nodes=[flow_trace.node_summary(n) for n in new_nodes])
             added = 0
             for n in new_nodes:
                 if _already_scheduled(graph, completed_ids or set(), n):
+                    flow_trace.record(inv.id, "planner.node.deduplicated",
+                                      trigger="verifier_recommendation",
+                                      proposed=flow_trace.node_summary(n),
+                                      existing_node_count=len(graph.all_nodes()))
                     bus.emit(event_bus.PlannerNodeSkipped, {
                         "node_id": n.id, "type": n.type,
                         "reason": "a node for the same action is already queued",
@@ -1111,16 +1795,30 @@ def _page_state(obs_store: ObservationStore) -> dict:
     for obs in obs_store.all():
         if obs.obs_type not in ("browser_action", "page_content"):
             continue
-        data = obs.payload.get("data") or {}
-        if data.get("url"):
-            url = data["url"]
-        if data.get("controls"):
-            controls = data["controls"]
-        if data.get("page_fingerprint"):
-            fingerprint = data["page_fingerprint"]
-        selector = data.get("selector")
-        if selector and (data.get("clicked") or data.get("typed")):
+        payload_data = obs.payload.get("data") or {}
+        # A page-changing click/type/fill stores the resulting page under
+        # `page_observation` (the pre-action top level has only the action
+        # result). Prefer it so the planner plans against the page the run is
+        # NOW on — without this, after clicking "Create one" the planner kept
+        # seeing the login page's controls, proposed actions that no longer
+        # matched, and the run oscillated between links instead of filling the
+        # form it had just reached. Matches what the Explorer packager already does.
+        page = payload_data.get("page_observation") or payload_data
+        if page.get("url"):
+            url = page["url"]
+        if page.get("controls"):
+            controls = page["controls"]
+        if page.get("page_fingerprint"):
+            fingerprint = page["page_fingerprint"]
+        # The action itself (what was pressed/typed) is on the top-level data,
+        # not inside the nested page snapshot.
+        selector = payload_data.get("selector")
+        if selector and (payload_data.get("clicked") or payload_data.get("typed")):
             acted.setdefault(selector, None)
+        # A batched form fill records each field it typed under `fields`.
+        for field in (payload_data.get("fields") or []):
+            if isinstance(field, dict) and field.get("typed") and field.get("selector"):
+                acted.setdefault(field["selector"], None)
     return {
         "page_url": url,
         "page_controls": controls,

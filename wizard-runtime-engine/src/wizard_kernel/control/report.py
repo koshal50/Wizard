@@ -40,6 +40,8 @@ def generate(
     observations: "list[Observation]",
     kg: "KnowledgeGraph | None" = None,
     goals: "GoalEngine | None" = None,
+    *,
+    failure: str | None = None,
 ) -> str:
     """Project verified investigation state into markdown. No LLM."""
     now = datetime.now(timezone.utc)
@@ -61,6 +63,7 @@ def generate(
         f"| **Repository** | `{inv.repository_path}` |",
         f"| **Intent** | {inv.intent} |",
         f"| **Targets** | {', '.join(inv.targets) or '*(all)*'} |",
+        f"| **Status** | {'FAILED' if failure else 'See goal states below'} |",
         f"| **Generated** | {now.strftime('%Y-%m-%d %H:%M UTC')} |",
         f"| **Duration** | {duration_str} |",
         f"| **Budget used** | {budget_used} / {inv.budget_total} nodes |",
@@ -70,6 +73,12 @@ def generate(
         "---",
         "",
     ]
+
+    # A provider/planner failure can happen before the graph contains any
+    # work. Keep that outcome in the saved report instead of letting the empty
+    # graph look like an unrecognised repository or an exhausted node budget.
+    if failure:
+        lines += ["## Why the investigation stopped", "", failure, "", "---", ""]
 
     # ─── 2. Executive Summary ─────────────────────────────────────────────────
     # The heading is the command's own question, not a fixed label. Two runs that
@@ -110,6 +119,11 @@ def generate(
                 lines.append("")
                 for p in summary_parts:
                     lines.append(f"- {p}")
+            elif failure:
+                lines.append(
+                    "No investigation work completed because the runtime stopped "
+                    f"before planning: {failure}"
+                )
             else:
                 lines.append(
                     "Investigation completed. All claims lack execution-tier "
@@ -127,6 +141,11 @@ def generate(
                     f"**{len(high_trust)} files** and established nothing beyond "
                     "them. No claim about how the project behaves reached "
                     "confidence — the run collected no evidence of that kind."
+                )
+            elif failure:
+                lines.append(
+                    "No investigation work completed because the runtime stopped "
+                    f"before planning: {failure}"
                 )
             else:
                 lines.append(

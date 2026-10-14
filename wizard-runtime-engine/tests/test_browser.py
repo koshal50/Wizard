@@ -73,6 +73,23 @@ def test_executor_browser_passthrough_envelope():
     assert typed["ok"] and typed["data"]["typed"] is True
 
 
+def test_browser_starts_only_when_browser_tool_reaches_executor():
+    class LazyBrowser(_FakeBrowser):
+        def __init__(self):
+            self.started = False
+            self.start_calls = 0
+        def start(self):
+            self.started = True
+            self.start_calls += 1
+
+    browser = LazyBrowser()
+    tools = ToolExecutor(sandbox=None, repo_path=".", browser=browser)
+    assert browser.start_calls == 0
+    result = tools.execute({"tool": "browser_navigate", "params": {"url": "http://localhost:43127/"}})
+    assert result["ok"] is True
+    assert browser.start_calls == 1
+
+
 def test_browser_click_and_type_attach_fresh_page_schema():
     class FormBrowser(_FakeBrowser):
         def snapshot(self):
@@ -95,6 +112,41 @@ def test_executor_browser_exception_becomes_error(monkeypatch):
     tools = ToolExecutor(sandbox=None, repo_path=".", browser=Boom())
     out = tools.execute({"tool": "browser_navigate", "params": {"url": "https://example.com"}})
     assert out["ok"] is False and "nav timeout" in out["error"]  # invariant 4
+
+
+def test_browser_control_selector_resolves_from_current_accessibility_schema():
+    """Observed role selectors resolve through Playwright's role API, and a
+    Register selector cannot silently wait against a different current page."""
+    import asyncio
+    from wizard_kernel.world.browser.runtime import BrowserRuntime
+
+    class Locator:
+        def nth(self, index):
+            self.index = index
+            return self
+
+    class Page:
+        def __init__(self): self.args = None
+        def get_by_role(self, role, *, name, exact):
+            self.args = (role, name, exact)
+            return Locator()
+        def locator(self, selector): return Locator()
+
+    runtime = BrowserRuntime()
+    page = Page()
+    runtime._page = page
+    controls = [{"role": "textbox", "name": "Email",
+                 "selector": 'role=textbox[name="Email"]'}]
+
+    async def current_controls(): return controls
+    runtime._controls = current_controls
+
+    locator, control = asyncio.run(runtime._resolve_control('role=textbox[name="Email"]'))
+    assert isinstance(locator, Locator)
+    assert control["name"] == "Email"
+    assert page.args == ("textbox", "Email", True)
+    with pytest.raises(ValueError, match="stale or absent"):
+        asyncio.run(runtime._resolve_control('role=textbox[name="Name"]'))
 
 
 # ── URL egress guard (fail-closed allowlist) ────────────────────────────────
@@ -715,3 +767,90 @@ def test_live_browser_smoke():
         assert "snapshot" in snap and "url" in snap
     finally:
         br.stop()
+
+
+def test_browser_fill_form_fills_many_fields_and_redacts_secrets():
+    """One action fills every observed field (so a form is one Explorer decision,
+    not one model call per field), captures per-field outcomes, redacts a
+    password value, attaches a fresh snapshot, and does NOT submit."""
+    tools = ToolExecutor(sandbox=None, repo_path=".", browser=_FakeBrowser())
+    out = tools.execute({"tool": "browser_fill_form", "params": {"fields": [
+        {"selector": 'role=textbox[name="Email"]', "text": "wizard.probe@example.test"},
+        {"selector": 'role=textbox[name="Password"]', "text": "s3cr3t-disposable"},
+    ]}})
+    assert out["ok"] is True
+    data = out["data"]
+    assert data["all_filled"] is True
+    assert len(data["fields"]) == 2
+    # Password value is redacted; email (non-secret) is kept.
+    pw = next(f for f in data["fields"] if "Password" in f["selector"])
+    email = next(f for f in data["fields"] if "Email" in f["selector"])
+    assert pw["value"] == "<redacted>"
+    assert email["value"] == "wizard.probe@example.test"
+    # The raw password never appears anywhere in the serialized observation.
+    import json as _json
+    assert "s3cr3t-disposable" not in _json.dumps(data)
+    # A fresh snapshot rode along; no submit happened (no 'clicked'/'submitted').
+    assert "page_observation" in data
+    assert "submitted" not in data
+
+
+def test_browser_fill_form_records_partial_failure():
+    """If a field cannot be filled, the action still returns a truthful per-field
+    record rather than silently claiming success."""
+    class HalfBroken(_FakeBrowser):
+        def fill(self, selector, text):
+            if "bad" in selector:
+                raise RuntimeError("no such control")
+            return {"selector": selector, "typed": True, "url": "https://x.test/"}
+    tools = ToolExecutor(sandbox=None, repo_path=".", browser=HalfBroken())
+    out = tools.execute({"tool": "browser_fill_form", "params": {"fields": [
+        {"selector": "good", "text": "a"},
+        {"selector": "bad", "text": "b"},
+    ]}})
+    assert out["ok"] is False           # a partial form must not unlock submit
+    assert out["data"]["all_filled"] is False
+    bad = next(f for f in out["data"]["fields"] if f["selector"] == "bad")
+    assert bad["typed"] is False and "no such control" in bad["error"]
+
+
+def test_browser_fill_form_requires_a_fields_list():
+    tools = ToolExecutor(sandbox=None, repo_path=".", browser=_FakeBrowser())
+    out = tools.execute({"tool": "browser_fill_form", "params": {}})
+    assert out["ok"] is False
+
+
+def test_browser_fill_form_validator_rejects_malformed_field_before_execution(tmp_path):
+    validator = ToolRequestValidator(str(tmp_path), browser_enabled=True)
+    validator.record_execution("browser_navigate", {}, {"ok": True})
+    result = validator.validate(ToolRequest(
+        tool="browser_fill_form", parameters={"fields": ["not a field object"]}
+    ), budget_remaining=2)
+    assert not result.valid
+    assert "fields[0]" in result.reason
+
+
+def test_fill_form_observation_yields_interaction_evidence():
+    """A batched browser_fill_form must produce the same INTERACTION claims a
+    single browser_type does, read from its `fields` + `page_observation` shape —
+    otherwise a form filled in one action produces no evidence and its goal can
+    never close."""
+    from wizard_kernel.belief.extractors import extract
+    from wizard_kernel.reality.observations import ObservationStore
+    store = ObservationStore("inv_fillev")
+    obs = store.append(
+        node_id="n1", source_tool="browser_fill_form", obs_type="browser_action",
+        payload={"ok": True, "data": {
+            "all_filled": True,
+            "fields": [
+                {"selector": 'role=textbox[name="Email"]', "typed": True, "value": "a@b.test"},
+                {"selector": 'role=textbox[name="Password"]', "typed": True, "value": "<redacted>"},
+            ],
+            "page_observation": {"url": "http://localhost:5173/register", "title": "Taskboard"},
+        }},
+        goal_id="g", tool_request_id=None, execution_id="e1", evidence_categories=[])
+    keys = {(r.claim_type, r.key) for r in extract(obs)}
+    assert ("WEB", "current_url") in keys
+    assert ("INTERACTION", 'interacted:role=textbox[name="Email"]') in keys
+    assert ("INTERACTION", 'interacted:role=textbox[name="Password"]') in keys
+    assert ("INTERACTION", 'field_value:role=textbox[name="Email"]') in keys

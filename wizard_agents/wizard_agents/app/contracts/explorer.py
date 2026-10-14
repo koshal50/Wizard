@@ -101,7 +101,9 @@ class ExplorerToolRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     tool: ToolName
-    parameters: Dict[str, str | int | float | bool | None]
+    # Scalars for most tools; browser_fill_form's `fields` is a list of
+    # {selector, text} objects, so the value union also admits list/dict.
+    parameters: Dict[str, "str | int | float | bool | None | list | dict"]
 
 
 class ExplorerOutput(BaseModel):

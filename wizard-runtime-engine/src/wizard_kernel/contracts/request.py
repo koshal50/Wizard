@@ -19,10 +19,16 @@ class InvestigationOptions(BaseModel):
     browser_headless: bool = True
     # Fail-closed egress allowlist: empty list blocks ALL navigation (never wide-open).
     allowed_domains: list[str] = Field(default_factory=list)
+    allow_browser: bool | None = None
+    allow_execution: bool | None = None
+    max_model_calls: int = Field(default=24, ge=1, le=100)
+    max_elapsed_seconds: int = Field(default=600, ge=1, le=3600)
+    max_input_chars: int = Field(default=60000, ge=4000, le=200000)
 
 
 class InvestigationRequest(BaseModel):
     contracts_version: str = "1.0"
+    idempotency_key: str | None = None
     repository_path: str
     intent: Literal["verify", "investigate", "explain", "report"]
     targets: list[str] = Field(default_factory=list)
@@ -32,5 +38,5 @@ class InvestigationRequest(BaseModel):
     # was asked rather than only what the command vocabulary recognised in it.
     # Empty for a menu-driven run, which is a run where the family is the whole
     # request.
-    question: str = ""
+    question: str = Field(default="", max_length=8000)
     options: InvestigationOptions = Field(default_factory=InvestigationOptions)

@@ -18,7 +18,8 @@ log = logging.getLogger(__name__)
 GoalState = Literal["open", "satisfied", "failed"]
 _EVIDENCE_CATEGORIES = frozenset({
     "repository_read", "command_execution", "process_execution", "http_response",
-    "browser_navigation", "browser_observation", "browser_interaction", "browser_form_input", "docker_execution",
+    "browser_navigation", "browser_observation", "browser_interaction", "browser_form_input",
+    "browser_form_submission", "docker_execution",
 })
 
 
@@ -82,7 +83,12 @@ class GoalEngine:
         req_types = set(goal.required_claim_types)
         evidence = self.evidence_status(goal_id, observations or [])
         if not evidence["required"]:
-            # Missing proof requirements are not proof.
+            # Missing proof requirements are not proof. A goal must declare the
+            # evidence that closes it; claim types alone do not satisfy a goal
+            # (see test_goal_requirements_are_required_even_with_claim_types — a
+            # core verification invariant). The Planner is responsible for
+            # declaring required_evidence, which the Runtime strengthens from the
+            # policy table.
             goal.progress = 0.0
             return False
 
@@ -172,9 +178,17 @@ def evidence_satisfies_requirement(observation, requirement: str) -> bool:
 
 def evidence_categories_for_tool(tool: str, payload: dict) -> list[str]:
     """Classify evidence from the executed tool and its actual result."""
-    if not payload.get("ok"):
-        return []
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    # A partial browser_fill_form is an unsuccessful operation overall, but
+    # successful individual fields are still genuine observations. They can
+    # support field-level evidence; only a fully filled form satisfies the
+    # complete form-input category.
+    partial_form = tool == "browser_fill_form" and any(
+        isinstance(field, dict) and field.get("typed")
+        for field in (data.get("fields") or [])
+    )
+    if not payload.get("ok") and not partial_form:
+        return []
     categories: list[str] = []
     if tool in {"read_file", "list_tree", "search_files", "path_exists"}:
         categories.append("repository_read")
@@ -192,9 +206,14 @@ def evidence_categories_for_tool(tool: str, payload: dict) -> list[str]:
         categories.append("browser_navigation")
     if tool in {"browser_snapshot", "browser_extract"}:
         categories.append("browser_observation")
-    if tool in {"browser_click", "browser_type", "browser_back"}:
+    if tool in {"browser_click", "browser_type", "browser_fill_form", "browser_back"}:
         categories.append("browser_interaction")
+    if (tool == "browser_click" and data.get("submitted_form")
+            and isinstance(data.get("page_observation"), dict)):
+        categories.append("browser_form_submission")
     if tool == "browser_type" and data.get("typed"):
+        categories.append("browser_form_input")
+    if tool == "browser_fill_form" and data.get("all_filled"):
         categories.append("browser_form_input")
     command = str((payload.get("meta") or {}).get("command", "")).lower()
     if (tool in {"execute_command", "start_process"}

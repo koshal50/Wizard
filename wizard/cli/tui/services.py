@@ -1,34 +1,9 @@
-"""Services — start and health-check the three services a run needs.
-
-Bare `wizard` used to open a TUI that talked to nothing. The Runtime was not
-running, the planner was not running, the agents were not running, and the only
-signal was a connection error once you had already picked a command and typed an
-intent. This module is what makes the promise "everything is already connected"
-true: the TUI brings up whatever is missing before it shows the menu.
-
-Three services, one process each:
-
-    kernel    the Wizard Runtime Engine    127.0.0.1:8080   (Python, uvicorn)
-    planner   the investigation planner    127.0.0.1:8787   (Node, TS)
-    agents    Explorer + Verifier          127.0.0.1:8100   (Python, uvicorn)
-
-Design rules, all of them in service of "no fallback, everything real":
-
-  * A service already listening is ADOPTED, never restarted. Killing somebody
-    else's kernel to start our own would lose whatever investigations it holds.
-  * A service we start is a CHILD we own and stop on exit; a service we adopt
-    is left running, because stopping something we did not start is not ours
-    to do.
-  * Every service reports one of: adopted / started / unavailable. There is no
-    fourth "probably fine" state, and `unavailable` is always fatal for the
-    kernel (nothing works without it) and never silent for the others.
-  * Nothing here is mocked. Where a service cannot be started, the reason is a
-    real error string from the real attempt.
-"""
+"""Start/adopt one Runtime service; capture its logs and stop only owned children."""
 
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -129,90 +104,55 @@ def _kernel_python() -> str:
     return str(venv_python) if venv_python.is_file() else _python()
 
 
-def build_specs(root: Path | None = None) -> list[ServiceSpec]:
-    """The three services, resolved against this checkout.
+def _workspace_build_id(root: Path) -> str:
+    """Fingerprint the three service source trees so stale adopted workers fail closed."""
+    digest = hashlib.sha256()
+    source_roots = (
+        root / "wizard-runtime-engine" / "src",
+        root / "wizard-investigation-planner" / "src",
+        root / "wizard_agents" / "wizard_agents" / "app",
+    )
+    for source_root in source_roots:
+        if not source_root.is_dir():
+            continue
+        for path in sorted((*source_root.rglob("*.py"), *source_root.rglob("*.ts"))):
+            digest.update(path.relative_to(root).as_posix().encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:20]
 
-    The planner is optional in the strongest sense: the Runtime has a built-in
-    deterministic planner, so an investigation still runs without it (its
-    `seams.resolved` event says which planner it actually used). Its argv is
-    None when Node is absent, and that is reported as unavailable rather than
-    silently downgrading — the user can see the seam is not connected.
-    """
+
+def build_specs(root: Path | None = None) -> list[ServiceSpec]:
+    """Normal investigations run in one Runtime service with one model transport."""
     root = root or repo_root()
-    node = shutil.which("node")
-    cerebras_key = os.environ.get("CEREBRAS_KEY", "")
-    if not cerebras_key:
-        try:
-            cerebras_key = next(
-                (value.strip().strip("\"'") for line in (root / ".env").read_text(encoding="utf-8").splitlines()
-                 for name, sep, value in [line.partition("=")] if sep and name.strip() == "CEREBRAS_KEY"),
-                "",
-            )
-        except OSError:
-            pass
-    planner_env = os.environ.copy()
-    planner_env.update({
-        "LLM_PROVIDER": "openai",
-        "LLM_MODEL": "gpt-oss-120b",
-        "LLM_BASE_URL": "https://api.cerebras.ai",
-        "WIZARD_CEREBRAS_GATE_DB": str(root / ".wizard" / "cerebras-rate-gate.sqlite3"),
-    })
-    if cerebras_key:
-        planner_env["OPENAI_API_KEY"] = cerebras_key
-    agents_env = os.environ.copy()
-    agents_env.update({
-        "WIZARD_LLM_PROVIDER": "vllm",
+    build_id = _workspace_build_id(root)
+    runtime_env = os.environ.copy()
+    # Only explicitly supported configuration enters Runtime from root .env.
+    # Test input values remain in Runtime; prompts receive reference names only.
+    try:
+        from dotenv import dotenv_values
+        configured = dotenv_values(root / ".env", interpolate=False)
+        for name in ("CEREBRAS_KEY", "WIZARD_TEST_DATA_JSON", "WIZARD_ALLOW_DISPOSABLE_LOCAL_ACCOUNTS"):
+            if not runtime_env.get(name) and configured.get(name):
+                runtime_env[name] = configured[name]
+    except OSError:
+        pass
+    runtime_env.update({
+        "WIZARD_BUILD_ID": build_id,
         "WIZARD_LLM_MODEL": "gpt-oss-120b",
         "WIZARD_LLM_BASE_URL": "https://api.cerebras.ai",
         "WIZARD_CEREBRAS_GATE_DB": str(root / ".wizard" / "cerebras-rate-gate.sqlite3"),
+        "PYTHONPATH": os.pathsep.join(filter(None, (
+            str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", "")))),
     })
-    if cerebras_key:
-        agents_env["OPENAI_API_KEY"] = cerebras_key
+    return [ServiceSpec(
+        key="kernel", label="Runtime Engine", port=8080, health_path="/health",
+        cwd=str(root / "wizard-runtime-engine"),
+        argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
+              "--host", "127.0.0.1", "--port", "8080"),
+        env=runtime_env, needs=("uvicorn",),
+        why_unstartable="uvicorn is not importable by this interpreter",
+    )]
 
-    return [
-        ServiceSpec(
-            key="kernel",
-            label="Runtime Engine",
-            port=8080,
-            health_path="/health",
-            cwd=str(root / "wizard-runtime-engine"),
-            argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
-                  "--host", "127.0.0.1", "--port", "8080"),
-            env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, (str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", ""))))},
-            needs=("uvicorn",),
-            why_unstartable="uvicorn is not importable by this interpreter",
-        ),
-        ServiceSpec(
-            key="planner",
-            label="Investigation Planner",
-            port=8787,
-            health_path="/health",
-            cwd=str(root / "wizard-investigation-planner"),
-            argv=(node, "--experimental-strip-types", "src/http/server.ts") if node else None,
-            env=planner_env,
-            needs=("node",),
-            why_unstartable="node is not on PATH",
-        ),
-        ServiceSpec(
-            key="agents",
-            label="Explorer + Verifier agents",
-            port=8100,
-            health_path="/health",
-            # wizard_agents/wizard_agents: the inner directory is the package
-            # root, because `app` is the top-level module uvicorn imports.
-            # Starting from the outer directory fails with "No module named
-            # 'app'" — which is exactly what it did until this was corrected.
-            cwd=str(root / "wizard_agents" / "wizard_agents"),
-            argv=(_python(), "-m", "uvicorn", "app.api.main:app",
-                  "--host", "127.0.0.1", "--port", "8100"),
-            env=agents_env,
-            needs=("uvicorn",),
-            why_unstartable="uvicorn is not importable by this interpreter",
-        ),
-    ]
-
-
-# ── Probes ───────────────────────────────────────────────────────────────────
 
 def port_open(port: int, host: str = "127.0.0.1", timeout: float = 0.4) -> bool:
     """True if something accepts a TCP connection on `port`.
@@ -234,6 +174,18 @@ def healthy(spec: ServiceSpec, timeout: float = 1.5) -> bool:
             return 200 <= response.status < 300
     except (urllib.error.URLError, OSError, ValueError):
         return False
+
+
+def service_build_id(spec: ServiceSpec, timeout: float = 1.5) -> str | None:
+    """Build fingerprint reported by a healthy Wizard service, if supported."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{spec.port}{spec.health_path}", timeout=timeout
+        ) as response:
+            payload = json.load(response)
+        return payload.get("build_id") if isinstance(payload, dict) else None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
 
 
 #: The request fields this CLI sends that the Runtime must accept for the run to
@@ -305,7 +257,8 @@ def _spawn(spec: ServiceSpec, log_dir: Path) -> "subprocess.Popen | None":
             # Its own process group, so Ctrl-C in the TUI does not race the
             # child's own shutdown, and terminate() below reaches the whole
             # tree (uvicorn spawns workers).
-            start_new_session=True,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except (OSError, ValueError) as exc:
         if handle is not subprocess.DEVNULL:
@@ -322,6 +275,14 @@ def ensure_service(spec: ServiceSpec, log_dir: Path) -> ServiceState:
     already-running service may hold live investigations we must not disturb.
     """
     if healthy(spec):
+        expected_build = (spec.env or {}).get("WIZARD_BUILD_ID")
+        if expected_build and service_build_id(spec) != expected_build:
+            return ServiceState(
+                spec=spec,
+                status="unavailable",
+                detail=(f"an older Wizard {spec.label} is already running on :{spec.port}; "
+                        "stop that Wizard process and run wizard again to load the current code"),
+            )
         # An adopted Runtime is somebody else's process and may be an older
         # build than this CLI. Adopting it is still right — killing it would
         # lose the investigations it holds — but adopting it *silently* is not:
@@ -417,102 +378,19 @@ _CHROMIUM_NAMES = (
 )
 
 
-def _browsers_dir() -> Path:
-    """Playwright's browser cache, honouring its own override variable."""
-    override = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if override and override not in ("0",):
-        return Path(override)
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-        return Path(base) / "ms-playwright"
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Caches" / "ms-playwright"
-    return Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "ms-playwright"
-
-
 def find_chromium(root: Path | None = None) -> Path | None:
-    """The Chromium executable Playwright downloaded, or None.
-
-    Looked for on disk rather than asked of Playwright. Asking means starting
-    Playwright's driver subprocess, and that one-shot start-and-stop leaves a
-    pending task whose teardown prints "Task was destroyed but it is pending!"
-    and a TargetClosedError traceback — noise on the user's terminal on every
-    single launch, to answer a question about a file's existence.
-    """
-    root = root or _browsers_dir()
-    if not root.is_dir():
+    """Compatibility probe: detect the configured agent-browser CLI."""
+    from wizard_kernel.world.browser.runtime import browser_command
+    try:
+        return Path(browser_command())
+    except RuntimeError:
         return None
-    # `chromium*`, not `chromium-*`: the headless shell lives in
-    # chromium_headless_shell-<rev>, and that is the one a headless run uses.
-    for version_dir in sorted(root.glob("chromium*")):
-        for name in _CHROMIUM_NAMES:
-            for hit in version_dir.rglob(name):
-                if hit.is_file():
-                    return hit
-    return None
 
 
 def ensure_chromium() -> str:
-    """Make sure Playwright's Chromium is on disk, fetching it once if not.
+    """Dependency installation remains explicit, never a TUI startup side effect."""
+    return "agent-browser available" if find_chromium() else "Install npm install -g agent-browser@0.27.0, then agent-browser install"
 
-    `pip install -e .` installs the Playwright *package* but not its browser
-    binaries, and it cannot: Playwright downloads those from its own CDN, while
-    pip installs wheels and has no post-install step to run. A `setup.py`
-    install hook does not close the gap either — pip builds a wheel and installs
-    that, bypassing the command. So the download happens here, on the first
-    launch, which works however the package was installed.
-
-    Returns the line to report, in the same shape as the service lines. Failure
-    is not fatal: the browser is one tool of several, and a run that never
-    touches a web page should not be blocked because a download failed.
-    """
-    # The binaries without the package that drives them are no use, and a cache
-    # left behind by an uninstalled Playwright would otherwise read as ready.
-    # find_spec imports nothing and starts nothing, so it stays silent.
-    kernel_python = _kernel_python()
-    if kernel_python == sys.executable:
-        playwright_available = importlib.util.find_spec("playwright") is not None
-    else:
-        try:
-            probe = subprocess.run(
-                [kernel_python, "-c", "import importlib.util; raise SystemExit(importlib.util.find_spec('playwright') is None)"],
-                capture_output=True, timeout=10,
-            )
-            playwright_available = probe.returncode == 0
-        except (OSError, subprocess.SubprocessError):
-            playwright_available = False
-    if not playwright_available:
-        return ("[x] Chromium (Playwright browser)  unavailable  "
-                "the playwright package is not importable by this interpreter")
-
-    if find_chromium() is not None:
-        return "[=] Chromium (Playwright browser)  ready        already on disk"
-
-    print("    fetching Chromium for the agentic browser "
-          "(one time, ~150 MB)...", flush=True)
-    try:
-        result = subprocess.run(
-            [kernel_python, "-m", "playwright", "install", "chromium"],
-            capture_output=True, text=True, timeout=900,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return ("[x] Chromium (Playwright browser)  unavailable  "
-                f"download did not run: {exc}")
-
-    if find_chromium() is not None:
-        return "[+] Chromium (Playwright browser)  fetched      downloaded just now"
-
-    # Its own last words, not a paraphrase: the usual causes are no network or a
-    # proxy that needs configuring, and only its output says which.
-    tail = " / ".join(
-        line.strip() for line in (result.stderr or result.stdout or "").strip().splitlines()[-3:]
-        if line.strip()
-    )
-    return ("[x] Chromium (Playwright browser)  unavailable  "
-            f"download failed{': ' + tail if tail else ''}")
-
-
-# ── The supervisor the TUI holds ─────────────────────────────────────────────
 
 @dataclass
 class ServiceReport:
@@ -534,6 +412,11 @@ class ServiceReport:
     def kernel_ok(self) -> bool:
         state = self.by_key.get("kernel")
         return bool(state and state.ok)
+
+    @property
+    def investigation_stack_ok(self) -> bool:
+        by_key = self.by_key
+        return bool(by_key.get("kernel") and by_key["kernel"].ok)
 
     def lines(self) -> list[str]:
         """One honest line per service, for display before the menu appears.
@@ -592,10 +475,10 @@ class ServiceSupervisor:
 
         if by_key["kernel"].ok:
             env["WIZARD_ENGINE_URL"] = f"http://127.0.0.1:{by_key['kernel'].spec.port}"
-        if by_key["planner"].ok:
+        if by_key.get("planner") and by_key["planner"].ok:
             # Base origin only: the Runtime's HttpPlanner appends /plan/* itself.
             env["WIZARD_PLANNER_URL"] = f"http://127.0.0.1:{by_key['planner'].spec.port}"
-        if by_key["agents"].ok:
+        if by_key.get("agents") and by_key["agents"].ok:
             port = by_key["agents"].spec.port
             # Full paths, because the agent client POSTs verbatim.
             env["WIZARD_EXPLORER_URL"] = f"http://127.0.0.1:{port}/agent/explorer"

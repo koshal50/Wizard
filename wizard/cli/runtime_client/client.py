@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import uuid
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -124,7 +125,7 @@ def _write_report(markdown: str, request: InvestigationRequest) -> "str | None":
         # this module, so a top-level import would be circular.
         from wizard.cli.commands.report import next_report_path, save_report
 
-        output_dir = Path(os.getcwd()) / "output"
+        output_dir = Path(request.repository.path).resolve() / "output"
         path = next_report_path(output_dir, ".md")
         save_report(path, markdown)
         return str(path)
@@ -158,7 +159,7 @@ def cancel_investigation(inv_id: str) -> bool:
         req = urllib.request.Request(f"{base_url()}/{inv_id}", method="DELETE")
         with urllib.request.urlopen(req, timeout=5) as response:
             body = json.loads(response.read().decode())
-        return body.get("status") == "cancelled"
+        return bool(body.get("cancelled", body.get("status") == "cancelled"))
     except (urllib.error.URLError, OSError, ValueError):
         return False
 
@@ -212,10 +213,10 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
         req = urllib.request.Request(
             api,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "Idempotency-Key": uuid.uuid4().hex},
             method="POST",
         )
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             data = json.loads(response.read().decode())
             inv_id = data.get("investigation_id")
     except urllib.error.URLError as e:
@@ -236,7 +237,7 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
         """
         nonlocal seq
         url = f"{api}/{inv_id}/events?since_seq={seq}"
-        with urllib.request.urlopen(urllib.request.Request(url, method="GET")) as response:
+        with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=10) as response:
             for ev in json.loads(response.read().decode()):
                 seq = max(seq, ev["seq"])
                 yield ev
@@ -246,7 +247,7 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
             yield from _drain()
 
             status_req = urllib.request.Request(f"{api}/{inv_id}", method="GET")
-            with urllib.request.urlopen(status_req) as response:
+            with urllib.request.urlopen(status_req, timeout=10) as response:
                 status_data = json.loads(response.read().decode())
                 current_state = status_data.get("status", "unknown")
                 # Ask the Runtime whether the run has stopped instead of keeping a
@@ -305,10 +306,10 @@ def stream_events(request: InvestigationRequest) -> Iterator[dict]:
     # there was no report for a run whose report was on disk. The endpoint answers
     # 409 when there is genuinely none, which is what the HTTPError handles.
     report_data: dict = {}
-    if current_state != "cancelled" and status_data.get("is_terminal"):
+    if status_data.get("is_terminal"):
         try:
             report_req = urllib.request.Request(f"{api}/{inv_id}/report", method="GET")
-            with urllib.request.urlopen(report_req) as response:
+            with urllib.request.urlopen(report_req, timeout=10) as response:
                 report_data = json.loads(response.read().decode())
         except urllib.error.HTTPError:
             pass

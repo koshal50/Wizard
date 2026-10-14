@@ -30,6 +30,7 @@ TOOL_REGISTRY: Dict[ToolName, ToolDescriptor] = {
     ToolName.BROWSER_SNAPSHOT: ToolDescriptor(ToolName.BROWSER_SNAPSHOT, "Capture the current page accessibility snapshot.", {}),
     ToolName.BROWSER_CLICK: ToolDescriptor(ToolName.BROWSER_CLICK, "Click a visible page control using its exact observed controls[].selector value.", {"selector": "string"}),
     ToolName.BROWSER_TYPE: ToolDescriptor(ToolName.BROWSER_TYPE, "Fill a visible textbox using its exact observed controls[].selector value and a supplied non-secret test value.", {"selector": "string", "text": "string"}),
+    ToolName.BROWSER_FILL_FORM: ToolDescriptor(ToolName.BROWSER_FILL_FORM, "Fill several visible form fields in one action. Pass fields as a list of {selector, text} using exact observed controls[].selector values; does NOT submit the form.", {"fields": "array"}),
     ToolName.BROWSER_BACK: ToolDescriptor(ToolName.BROWSER_BACK, "Navigate back in the investigation browser.", {}),
     ToolName.BROWSER_EXTRACT: ToolDescriptor(ToolName.BROWSER_EXTRACT, "Extract structured content from the current page.", {}),
     ToolName.INSPECT_CONFIGURATION: ToolDescriptor(ToolName.INSPECT_CONFIGURATION, "Inspect a configuration source.", {"target": "string"}),

@@ -4,11 +4,18 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 const DB_PATH = process.env.WIZARD_CEREBRAS_GATE_DB ?? join(homedir(), ".wizard", "cerebras-rate-gate.sqlite3");
+const MAX_INLINE_WAIT_SECONDS = 60;
 
 export class CerebrasRateGate {
   private readonly db: DatabaseSync;
   private readonly intervalSeconds: number;
-  constructor(intervalMs = 12_000) {
+  constructor(intervalMs?: number) {
+    // Env-tunable spacing between provider requests. Keep the conservative
+    // observed account limit of five requests per minute as the default.
+    if (intervalMs === undefined) {
+      const envSec = Number(process.env.WIZARD_CEREBRAS_INTERVAL);
+      intervalMs = Number.isFinite(envSec) && envSec >= 0 ? envSec * 1000 : 12_000;
+    }
     this.intervalSeconds = intervalMs / 1000;
     mkdirSync(dirname(DB_PATH), { recursive: true });
     this.db = new DatabaseSync(DB_PATH);
@@ -26,6 +33,12 @@ export class CerebrasRateGate {
       }
       this.db.exec("COMMIT");
       if (wait <= 0) return;
+      // A minute-level slot is safe to wait for. A provider reset many hours
+      // away is an unavailable-provider state, not useful work for an agent to
+      // silently sleep through; surface it without bypassing the shared gate.
+      if (wait > MAX_INLINE_WAIT_SECONDS) {
+        throw new Error(`Cerebras provider deferred for ${Math.ceil(wait)}s; request was not sent`);
+      }
       console.info(JSON.stringify({ event: "provider_rate_limit_wait", provider: "cerebras", wait_ms: Math.ceil(wait) }));
       await new Promise((resolve) => setTimeout(resolve, wait * 1000));
     }

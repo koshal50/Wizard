@@ -10,6 +10,8 @@ mode). Distributing across workers requires a shared process-external store
 """
 import logging
 import uuid
+import hashlib
+import json
 from datetime import datetime, timezone
 
 from wizard_kernel.contracts.request import InvestigationRequest
@@ -23,6 +25,7 @@ log = logging.getLogger(__name__)
 _TERMINAL_STATES = {
     LifecycleState.completed,
     LifecycleState.incomplete,
+    LifecycleState.blocked,
     LifecycleState.failed,
     LifecycleState.cancelled,
 }
@@ -32,10 +35,12 @@ class InvestigationManager:
     def __init__(self) -> None:
         self._store: dict[str, Investigation] = {}
         self._lock = __import__("threading").Lock()
+        self._owners: set[str] = set()
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
     def create(self, req: InvestigationRequest) -> Investigation:
+        signature = hashlib.sha256(json.dumps(req.model_dump(exclude={"idempotency_key"}), sort_keys=True).encode()).hexdigest()
         inv_id = f"inv_{uuid.uuid4().hex[:12]}"
         inv = Investigation(
             id=inv_id,
@@ -44,13 +49,63 @@ class InvestigationManager:
             targets=list(req.targets),
             options=req.options.model_dump(),
             question=req.question,
+            submission_key=req.idempotency_key,
+            submission_hash=signature,
             budget_total=req.options.budget,
             budget_remaining=req.options.budget,
         )
         with self._lock:
+            if req.idempotency_key:
+                existing = next((v for v in self._store.values() if v.submission_key == req.idempotency_key), None)
+                if existing:
+                    if existing.submission_hash and existing.submission_hash != signature:
+                        raise ValueError("Idempotency key already belongs to a different request")
+                    if (existing.question, existing.repository_path, existing.intent, existing.targets) != (req.question, req.repository_path, req.intent, list(req.targets)):
+                        raise ValueError("Idempotency key already belongs to a different request")
+                    return existing
             self._store[inv_id] = inv
             _persist(inv)   # write meta.json immediately on creation
         return inv
+
+    def claim_execution(self, inv_id: str) -> bool:
+        """Reserve a single local owner before starting an external operation."""
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv_id in self._owners or inv.state != LifecycleState.created:
+                return False
+            self._owners.add(inv_id)
+            inv.state = LifecycleState.scanning
+            _persist(inv)
+            return True
+
+    def request_cancel(self, inv_id: str) -> bool:
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv.state in _TERMINAL_STATES:
+                return False
+            inv.cancel_requested = True
+            inv.last_event = "Cancellation requested; cleaning up owned resources"
+            inv.updated_at = datetime.now(timezone.utc)
+            _persist(inv)
+            return True
+
+    def finalize(self, inv_id: str, intended_state, persist_result, **kwargs):
+        """Publish terminal state only after its report is saved, atomically with cancellation.
+
+        The callback performs short local persistence only; never external work.
+        """
+        with self._lock:
+            inv = self._store[inv_id]
+            if inv.state in _TERMINAL_STATES:
+                return inv.state
+            final = LifecycleState.cancelled if inv.cancel_requested else intended_state
+            persist_result(final)
+            for key, value in kwargs.items():
+                setattr(inv, key, value)
+            inv.state = final
+            inv.updated_at = datetime.now(timezone.utc)
+            _persist(inv)
+            return final
 
     def get(self, inv_id: str) -> Investigation | None:
         with self._lock:
@@ -81,9 +136,7 @@ class InvestigationManager:
             for k, v in kwargs.items():
                 setattr(inv, k, v)
             inv.updated_at = datetime.now(timezone.utc)
-            # Persist only on terminal transitions — avoids excessive disk I/O
-            if new_state in _TERMINAL_STATES:
-                _persist(inv)
+            _persist(inv)
 
     def all(self) -> list[Investigation]:
         with self._lock:
@@ -109,6 +162,22 @@ class InvestigationManager:
                 import json
                 data = json.loads(meta_path.read_text(encoding="utf-8"))
                 inv = _from_dict(data)
+                if inv.state not in _TERMINAL_STATES:
+                    # Resource side effects may already have happened. Never
+                    # silently rerun them after restart.
+                    inv.state = LifecycleState.cancelled if inv.cancel_requested else LifecycleState.incomplete
+                    inv.last_event = "Runtime interrupted; accepted executions were not replayed"
+                    _persist(inv)
+                    saved = fs_store.read(inv.id, "verification.json")
+                    if saved and saved.get("version") == 2:
+                        saved["stop_reason"] = inv.last_event
+                        saved["cleanup"] = "Unknown after interruption; no unrelated resources were adopted or killed"
+                        for result in saved.get("results", {}).values():
+                            if result.get("status") == "pending":
+                                result.update(status="unverified", reason=inv.last_event)
+                        fs_store.write(inv.id, "verification.json", saved)
+                        from wizard_kernel.control.verification import _render
+                        fs_store.write_text(inv.id, "verification_report.md", _render(inv, saved))
                 self._store[inv.id] = inv
                 restored += 1
             except Exception as exc:  # noqa: BLE001

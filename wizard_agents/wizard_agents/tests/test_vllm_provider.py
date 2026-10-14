@@ -161,3 +161,30 @@ def test_full_flow_through_explorer_agent(monkeypatch, vllm_env, python_project_
 
     output = ExplorerAgent(VLLMProvider()).investigate(python_project_explorer_input)
     assert output.node_id == python_project_explorer_input.current_node.node_id
+
+
+def test_non_strict_mode_honours_completion_budget_and_reasoning(monkeypatch, vllm_env):
+    """Regression for the Verifier HTTP 422: in json_object (non-strict) mode the
+    caller's max_completion_tokens was ignored (pinned at 1024) and reasoning_effort
+    was dropped, so a reasoning model truncated the assessment into invalid JSON.
+    Both must now be honoured in non-strict mode."""
+    import os
+    captured = {}
+
+    def fake_post(url, json, timeout, headers=None):  # noqa: A002
+        captured["json"] = json
+        return _FakeResponse(_content(_explorer_output_dict()))
+
+    monkeypatch.setattr("app.llm.vllm_provider.httpx.post", fake_post)
+    # Force the Cerebras gate on so reasoning_effort is eligible to be sent.
+    monkeypatch.setenv("WIZARD_LLM_BASE_URL", "https://api.cerebras.ai")
+    monkeypatch.setenv("WIZARD_LLM_MODEL", "gpt-oss-120b")
+
+    provider = VLLMProvider()
+    provider.generate_structured(
+        "sys", "user", ExplorerOutput,
+        metadata={"max_completion_tokens": 3000, "reasoning_effort": "low"},
+    )
+    assert captured["json"]["response_format"]["type"] == "json_object"
+    assert captured["json"]["max_completion_tokens"] == 3000
+    assert captured["json"].get("reasoning_effort") == "low"

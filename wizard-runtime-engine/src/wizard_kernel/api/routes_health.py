@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter
 
 router = APIRouter(tags=["health"])
@@ -5,4 +7,5 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "0.1.0",
+            "build_id": os.environ.get("WIZARD_BUILD_ID")}

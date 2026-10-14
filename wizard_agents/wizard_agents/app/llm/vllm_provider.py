@@ -69,8 +69,15 @@ class VLLMProvider(LLMProvider):
         metadata: Optional[Dict[str, Any]] = None,
     ) -> T:
         strict_schema = bool((metadata or {}).get("strict_json_schema"))
-        if strict_schema:
-            max_tokens = int((metadata or {}).get("max_completion_tokens", max_tokens))
+        # Honour a caller-supplied completion budget in BOTH modes. This used to
+        # be read only under strict schema, so the Verifier — which calls in
+        # json_object mode — was silently pinned to the 1024 default. On a
+        # reasoning model (gpt-oss-120b) 1024 tokens is exhausted by hidden
+        # reasoning before the assessment JSON is emitted, the response comes
+        # back truncated/invalid, and the adapter turns that into the HTTP 422
+        # the Verifier returned on every run. Reading the budget here lets the
+        # Verifier ask for enough room; the Explorer's strict path is unchanged.
+        max_tokens = int((metadata or {}).get("max_completion_tokens", max_tokens))
         schema = response_model.model_json_schema()
         if strict_schema:
             schema = _strict_explorer_schema(schema, metadata or {})
@@ -98,7 +105,13 @@ class VLLMProvider(LLMProvider):
         }
 
         reasoning_effort = (metadata or {}).get("reasoning_effort")
-        if strict_schema and self._cerebras_gate and self._model == "gpt-oss-120b" and reasoning_effort == "low":
+        # Apply `low` reasoning whenever the caller asked for it on the Cerebras
+        # gpt-oss model, regardless of schema mode. Gating this on strict-only
+        # left the Verifier (json_object mode) running at the model's default
+        # reasoning depth, which is what burned its completion budget. The
+        # Explorer still passes it under strict; the Verifier now passes it too.
+        if (reasoning_effort == "low" and self._cerebras_gate
+                and self._model == "gpt-oss-120b"):
             payload["reasoning_effort"] = "low"
 
         if strict_schema:
@@ -221,16 +234,25 @@ def _strict_explorer_schema(schema: dict, metadata: dict) -> dict:
 
     parameter_contracts = metadata.get("tool_parameter_schema") or {}
     type_map = {"string": "string", "integer": "integer", "number": "number", "boolean": "boolean"}
+    # An "array" parameter (e.g. browser_fill_form's `fields`) is a list of
+    # {selector, text} objects. Strict decoding needs the item shape spelled out,
+    # so this one is expanded directly rather than via the scalar type_map.
+    _ARRAY_ITEM = {
+        "type": "object",
+        "properties": {"selector": {"type": "string"}, "text": {"type": "string"}},
+        "required": ["selector", "text"], "additionalProperties": False,
+    }
     properties = schema.get("properties", {})
     if not {"investigation_id", "node_id", "tool_request"} <= set(properties):
         raise LLMError("Explorer structured schema has no parameters object")
     branches = []
     for tool in available:
-        param_properties = {
-            name: {"type": type_map[kind]}
-            for name, kind in parameter_contracts.get(tool, {}).items()
-            if kind in type_map
-        }
+        param_properties = {}
+        for name, kind in parameter_contracts.get(tool, {}).items():
+            if kind == "array":
+                param_properties[name] = {"type": "array", "items": _ARRAY_ITEM}
+            elif kind in type_map:
+                param_properties[name] = {"type": type_map[kind]}
         tool_properties = {
             "tool": {"type": "string", "enum": [tool]},
             "parameters": {

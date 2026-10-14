@@ -69,7 +69,9 @@ export class TechnologyPlanner {
     const result = await this.llm.generateStructured(request, technologyPlanSchema);
     if (!result.ok) {
       this.logger.warn("planner.technology.failed", { provider: result.provider, errors: result.errors, raw: result.errors.some((error) => error.startsWith("openai: HTTP ")) ? result.raw : undefined });
-      return { technologies: [] };
+      // An unavailable provider is not a valid empty plan. Returning [] made
+      // Runtime appear idle (no goals/nodes) after a 429 or timeout.
+      throw new Error(`PLANNER_PROVIDER_FAILURE (${result.provider}): ${result.errors.join("; ")}`);
     }
     this.logger.info("planner.technology.planned", {
       provider: result.provider,

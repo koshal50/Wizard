@@ -62,7 +62,7 @@ def disbelief(evidences: list[Evidence]) -> float:
 
 def source_tier_for_tool(tool_name: str) -> SourceTier:
     """Infer evidence source tier from the tool that produced the observation."""
-    if tool_name in ("execute_command", "check_port", "start_process", "read_process"):
+    if tool_name in ("execute_command", "check_port", "start_process", "read_process", "kill_process", "http_request"):
         return "execution"
     # Live browser interaction is execution-tier evidence (a real page, right now),
     # exactly like running a command against a live system.

@@ -16,6 +16,13 @@ class InvestigationGraph:
     def get(self, node_id: str) -> InvestigationNode | None:
         return self._nodes.get(node_id)
 
+    def assign_goal(self, node_id: str, goal_id: str) -> None:
+        """Persist the Runtime's goal attribution for an untagged seed node."""
+        node = self._nodes[node_id]
+        if node.goal_id is not None and node.goal_id != goal_id:
+            raise ValueError(f"node {node_id} already belongs to goal {node.goal_id}")
+        self._nodes[node_id] = node.model_copy(update={"goal_id": goal_id})
+
     def all_nodes(self) -> list[InvestigationNode]:
         return list(self._nodes.values())
 

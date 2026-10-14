@@ -25,6 +25,7 @@ export class OngoingPlanner {
   async plan(built: BuiltContext, opts: ValidationOptions): Promise<ValidatedBatch> {
     const request = buildOngoingPlanPrompt(built.plannerContext, built.heuristicContext);
     const result = await this.llm.generateStructured(request, plannerNodeBatchSchema);
+
     if (!result.ok) {
       this.logger.warn("planner.ongoing.failed", { provider: result.provider, errors: result.errors, raw: result.errors.some((error) => error.startsWith("openai: HTTP ")) ? result.raw : undefined });
       return { accepted: [], rejected: [], rationale: `provider failed: ${result.errors.join("; ")}` };

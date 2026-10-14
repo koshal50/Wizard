@@ -75,10 +75,15 @@ export function goalEvidenceFor(name: string): GoalEvidence {
     return { required_claim_types: ["DEPLOYMENT"], requires_execution_evidence: execution, required_evidence: execution ? ["docker_execution"] : ["repository_read"] };
   }
   if (/endpoint|\bapi\b|http|auth(?:entication)?\s+(?:endpoint|route)|protected routes?/.test(n)) return { required_claim_types: ["WEB"], requires_execution_evidence: true, required_evidence: ["http_response"] };
-  if (/web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b/.test(n)) {
+  if (/web|browser|front[- ]?end|\bui\b|page|dashboard|render|endpoint|\bapi\b|sign ?up|sign ?in|log ?in|register|registration/.test(n)) {
     const required = ["WEB"];
     const evidence = ["browser_navigation", "browser_observation"];
     if (/after auth|authenticate|log ?in|sign ?in|submit|click|fill/.test(n)) { required.push("INTERACTION"); evidence.push("browser_interaction"); }
+    if (/\b(test|try|complete|submit|fill|exercise)\b/.test(n) && /sign ?up|sign ?in|log ?in|register|registration/.test(n)) {
+      evidence.push("browser_form_input", "browser_form_submission");
+    } else if (/\bsubmit\w*\b/.test(n) && /sign ?up|sign ?in|log ?in|register|registration/.test(n)) {
+      evidence.push("browser_form_submission");
+    }
     if (/\b(start|launch|run|execute|compile|build|listen|serve)\b/.test(n)) {
       required.push("RUNTIME"); evidence.unshift("process_execution");
       if (/\b(compile|build|npm run|command)\b/.test(n)) evidence.unshift("command_execution");

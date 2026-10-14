@@ -105,6 +105,23 @@ class TestReportGeneration:
         assert "Verdict" in md
         assert "RUNTIME" in md
 
+    def test_report_preserves_planner_failure_before_any_work(self, tmp_path):
+        inv = _inv(tmp_path)
+        graph = InvestigationGraph(inv.id)
+        kg = KnowledgeGraph(inv.id)
+
+        md = report_module.generate(
+            inv, graph, [], kg, failure=(
+                "PLANNER_PROVIDER_FAILURE: Cerebras provider deferred for 83971s; "
+                "request was not sent"
+            )
+        )
+
+        assert "| **Status** | FAILED |" in md
+        assert "## Why the investigation stopped" in md
+        assert "request was not sent" in md
+        assert "Budget may have been insufficient" not in md
+
     def test_a_file_read_is_not_presented_as_a_finding(self, tmp_path):
         """The summary says what the run learned, not which files it opened.
 
@@ -254,7 +271,7 @@ class TestReportGeneration:
         goals = GoalEngine(inv.id)
         g = Goal(id="goal_001", name="Verify Runtime", required_claim_types=["RUNTIME"])
         goals.add(g)
-        goals.mark_satisfied("goal_001")
+        goals.get("goal_001").state = "satisfied"  # GoalEngine satisfies by evidence; force state for this report test
 
         md = report_module.generate(inv, graph, [obs], kg, goals)
         assert "Goals Summary" in md

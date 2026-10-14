@@ -11,5 +11,6 @@ router = APIRouter(tags=["health"])
 def health() -> dict:
     return {
         "status": "ok",
+        "build_id": os.environ.get("WIZARD_BUILD_ID"),
         "llm_provider": os.environ.get("WIZARD_LLM_PROVIDER", "mock"),
     }

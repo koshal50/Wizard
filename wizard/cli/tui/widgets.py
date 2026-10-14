@@ -51,7 +51,7 @@ from prompt_toolkit.formatted_text import ANSI
 from wizard import __version__
 from wizard.cli.tui.art import banner, banner_size
 from wizard.cli.tui.history import load_recent
-from wizard.cli.tui.session import LogLine
+from wizard.cli.tui.session import LogLine, sanitize_terminal
 from wizard.cli.tui.theme import EMBER_RAMP, WIZARD_THEME, ramp_at
 
 # One console, reused. truecolor so the art's own colours and the hex ramps land
@@ -588,13 +588,13 @@ def _control_line(control: dict, acted: bool, width: int) -> Text:
         glyph, style = " ", "wiz.unselected"
 
     role = str(control.get("role") or "")
-    name = " ".join(str(control.get("name") or "").split())
+    name = sanitize_terminal(" ".join(str(control.get("name") or "").split()))
     # A field is worth its contents — "the credentials actually landed" is the
     # finding a run that drives a form exists to get — so a value rides on the
     # control's own line rather than in a section of its own.
     value = control.get("value")
     if value:
-        name = f"{name} = {value}"
+        name = f"{name} = {sanitize_terminal(str(value))}"
 
     line = Text()
     line.append(f"{glyph} ")
@@ -636,8 +636,8 @@ def page_content(snap: dict, t: float, width: int) -> RenderableType:
         parts.append(_elapsed_line(snap, t))
         return Group(*parts)
 
-    url = str(page.get("url") or "")
-    title = " ".join(str(page.get("title") or "").split())
+    url = sanitize_terminal(str(page.get("url") or ""))
+    title = sanitize_terminal(" ".join(str(page.get("title") or "").split()))
     controls = page.get("controls") or []
 
     parts.append(Text(_clip(url, width), style="wiz.accent"))
@@ -683,7 +683,8 @@ def page_content(snap: dict, t: float, width: int) -> RenderableType:
         # the reader decides what it means.
         suffix = f" · page {act['effect']}" if act.get("effect") else ""
         value = f" = {act['value']!r}" if act.get("value") is not None else ""
-        target = act.get("name") or _control_name(controls, acted_selector)
+        value = sanitize_terminal(value)
+        target = sanitize_terminal(act.get("name") or _control_name(controls, acted_selector))
         if not target:
             # Nothing on the page answers to that selector any more and the
             # runtime did not catch its name in time, so the selector is the only
@@ -753,7 +754,10 @@ def result_content(family: str, snap: dict, t: float) -> RenderableType:
     else:
         content = Text("No report was produced.", style="wiz.dim")
 
-    parts: list[RenderableType] = [badge, Text(""), content, Text("")]
+    parts: list[RenderableType] = [badge]
+    if snap.get("report_path"):
+        parts.append(Text("Report saved: " + _short_path(snap["report_path"]), style="wiz.meter.val"))
+    parts.extend([Text(""), content, Text("")])
     # On a failure the only useful thing on screen is the reason.
     if status != "completed":
         last = snap.get("now") or ""

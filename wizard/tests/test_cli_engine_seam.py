@@ -389,6 +389,19 @@ def test_reports_are_numbered_and_never_overwritten(monkeypatch, tmp_path):
     assert first.read_text(encoding="utf-8") == "first"
 
 
+def test_report_is_saved_under_investigated_repository_not_shell_cwd(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    repository = tmp_path / "target"
+    repository.mkdir()
+    shell = tmp_path / "shell"
+    shell.mkdir()
+    monkeypatch.chdir(shell)
+    request = SimpleNamespace(repository=SimpleNamespace(path=str(repository)))
+    path = runtime_client._write_report("Actual report", request)
+    assert path and (repository / "output" / "verification_report(1).md").read_text(encoding="utf-8") == "Actual report"
+    assert not (shell / "output").exists()
+
+
 # ── The TUI's cancel path ─────────────────────────────────────────────────────
 
 def test_escape_cancels_the_investigation_in_the_engine(engine):
@@ -512,6 +525,8 @@ def test_a_runtime_that_does_not_accept_the_question_is_refused(monkeypatch, tmp
     from wizard.cli.tui import services
 
     monkeypatch.setattr(services, "healthy", lambda spec, timeout=1.5: True)
+    monkeypatch.setattr(services, "service_build_id",
+                        lambda spec, timeout=1.5: spec.env["WIZARD_BUILD_ID"])
     monkeypatch.setattr(services, "missing_request_fields",
                         lambda port, timeout=3.0: ("question",))
     state = services.ensure_service(_kernel_spec(), tmp_path)
@@ -526,11 +541,23 @@ def test_a_runtime_that_accepts_the_question_is_adopted(monkeypatch, tmp_path):
     from wizard.cli.tui import services
 
     monkeypatch.setattr(services, "healthy", lambda spec, timeout=1.5: True)
+    monkeypatch.setattr(services, "service_build_id",
+                        lambda spec, timeout=1.5: spec.env["WIZARD_BUILD_ID"])
     monkeypatch.setattr(services, "missing_request_fields",
                         lambda port, timeout=3.0: ())
     state = services.ensure_service(_kernel_spec(), tmp_path)
     assert state.status == "adopted"
     assert state.ok is True
+
+
+def test_a_healthy_but_stale_runtime_is_not_adopted(monkeypatch, tmp_path):
+    from wizard.cli.tui import services
+
+    monkeypatch.setattr(services, "healthy", lambda spec, timeout=1.5: True)
+    monkeypatch.setattr(services, "service_build_id", lambda spec, timeout=1.5: None)
+    state = services.ensure_service(_kernel_spec(), tmp_path)
+    assert state.status == "unavailable"
+    assert "older Wizard" in state.detail
 
 
 def test_a_schema_that_cannot_be_read_is_not_a_missing_field(monkeypatch):

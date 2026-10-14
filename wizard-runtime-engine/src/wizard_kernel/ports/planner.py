@@ -1,6 +1,7 @@
 """Planner port — protocol + MockPlanner + HttpPlanner (Phase 6). Phase 3."""
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Protocol, runtime_checkable
 
@@ -298,8 +299,27 @@ class HttpPlanner:
 
     def _post(self, path: str, payload: dict) -> dict:
         import httpx
-        r = httpx.post(f"{self._url}{path}", json=payload, timeout=30)
-        r.raise_for_status()
+        # The planner is LLM-backed (the TypeScript service calls Cerebras
+        # gpt-oss-120b) and sits behind a cross-process rate gate, so a single
+        # /plan/* call legitimately spends the gate wait (up to ~12s) plus model
+        # latency before it answers. The old 30s ceiling fired mid-plan on a real
+        # run — httpx.ReadTimeout propagated out of run() and ended an otherwise
+        # healthy investigation as `failed: timed out`, discarding minutes of
+        # real browser/evidence work. The budget bounds how many of these happen;
+        # each one must be allowed to finish, so the per-call timeout tracks the
+        # gated-LLM reality rather than a bare HTTP default. Overridable via env.
+        timeout = float(os.environ.get("WIZARD_PLANNER_TIMEOUT", "180"))
+        r = httpx.post(f"{self._url}{path}", json=payload, timeout=timeout)
+        if r.is_error:
+            # Preserve the Planner's controlled provider error in the Runtime
+            # terminal state instead of surfacing only a generic HTTPStatusError.
+            try:
+                detail = r.json().get("error")
+            except (ValueError, AttributeError):
+                detail = None
+            raise RuntimeError(
+                f"planner HTTP {r.status_code}: {detail or r.reason_phrase}"
+            )
         return r.json()
 
     def initial(

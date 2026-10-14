@@ -1694,6 +1694,26 @@ def test_a_finished_run_crosses_to_the_result_by_itself(tui, monkeypatch):
         "a run that finished left the user on the working screen")
 
 
+def test_browser_run_completion_replaces_page_with_saved_report(tui, monkeypatch):
+    monkeypatch.setattr(tui, "_record_history", lambda snap: None)
+    tui.family = "verify"
+    tui.state = WORKING
+    tui.show_page = True
+    tui.session = _session(on_change=tui._invalidate)
+    tui.session.page = {"url": "http://localhost/", "title": "Application"}
+    tui.session._consume({"event_type": "done", "status": "completed",
+                          "report_markdown": "# Final verification evidence",
+                          "report_path": "output/verification_report.md"})
+
+    assert tui.state == RESULT
+    assert not tui.show_page
+    rendered = _render(tui)
+    assert "Final verification evidence" in rendered
+    assert "Report saved:" in rendered
+    assert "verification_report.md" in rendered
+    assert tui.session.snapshot()["page"]["title"] == "Application"
+
+
 def test_the_run_screen_takes_no_typing(tui):
     """The box is inert during a run: there is no mid-run steering endpoint.
 
@@ -2615,3 +2635,49 @@ def test_a_cached_frame_declares_its_height_too(tui):
         f"a cached frame left a stale height behind: the cursor line "
         f"{tui._cursor_line()} is past the last line of a {len(rendered)}-line frame"
     )
+
+
+def test_control_bytes_from_the_page_never_reach_the_terminal():
+    """A DOM snapshot / typed value carrying ANSI or C0 control bytes must be
+    stripped before it enters the TUI — otherwise prompt_toolkit emits it to the
+    terminal verbatim, which is the mid-run 'random characters' corruption."""
+    from wizard.cli.tui.session import sanitize_terminal
+    dirty = "Email \x1b[2J\x1b[31mfield\x07 value\x00\x9b6n\r"
+    clean = sanitize_terminal(dirty)
+    assert "\x1b" not in clean and "\x07" not in clean and "\x00" not in clean
+    assert "\x9b" not in clean and "\r" not in clean
+    # Real text survives.
+    assert "Email" in clean and "field" in clean and "value" in clean
+
+
+def test_logged_lines_are_sanitized():
+    from wizard.cli.tui.session import sanitize_terminal
+    s = _session()
+    s._log("typed \x1b[31mhacked\x1b[0m\x07", "wiz.ok")
+    assert all("\x1b" not in ln.text and "\x07" not in ln.text for ln in s.activity)
+
+
+def test_page_pane_sanitizes_control_labels_and_values():
+    from wizard.cli.tui.widgets import page_content
+    snap = {"page": {"url": "http://x\x1b[2J", "title": "App\x07",
+                      "controls": [{"role": "textbox", "name": "Email\x1b[31m",
+                                    "value": "a\x00b", "selector": "s"}],
+                      "node_count": 1}}
+    out = _plain_render(page_content(snap, 0.0, 70)) if False else None
+    # Render through the same path the TUI uses and assert no ESC/C0 leaks.
+    from rich.console import Console
+    import io
+    buf = io.StringIO()
+    Console(file=buf, width=70, force_terminal=False).print(page_content(snap, 0.0, 70))
+    text = buf.getvalue()
+    assert "\x1b[2J" not in text and "\x07" not in text and "\x00" not in text
+
+
+def test_mouse_support_is_on_so_the_wheel_does_not_fall_back_to_arrow_keys(tui):
+    """Mouse support must be ON. With it OFF the terminal reports the scroll
+    wheel as arrow-key escape sequences (`^[[A`/`^[[B`) that leak onto the
+    screen as literal text; ON, the wheel is reported as SGR mouse events that
+    prompt_toolkit consumes."""
+    ms = tui.app.mouse_support
+    value = ms() if callable(ms) else ms
+    assert value is True

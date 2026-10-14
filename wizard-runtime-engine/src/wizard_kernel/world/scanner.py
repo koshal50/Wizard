@@ -64,7 +64,8 @@ def scan(repo_path: str, investigation_id: str) -> RepositoryManifest:
             except OSError:
                 pass
 
-            if fname in _SIGNALS:
+            if fname in _SIGNALS or fname.lower().startswith(("readme", "getting_started")) or ext in {
+                "uproject", "uplugin", "blend", "csproj", "sln", "godot"}:
                 key_files.append(rel_file)
 
     return RepositoryManifest(

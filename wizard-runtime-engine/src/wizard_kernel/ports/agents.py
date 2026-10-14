@@ -1,6 +1,22 @@
 """Agent ports — Explorer + Verifier. Protocol + Mock + Http. Phase 6."""
+import os
 from typing import Protocol, runtime_checkable
 from wizard_kernel.contracts.agent import ExplorerResponse, VerifierAssessment
+
+
+def _agent_timeout() -> float:
+    """HTTP timeout for a kernel→agent call, in seconds.
+
+    The Explorer/Verifier agents call Cerebras (gpt-oss-120b) behind the shared
+    rate gate, so a single decision legitimately spends the gate wait plus model
+    inference — well past the old 30s ceiling, which fired as a bare
+    "timed out" and killed otherwise-healthy browser progressions right after a
+    snapshot. Matches the planner client's generous, env-tunable timeout.
+    """
+    try:
+        return float(os.environ.get("WIZARD_AGENT_TIMEOUT", "180"))
+    except ValueError:
+        return 180.0
 
 
 @runtime_checkable
@@ -55,7 +71,7 @@ class HttpExplorer:
         # Strip any trust/graph fields before sending (invariant 3)
         safe_context = {k: v for k, v in context.items()
                         if k not in ("trust", "knowledge_graph_raw")}
-        r = httpx.post(self._url, json=safe_context, timeout=30)
+        r = httpx.post(self._url, json=safe_context, timeout=_agent_timeout())
         if r.is_error:
             try:
                 detail = r.json().get("detail")
@@ -89,7 +105,7 @@ class HttpVerifier:
         import httpx
         r = httpx.post(self._url,
                        json={"investigation_id": investigation_id, "claims": claims},
-                       timeout=30)
+                       timeout=_agent_timeout())
         r.raise_for_status()
         data = r.json()
         # Strip trust fields if agent tried to set them (invariant 3)

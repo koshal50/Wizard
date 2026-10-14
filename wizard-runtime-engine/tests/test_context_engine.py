@@ -131,7 +131,8 @@ def test_process_session_state_is_carried_into_next_explorer_packet():
     inv, node, goals, kg, budget = _state()
     process = _obs("command_result", "start_process", {
         "ok": True,
-        "data": {"handle_id": "proc-safe", "pid": 123, "is_running": True,
+        "data": {"handle_id": "proc-safe", "command": "run-declared-server", "cwd": "client",
+                 "pid": 123, "is_running": True,
                  "stdout_so_far": "Local endpoint reported by process"},
         "meta": {"handle_id": "proc-safe"},
     })
@@ -143,6 +144,9 @@ def test_process_session_state_is_carried_into_next_explorer_packet():
     previous = packet["previous_actions"][0]
     assert previous["tool"] == "start_process"
     assert previous["parameters"]["handle_id"] == "proc-safe"
+    assert previous["parameters"]["command"] == "run-declared-server"
+    assert packet["resource_state"]["process"][-1]["cwd"] == "client"
+    assert packet["resource_state"]["readiness"] == "not_established"
     assert '"is_running": true' in previous["outcome"]
 
 
@@ -163,6 +167,25 @@ def test_latest_browser_interaction_page_schema_reaches_explorer_context():
     assert packet["resource_state"]["browser"]["url"] == "http://localhost/signup"
     assert packet["resource_state"]["browser"]["controls"][0]["selector"] == 'role=textbox[name="Email"]'
     assert 'textbox "Email"' in packet["resource_state"]["browser"]["snapshot"]
+
+
+def test_browser_snapshot_is_not_duplicated_in_previous_action_history():
+    inv, node, goals, kg, budget = _state()
+    snapshot = _obs("page_content", "browser_snapshot", {
+        "ok": True,
+        "data": {"url": "http://localhost/", "title": "Home",
+                 "snapshot": "textbox Email" * 1000,
+                 "controls": [{"role": "textbox", "name": "Email", "value": "private"}]},
+    })
+    packet = Packager().build_explorer_packet(
+        inv, node, goals, kg, budget, _ObsStub([snapshot]),
+    )
+    # The current page schema is carried once in resource_state; action history
+    # retains only the compact outcome and never repeats the snapshot/input value.
+    assert len(packet["previous_actions"][0]["outcome"]) < 500
+    assert "private" not in packet["previous_actions"][0]["outcome"]
+    assert "snapshot" not in packet["previous_actions"][0]["outcome"]
+    assert "value" not in packet["resource_state"]["browser"]["controls"][0]
 
 
 def test_explorer_sections_ids_and_priorities():
@@ -393,3 +416,32 @@ def test_loop_emits_context_supplied_end_to_end():
     # Every supply carries the explorer's stable system_instructions section.
     assert all("system_instructions" in e.payload["section_ids"] for e in supplied)
     assert any(e.payload["from_cache"] is False for e in supplied)
+
+
+def test_discover_runnable_commands_classifies_lifecycle(tmp_path):
+    """package.json scripts are surfaced with an inferred lifecycle so an agent
+    can pick a server for a browser goal instead of a one-shot build."""
+    import json
+    from wizard_kernel.context.packager import _discover_runnable_commands
+    (tmp_path / "package.json").write_text(json.dumps({
+        "scripts": {"dev": "vite", "build": "vite build", "start": "node server.js",
+                    "test": "jest", "lint": "eslint ."}
+    }), encoding="utf-8")
+    cmds = {c["command"]: c["lifecycle"] for c in _discover_runnable_commands(str(tmp_path))}
+    assert cmds["npm run dev"] == "long_running"
+    assert cmds["npm run start"] == "long_running"
+    assert cmds["npm run build"] == "one_shot"
+    assert cmds["npm run test"] == "one_shot"
+    assert cmds["npm run lint"] == "one_shot"
+
+
+def test_discover_runnable_commands_reads_workspaces_and_tolerates_missing(tmp_path):
+    import json
+    from wizard_kernel.context.packager import _discover_runnable_commands
+    # No package.json at all → empty, never raises.
+    assert _discover_runnable_commands(str(tmp_path)) == []
+    (tmp_path / "client").mkdir()
+    (tmp_path / "client" / "package.json").write_text(
+        json.dumps({"scripts": {"dev": "vite"}}), encoding="utf-8")
+    cmds = _discover_runnable_commands(str(tmp_path))
+    assert any(c["command"] == "npm run dev" and c["cwd"] == "client" for c in cmds)

@@ -263,15 +263,19 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify(obj));
   };
   const url = (req.url ?? "").split("?")[0]!;
-  if (req.method === "GET" && url === "/health") return send(200, { ok: true });
+  if (req.method === "GET" && url === "/health") {
+    return send(200, { ok: true, build_id: process.env.WIZARD_BUILD_ID ?? null });
+  }
   const handler = req.method === "POST" ? routes[url] : undefined;
   if (!handler) return send(404, { error: "not found" });
   try {
     const body = await readBody(req);
     send(200, await handler(body));
   } catch (e) {
-    logger.warn("plan.request.failed", { url, error: (e as Error).message });
-    send(400, { error: (e as Error).message });
+    const message = (e as Error).message;
+    const providerFailure = message.startsWith("PLANNER_PROVIDER_FAILURE");
+    logger.warn("plan.request.failed", { url, error: message });
+    send(providerFailure ? 502 : 400, { error: message });
   }
 });
 

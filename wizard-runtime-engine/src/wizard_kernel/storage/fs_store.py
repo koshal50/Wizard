@@ -10,8 +10,37 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
+import threading
+import time
 from pathlib import Path
 from typing import Any
+
+
+_io_lock = threading.RLock()
+
+
+def _atomic_write(path: Path, text: str) -> Path:
+    # Readers in this service must close the destination before Windows replace.
+    # Unique staging files also prevent concurrent writers sharing a .tmp file.
+    with _io_lock:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as handle:
+            handle.write(text)
+            temporary = Path(handle.name)
+        try:
+            for attempt in range(6):
+                try:
+                    temporary.replace(path)
+                    return path
+                except PermissionError as exc:
+                    # External Windows readers/AV may briefly deny replacement.
+                    # Permanent permissions and exhausted contention still fail.
+                    if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                        raise
+                    time.sleep(0.01 * (2 ** attempt))
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def data_root() -> Path:
@@ -43,44 +72,37 @@ def write(inv_id: str, filename: str, data: dict | list) -> Path:
     """Write JSON document (meta, graphs, claims, etc.)."""
     _assert_safe_filename(filename)
     p = ensure(inv_id) / filename
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    tmp.replace(p)
-    return p
+    return _atomic_write(p, json.dumps(data, indent=2, default=str))
 
 
 def write_text(inv_id: str, filename: str, text: str) -> Path:
     """Write raw text (e.g. verification_report.md)."""
     _assert_safe_filename(filename)
     p = ensure(inv_id) / filename
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(p)
-    return p
+    return _atomic_write(p, text)
 
 
 def read(inv_id: str, filename: str) -> dict | list | None:
     _assert_safe_filename(filename)
     p = inv_dir(inv_id) / filename
-    if not p.exists():
-        return None
-    return json.loads(p.read_text(encoding="utf-8"))
+    with _io_lock:
+        if not p.exists():
+            return None
+        return json.loads(p.read_text(encoding="utf-8"))
 
 
 def read_text(inv_id: str, filename: str) -> str | None:
     _assert_safe_filename(filename)
     p = inv_dir(inv_id) / filename
-    if not p.exists():
-        return None
-    return p.read_text(encoding="utf-8")
+    with _io_lock:
+        if not p.exists():
+            return None
+        return p.read_text(encoding="utf-8")
 
 
 def write_observation(inv_id: str, seq: int, data: dict[str, Any]) -> Path:
     p = ensure(inv_id) / "observations" / f"o_{seq:04d}.json"
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
-    tmp.replace(p)
-    return p
+    return _atomic_write(p, json.dumps(data, indent=2, default=str))
 
 
 def report_path(inv_id: str) -> Path:

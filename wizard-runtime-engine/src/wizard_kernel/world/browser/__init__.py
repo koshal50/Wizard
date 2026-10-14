@@ -1,11 +1,4 @@
-"""Agentic browser subsystem — a browser action is just another Wizard tool.
-
-Net-new and self-contained: it owns the Playwright lifecycle (``runtime.py``), a
-factory that mirrors ``world/sandbox`` (``factory.py``), and a per-investigation
-registry so the async ``/screencast`` route can find an investigation's live page
-by id — mirroring the ``EventBus`` registry in ``session/events.py``. Nothing here
-is imported unless an investigation sets ``browser_enabled=True``.
-"""
+"""Investigation-scoped agent-browser sessions and the existing Runtime registry."""
 from __future__ import annotations
 
 from wizard_kernel.world.browser.factory import get_browser

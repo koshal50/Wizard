@@ -40,7 +40,16 @@ class VerificationAgent:
                 system_prompt=VERIFICATION_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 response_model=VerificationOutput,
-                metadata={"input": verification_input.model_dump(mode="json")},
+                metadata={
+                    "input": verification_input.model_dump(mode="json"),
+                    # The assessment is a nested object with a markdown summary,
+                    # so it needs real room; the 1024 default truncated it on a
+                    # reasoning model and the adapter returned HTTP 422 every
+                    # run. `low` reasoning keeps the hidden-token spend bounded so
+                    # the budget reaches the JSON.
+                    "max_completion_tokens": 3000,
+                    "reasoning_effort": "low",
+                },
             )
         except LLMError as exc:
             raise VerificationAgentError(f"Verification LLM call failed: {exc}") from exc

@@ -81,12 +81,6 @@ def investigate(
     # browser at a port nothing is listening on would fail to navigate and
     # report that failure as the wizard's.
     urls = list(parsed.urls)
-    if not urls:
-        from wizard.cli.parser.frontend import browsable
-
-        found = browsable(repo_path)
-        if found is not None:
-            urls = [found.url]
 
     intent = build_intent(
         action="investigate",

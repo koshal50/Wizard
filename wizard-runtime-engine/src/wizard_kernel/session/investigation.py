@@ -20,6 +20,9 @@ class Investigation:
     # Planner's to read, not the kernel's to interpret. Defaulted so an
     # investigation persisted before this field existed still restores.
     question: str = ""
+    submission_key: str | None = None
+    submission_hash: str | None = None
+    cancel_requested: bool = False
     state: LifecycleState = LifecycleState.created
     budget_total: int = 40
     budget_remaining: int = 40

@@ -43,3 +43,4 @@ package*node_modules/
 
 # TypeScript build output
 *.tsbuildinfo
+WIZARD_REBUILD_PLAN.md

@@ -48,43 +48,6 @@ async def screencast(ws: WebSocket, inv_id: str) -> None:
         await ws.close()
         return
 
-    loop = asyncio.get_running_loop()
-    frames: asyncio.Queue[str] = asyncio.Queue(maxsize=8)
-
-    def on_frame(data: str) -> None:
-        # Runs on the browser's loop thread — hop back to THIS loop.
-        def _put() -> None:
-            if frames.full():
-                try:
-                    frames.get_nowait()  # drop oldest — pixels are ephemeral
-                except asyncio.QueueEmpty:
-                    pass
-            frames.put_nowait(data)
-        loop.call_soon_threadsafe(_put)
-
-    async def _pump() -> None:
-        while True:
-            data = await frames.get()
-            try:
-                await ws.send_json({"type": "frame", "data": data})
-            except Exception:  # noqa: BLE001 — socket gone; finally will clean up
-                return
-
-    pump_task = asyncio.create_task(_pump())
-    try:
-        await asyncio.to_thread(runtime.start_screencast, on_frame)
-        while True:
-            msg = await ws.receive_json()
-            # Inbound co-drive input (only sent when the viewer toggles "take over").
-            if isinstance(msg, dict) and msg.get("kind") in ("mouse", "key"):
-                await asyncio.to_thread(runtime.send_input, msg)
-    except WebSocketDisconnect:
-        pass
-    except Exception:  # noqa: BLE001 — a socket error must never crash the server
-        log.debug("screencast socket error for %s", inv_id, exc_info=True)
-    finally:
-        pump_task.cancel()
-        try:
-            await asyncio.to_thread(runtime.stop_screencast)
-        except Exception:  # noqa: BLE001
-            pass
+    await ws.send_json({"type": "error", "message":
+                        "Live pixel streaming is not enabled for agent-browser; use the browser window or persisted page observations."})
+    await ws.close()

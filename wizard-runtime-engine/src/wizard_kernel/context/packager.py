@@ -23,6 +23,8 @@ kernel invariant 3, the same boundary _build_explorer_context already enforced.
 from __future__ import annotations
 
 import json
+import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from wizard_kernel.context.sections import ContextSection
@@ -41,6 +43,132 @@ if TYPE_CHECKING:
 # How much recent history the volatile sections surface (compressed).
 _RECENT_OBS_N = 5
 _RECENT_FAIL_N = 3
+
+# Script name / command fragments that mark a long-running service rather than a
+# one-shot task. Matched generically against the script NAME and its command, so
+# it works for any ecosystem's conventions without naming a framework.
+_LONG_RUNNING_HINTS = ("dev", "start", "serve", "server", "watch", "preview",
+                       "up", "runserver", "--watch", "nodemon", "vite", "next ")
+_ONE_SHOT_HINTS = ("build", "test", "lint", "typecheck", "format", "compile",
+                   "migrate", "seed", "clean", "prepare", "check")
+_CONTEXT_SECRET = re.compile(
+    r"(?i)(\b(?:password|passwd|secret|token|api[_-]?key|authorization|cookie)\b\s*[:=]\s*)[^\s,;]+"
+)
+
+
+def _safe_preview(value: object, limit: int = 700) -> str:
+    """Bound process output before it enters an agent request; hide common secrets."""
+    text = str(value or "")
+    text = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", text)
+    text = _CONTEXT_SECRET.sub(r"\1[REDACTED]", text)
+    return text[-limit:]
+
+
+def _compact_outcome(obs: "Observation") -> str:
+    """Keep decision-relevant results without repeating page schemas in history.
+
+    The latest browser schema is already supplied in `resource_state.browser`.
+    Serializing the complete browser result into `previous_actions` duplicated
+    snapshots (up to 4 KB per action) in every subsequent Explorer request.
+    """
+    payload = obs.payload or {}
+    result = {key: payload[key] for key in (
+        "ok", "error", "detail", "error_type", "exit_code",
+    ) if key in payload}
+    for key in ("stdout", "stderr"):
+        if payload.get(key):
+            result[key + "_preview"] = _safe_preview(payload[key])
+    data = payload.get("data")
+    if isinstance(data, dict):
+        keys = {
+            "url", "title", "status", "status_code", "active", "host", "port",
+            "pid", "is_running", "exit_code", "handle_id", "all_filled",
+            "clicked", "effect", "selector_name", "submitted_form", "command", "cwd",
+        }
+        compact = {key: data[key] for key in keys if key in data}
+        for key in ("command", "cwd"):
+            if key in compact:
+                compact[key] = _safe_preview(compact[key], 500 if key == "command" else 300)
+        for key in ("stdout_so_far", "stderr_so_far", "stdout", "stderr"):
+            if data.get(key):
+                compact[key + "_preview"] = _safe_preview(data[key])
+        fields = data.get("fields")
+        if isinstance(fields, list):
+            compact["fields"] = [
+                {key: field.get(key) for key in ("selector", "typed", "error") if key in field}
+                for field in fields[:12] if isinstance(field, dict)
+            ]
+        result["data"] = compact
+    return json.dumps(result, default=str, ensure_ascii=False)[:1500]
+
+
+def _classify_lifecycle(name: str, command: str) -> str:
+    """"long_running" | "one_shot" | "unknown" for a declared command.
+
+    A browse-the-app goal needs a long-running service; a build-verification goal
+    is satisfied by a one-shot. The Runtime does not decide WHICH to run — it only
+    surfaces the distinction so an agent can choose. Name wins when it is
+    unambiguous (``dev`` is a server even if it shells out to a bundler); the
+    command text is the tie-breaker.
+    """
+    text = f"{name} {command}".lower()
+    long_hit = any(h in text for h in _LONG_RUNNING_HINTS)
+    one_hit = any(h in text for h in _ONE_SHOT_HINTS)
+    if long_hit and not one_hit:
+        return "long_running"
+    if one_hit and not long_hit:
+        return "one_shot"
+    # A name like "start" (long) that runs "build && node" — prefer the name.
+    if any(h in name.lower() for h in _LONG_RUNNING_HINTS):
+        return "long_running"
+    if any(h in name.lower() for h in _ONE_SHOT_HINTS):
+        return "one_shot"
+    return "unknown"
+
+
+def _discover_runnable_commands(repo_path: str) -> list[dict]:
+    """Commands the repository itself declares, with an inferred lifecycle.
+
+    Reads only what the repo states — currently package.json ``scripts`` at the
+    root and one level of workspace-ish subdirectories — so nothing here is
+    specific to any one project. Returns [] on any read/parse problem rather than
+    raising: missing or malformed manifests are normal and must not break context
+    assembly. Capped so a repo with dozens of scripts cannot bloat the packet.
+    """
+    out: list[dict] = []
+    if not repo_path:
+        return out
+    try:
+        root = Path(repo_path)
+    except (TypeError, ValueError):
+        return out
+    candidates = [root / "package.json"]
+    try:
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and (child / "package.json").is_file():
+                candidates.append(child / "package.json")
+    except OSError:
+        pass
+    for pkg in candidates[:6]:
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        scripts = data.get("scripts") if isinstance(data, dict) else None
+        if not isinstance(scripts, dict):
+            continue
+        where = "." if pkg.parent == root else pkg.parent.name
+        for name, command in list(scripts.items())[:20]:
+            out.append({
+                "command": f"npm run {name}",
+                "definition": str(command)[:400],
+                "cwd": where,
+                "lifecycle": _classify_lifecycle(str(name), str(command)),
+            })
+        if len(out) >= 24:
+            break
+    return out[:24]
+
 # Claims at or above this belief score read as "verified"; below, "assumptions".
 # Matches KnowledgeGraph.summary()'s own high-trust threshold — one source.
 _VERIFIED_THRESHOLD = 0.6
@@ -105,26 +233,54 @@ class Packager:
                     "tool": o.source_tool,
                     "handle_id": ((o.payload or {}).get("meta") or {}).get("handle_id")
                                  or (((o.payload or {}).get("data") or {}).get("handle_id")),
+                    "command": _safe_preview(
+                        ((o.payload or {}).get("data") or {}).get("command"), 500),
+                    "cwd": _safe_preview(
+                        ((o.payload or {}).get("data") or {}).get("cwd"), 300),
                     "running": (o.payload or {}).get("is_running")
                                if "is_running" in (o.payload or {})
                                else (((o.payload or {}).get("data") or {}).get("is_running")),
+                    "exit_code": (((o.payload or {}).get("data") or {}).get("exit_code")),
                     "output_available": bool((o.payload or {}).get("stdout") or
                                               (o.payload or {}).get("stderr") or
                                               ((o.payload or {}).get("data") or {}).get("stdout_so_far") or
                                               ((o.payload or {}).get("data") or {}).get("stderr_so_far")),
+                    "output_preview": _safe_preview(
+                        ((o.payload or {}).get("data") or {}).get("stdout_so_far")
+                        or ((o.payload or {}).get("data") or {}).get("stderr_so_far")
+                        or (o.payload or {}).get("stdout") or (o.payload or {}).get("stderr")
+                    ) if ((o.payload or {}).get("data") or {}).get("stdout_so_far")
+                    or ((o.payload or {}).get("data") or {}).get("stderr_so_far")
+                    or (o.payload or {}).get("stdout") or (o.payload or {}).get("stderr") else "",
                 }
                 for o in process_observations[-2:]
             ],
+            "readiness": "reachable_endpoint_observed" if port_observations else "not_established",
             "reachable_endpoints": [
                 {"host": (o.payload.get("data") or {}).get("host"),
                  "port": (o.payload.get("data") or {}).get("port")}
                 for o in port_observations[-4:]
             ],
             "browser": ({
-                key: (value[:6000] if key == "snapshot" and isinstance(value, str) else value)
+                key: (
+                    value[:6000] if key == "snapshot" and isinstance(value, str)
+                    else [{k: v for k, v in control.items() if k != "value"}
+                          for control in value[:40] if isinstance(control, dict)]
+                    if key == "controls" and isinstance(value, list)
+                    else value
+                )
                 for key, value in browser_page.items()
                 if key in {"url", "title", "snapshot", "controls", "node_count", "status"}
             } if browser_page else {"state": "no browser page schema observed"}),
+            # What the repository itself says it can run. Discovered, never
+            # guessed: the Explorer picked `npm run build` for a browse-the-app
+            # goal because it could not see that `dev`/`start` existed — the
+            # manifest exposed that package.json was present but not its scripts.
+            # Each entry carries an inferred lifecycle ("long_running" vs
+            # "one_shot") so an agent can prefer a server for a browser goal
+            # without any framework assumption baked into the Runtime.
+            "runnable_commands": _discover_runnable_commands(
+                getattr(inv, "repository_path", None)),
         }
         return {
             "investigation_id": inv.id,
@@ -151,17 +307,18 @@ class Packager:
                     "node_id": obs.node_id,
                     "tool": ((obs.payload or {}).get("tool")
                              if getattr(obs, "obs_type", "") == "agent_failure" else obs.source_tool),
-                    "parameters": ((obs.payload or {}).get("parameters")
-                                   if getattr(obs, "obs_type", "") == "agent_failure"
-                                   else (obs.payload or {}).get("meta")) or {},
-                    "outcome": json.dumps(
-                        {key: (obs.payload or {})[key] for key in (
-                            "ok", "data", "error", "detail", "error_type",
-                            "stdout", "stderr", "exit_code",
-                        ) if key in (obs.payload or {})},
-                        default=str,
-                        ensure_ascii=False,
-                    )[:4000],
+                    "parameters": (
+                        (obs.payload or {}).get("parameters")
+                        if getattr(obs, "obs_type", "") == "agent_failure"
+                        else {
+                            **((obs.payload or {}).get("meta") or {}),
+                            **({key: ((obs.payload or {}).get("data") or {}).get(key)
+                                for key in ("command", "cwd")
+                                if ((obs.payload or {}).get("data") or {}).get(key) is not None}
+                               if obs.source_tool == "start_process" else {}),
+                        }
+                    ) or {},
+                    "outcome": _compact_outcome(obs),
                     "succeeded": (obs.payload or {}).get("ok"),
                 }
                 for obs in observations[-_RECENT_OBS_N:]

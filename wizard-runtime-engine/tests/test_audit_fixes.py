@@ -365,7 +365,9 @@ class TestGoalPersistence:
             required_claim_types=["RUNTIME"],
             belief_threshold=0.65,
         ))
-        goals.mark_satisfied("goal_001")
+        _g = goals.get("goal_001")   # evidence-only API; set state directly for this persistence test
+        _g.state = "satisfied"
+        _g.progress = 1.0
         goals.persist()
 
         # New engine restores from disk
@@ -521,6 +523,19 @@ class TestPlannerDrivesGoals:
                         GoalDefinition(
                             name="Entirely Custom Goal Name 🔬",
                             required_claim_types=["FILESYSTEM"],  # kernel must use this
+                            # The contract under test is name-independence: the
+                            # kernel gates on the planner's declared requirements,
+                            # not on the goal's NAME. Satisfaction is also
+                            # evidence-gated (the core invariant in
+                            # test_goal_requirements_are_required_even_with_claim_types:
+                            # claim types alone never satisfy a goal), so the
+                            # planner also declares the evidence category its node
+                            # produces (`repository_read` from list_tree) and a
+                            # threshold a single authoritative filesystem reading
+                            # clears. The goal then closes on the planner's own
+                            # declared requirements — never on its name.
+                            required_evidence=["repository_read"],
+                            belief_threshold=0.4,
                         )
                     ],
                     priority_files=[],

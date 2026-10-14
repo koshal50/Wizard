@@ -59,37 +59,30 @@ export class OpenAILLMProvider implements LLMProvider {
       messages,
     };
 
-    let response: Response | undefined;
-    for (let attempt = 0; attempt < (this.cerebrasGate ? 2 : 1); attempt++) {
+    // One provider attempt per agent decision. A 429 may mean account quota or
+    // billing exhaustion, where sleeping and repeating the same request cannot
+    // help; defer later callers through the shared gate and return the actual
+    // failure to Runtime immediately.
+    let response: Response;
+    try {
       if (this.cerebrasGate) await this.cerebrasGate.acquire();
-      try {
-        response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/chat/completions`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${this.cfg.apiKey}`,
-          },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(this.cfg.timeoutMs),
-        });
-      } catch (e) {
-        return llmErr<T>([`openai: request failed: ${(e as Error).message}`], "", this.name);
-      }
-      if (response.status === 429 && this.cerebrasGate) {
-        const waitMs = retryAfterMs(response.headers);
-        this.cerebrasGate.defer(waitMs);
-        if (attempt === 0) {
-          console.warn(JSON.stringify({ event: "provider_429", provider: "cerebras", retry: true }));
-          console.info(JSON.stringify({ event: "provider_retry_wait", provider: "cerebras", wait_ms: waitMs }));
-          console.info(JSON.stringify({ event: "provider_retry", provider: "cerebras", attempt: 1 }));
-          continue;
-        }
-        console.warn(JSON.stringify({ event: "provider_429", provider: "cerebras", retry_exhausted: true }));
-      }
-      break;
+      response = await this.cfg.fetchImpl(`${this.cfg.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.cfg.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.cfg.timeoutMs),
+      });
+    } catch (e) {
+      return llmErr<T>([`openai: request failed: ${(e as Error).message}`], "", this.name);
+    }
+    if (response.status === 429 && this.cerebrasGate) {
+      this.cerebrasGate.defer(retryAfterMs(response.headers));
+      console.warn(JSON.stringify({ event: "provider_429", provider: "cerebras", retry: false }));
     }
 
-    if (!response) return llmErr<T>(["openai: request failed without a response"], "", this.name);
     if (!response.ok) {
       const text = await safeText(response);
       const safeHeaders = ["retry-after", "x-ratelimit-reset-requests", "x-ratelimit-reset-tokens", "x-request-id"]

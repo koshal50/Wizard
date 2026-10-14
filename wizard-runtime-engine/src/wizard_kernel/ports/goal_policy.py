@@ -105,6 +105,10 @@ def goal_evidence_for(name: str) -> GoalEvidence:
         if (re.search(r"\b(test|try|complete|submit|fill|exercise)\b", lowered)
                 and re.search(r"sign ?up|sign ?in|log ?in|register|registration", lowered)):
             evidence.append("browser_form_input")
+            evidence.append("browser_form_submission")
+        elif (re.search(r"\bsubmit\w*\b", lowered)
+              and re.search(r"sign ?up|sign ?in|log ?in|register|registration", lowered)):
+            evidence.append("browser_form_submission")
         if re.search(r"\b(start|launch|run|execute|compile|build|listen|serve)\b", lowered):
             required.append(RUNTIME)
             evidence = ["process_execution", *evidence]
@@ -139,6 +143,20 @@ def is_proven(name: str) -> bool:
 def is_inspected(name: str) -> bool:
     """The read-the-files goals, which the user's own words produce."""
     return bool(re.match(r"^inspect\b", name, re.IGNORECASE))
+
+
+def is_web_read(name: str) -> bool:
+    """A web goal closed by navigating-and-observing, not by interacting.
+
+    `Verify Web Surface` needs WEB evidence — a navigation and a snapshot, which
+    is a READ of the page — while `Operate Web Surface` also needs INTERACTION,
+    which only typing and pressing produce. Derived from the routing (WEB present,
+    INTERACTION absent) rather than matched by name, so it stays in step with the
+    goal engine. This is why a describing command may still look at a page it is
+    pointed at — it reads the surface — without being allowed to act on it.
+    """
+    required = set(goal_evidence_for(name).required_claim_types)
+    return WEB in required and INTERACTION not in required
 
 
 # ── The vocabulary a target is read in ────────────────────────────────────────
@@ -327,12 +345,16 @@ def goals_for_family(
     keep = lambda ok: [name for name, origin in proposed if ok(name, origin)]  # noqa: E731
 
     if family == "report":
-        # A report says what the repository is. It runs nothing — a report is not
-        # a proof, and running the test suite to produce one is work the user
-        # asked for in a different command. It also does not hunt: `report` takes
-        # no target, so a question about a named part of the repository is the
-        # one thing it was never asked, and `Inspect …` goals are that question.
-        return keep(lambda name, origin: not is_proven(name) and not is_inspected(name))
+        # A report says what the repository is. It runs nothing that proves a
+        # fact by executing code — not the test suite, not the server — and it
+        # never acts on a page. The one thing it may still do is LOOK at an
+        # address it was pointed at: navigating to a URL and reading the surface
+        # is a read, not a mutation, so a web-read goal survives while every other
+        # execution goal (and every page-operation goal) is dropped. Without the
+        # web-read exception, `report http://host` planned nothing for the URL and
+        # the report could not even say what the page was.
+        return keep(lambda name, origin:
+                    (not is_proven(name) or is_web_read(name)) and not is_inspected(name))
 
     if family == "explain":
         # Explaining answers the question that was asked, and nothing else. The

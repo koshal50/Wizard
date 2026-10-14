@@ -22,19 +22,61 @@ _SAFE_ENV: frozenset[str] = frozenset({
 
 
 def _safe_env() -> dict[str, str]:
-    """The ambient environment reduced to the variables a command needs to run.
+    """The ambient environment a sandboxed command runs with.
 
-    The comparison is case-insensitive on purpose. Windows upper-cases the keys
-    of ``os.environ``, so a whitelist entry spelled "SystemRoot" never matches
-    the key the platform hands back ("SYSTEMROOT") — while "COMSPEC", spelled
-    upper-case on both sides, survives by luck. Dropping SystemRoot is not a
-    cosmetic loss: without it a process cannot create a listening socket, so
-    every test that binds a port dies with `listen UNKNOWN: unknown error`,
-    inside the sandbox only. The investigation then reports a working project as
-    broken, and the fault is in here rather than in the project.
+    On Windows the whitelist approach is abandoned: Node/npm/`concurrently` spawn
+    sub-commands through `cmd.exe`, and locating it needs a cluster of Windows
+    variables (ComSpec, SystemRoot, PATH, PATHEXT, SystemDrive, windir, APPDATA,
+    LOCALAPPDATA, …) with their original casing. A reduced set dropped enough of
+    them that every `npm run` script which shells out died with
+    `spawn cmd.exe ENOENT` (-4058) — so the app never actually started, a signup
+    POST hit no backend, and the run looked "broken" when the fault was here.
+    The local sandbox is a dev runtime, not an isolation boundary, so passing the
+    full environment is the correct, robust choice on Windows.
+
+    On POSIX the whitelist stays: the comparison is case-insensitive because the
+    platform's env casing differs from the whitelist's (e.g. SystemRoot).
     """
+    if os.name == "nt":
+        env = dict(os.environ)
+        _ensure_windows_system_path(env)
+        return env
     wanted = {name.upper() for name in _SAFE_ENV}
     return {k: v for k, v in os.environ.items() if k.upper() in wanted}
+
+
+def _ensure_windows_system_path(env: dict[str, str]) -> None:
+    """Guarantee the Windows system dirs are on PATH so `cmd.exe` resolves.
+
+    `concurrently` and npm workspace scripts spawn `cmd.exe` by PATH lookup. When
+    Wizard is launched from a shell whose PATH omits System32 (a Git-Bash-style
+    PATH is the common case), that spawn fails with `spawn cmd.exe ENOENT` and no
+    `npm run` script that shells out can start — the app never boots and the run
+    blocks. COMSPEC being set is not enough: Node searches PATH for a bare
+    `cmd.exe`. Derive the system dirs from SystemRoot / windir / COMSPEC (never a
+    hardcoded drive) and prepend any that are missing, case-insensitively, under
+    whatever casing the PATH key already uses.
+    """
+    root = (env.get("SystemRoot") or env.get("SYSTEMROOT") or env.get("windir")
+            or env.get("WINDIR"))
+    if not root:
+        comspec = env.get("COMSPEC") or env.get("ComSpec")
+        if comspec:
+            # …\System32\cmd.exe → …  (the Windows root is two levels up)
+            root = os.path.dirname(os.path.dirname(comspec))
+    if not root:
+        return
+    system32 = os.path.join(root, "System32")
+    needed = [system32, root, os.path.join(system32, "Wbem"),
+              os.path.join(system32, "WindowsPowerShell", "v1.0")]
+    # Find the PATH key under its actual casing (Windows usually "Path").
+    path_key = next((k for k in env if k.upper() == "PATH"), "PATH")
+    current = env.get(path_key, "")
+    parts = current.split(os.pathsep) if current else []
+    have = {p.rstrip("\\/").lower() for p in parts if p}
+    missing = [d for d in needed if d.rstrip("\\/").lower() not in have and os.path.isdir(d)]
+    if missing:
+        env[path_key] = os.pathsep.join(missing + parts) if parts else os.pathsep.join(missing)
 
 
 class _BackgroundHandle:
@@ -119,7 +161,11 @@ class LocalProcessRuntime:
         env = _safe_env()
         t0 = time.monotonic()
         kwargs: dict = {}
-        if sys.platform != "win32":
+        if sys.platform == "win32":
+            # Captured stdout is insufficient: npm/cmd can mutate the inherited
+            # console title directly. Do not attach investigation children to TUI.
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        else:
             kwargs["start_new_session"] = True
         try:
             proc = subprocess.Popen(
@@ -186,7 +232,11 @@ class LocalProcessRuntime:
         work_cwd = self._safe_cwd(cwd)
         env = _safe_env()
         kwargs: dict = {}
-        if sys.platform != "win32":
+        if sys.platform == "win32":
+            # Captured stdout is insufficient: npm/cmd can mutate the inherited
+            # console title directly. Do not attach investigation children to TUI.
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        else:
             kwargs["start_new_session"] = True
         proc = subprocess.Popen(
             command, shell=True, cwd=work_cwd, env=env,

@@ -22,12 +22,31 @@ defined in events.py but never fired by any code path, so nothing waits on it.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterator
 
 from wizard.cli.models.investigation_request import RequestOptions
+
+# Strips terminal control bytes from any text that came from outside the TUI —
+# a page's DOM/aria snapshot, a control label, a typed value, a command's
+# stdout. prompt_toolkit renders our strings verbatim, so an ESC/CSI sequence
+# or a stray C0 byte in that external text is emitted straight to the terminal,
+# which is exactly the "random characters" that corrupted the screen mid-run and
+# left no option but to quit. Keeps \t and \n; drops ESC-introduced sequences,
+# other C0/C1 controls, and \r. One chokepoint, applied wherever external text
+# enters the display.
+_TERMINAL_CTRL = re.compile(
+    r"\x1b[@-_]?[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b\x0c\x0d\x0e-\x1f\x7f\x80-\x9f]"
+)
+
+
+def sanitize_terminal(text: object) -> str:
+    """External text with terminal control sequences/bytes removed."""
+    return _TERMINAL_CTRL.sub("", str(text))
+
 
 # Longest Planner rationale appended to a decision line, in characters. The
 # pane is around 70 columns and the line already carries the agent and the tool;
@@ -233,7 +252,7 @@ class TuiSession:
             # nothing upstream to stop. Claiming otherwise would be a guess.
             self._log("cancelled before the runtime accepted it", "wiz.warn")
         elif stopped:
-            self._log(f"cancelled {inv_id} — the runtime stopped it", "wiz.warn")
+            self._log(f"cancellation requested for {inv_id} — saving results and cleaning up", "wiz.warn")
         else:
             self._log(f"cancelled {inv_id} — asked the runtime to stop", "wiz.warn")
         self._settle("cancelled")
@@ -280,13 +299,15 @@ class TuiSession:
         try:
             for ev in self._get_event_generator():
                 with self._lock:
-                    if self.cancelled:
-                        return
+                    cancelled = self.cancelled
+                if cancelled and ev.get("event_type") == "done":
+                    self._consume(ev)
+                    return
                 shown_before = self._lines_shown()
                 self._consume(ev)
                 self._pace(ev, shown_before)
                 with self._lock:
-                    if self.finished:
+                    if self.finished and not self.cancelled:
                         return
             # The stream ended without a terminal event. Say so, rather than
             # leaving the view spinning forever.
@@ -348,8 +369,8 @@ class TuiSession:
 
     def _log(self, text: str, style: str, kind: str = "step", role: str = "") -> None:
         with self._lock:
-            self.activity.append(LogLine(text, style, kind, role))
-            self.now = text
+            self.activity.append(LogLine(sanitize_terminal(text), style, kind, role))
+            self.now = self.activity[-1].text
         self.on_change()
 
     def _settle(self, status: str) -> None:
@@ -399,6 +420,11 @@ class TuiSession:
                 # (which goals stayed open, or that the budget ran out) instead
                 # of leaving the reader to guess from a bare state name.
                 "incomplete": "the investigation ended incomplete",
+                # Wizard worked; the target did not. The reason (appended below
+                # from last_event) names the external boundary — the app would
+                # not start, nothing listened — so this reads as "not our fault"
+                # rather than "we gave up".
+                "blocked": "the investigation was blocked by the application/environment",
             }.get(self.status, f"the investigation ended · {self.status}")
             if self.status != "completed":
                 reason = str((ev.get("stats") or {}).get("last_event") or "").strip()
@@ -592,7 +618,10 @@ _DOING: dict[str, str] = {
     "search_files":     "searching for",
     "execute_command":  "running",
     "check_port":       "probing",
+    "http_request":     "requesting",
     "path_exists":      "checking",
+    "inspect_configuration": "inspecting config",
+    "trace_execution":  "tracing",
     "start_process":    "starting",
     "read_process":     "reading",
     "kill_process":     "stopping",
@@ -745,6 +774,22 @@ def _narrate(ev_type: str, payload: dict) -> tuple[str, str]:
 
     if ev_type == "investigation.started":
         return "the runtime accepted the request", "wiz.flow"
+
+    if ev_type == "provider.progress":
+        who = str(payload.get("agent") or "agent")
+        stage = payload.get("stage")
+        if stage == "waiting":
+            return f"? {who}: waiting {payload.get('wait_seconds')}s for shared provider capacity", "wiz.flow"
+        if stage == "request":
+            return f"? {who}: provider request sent (timeout {payload.get('timeout_seconds')}s)", "wiz.flow"
+        if stage == "response":
+            return f"? {who}: provider HTTP {payload.get('status')} after {payload.get('elapsed_seconds')}s", "wiz.flow"
+        if stage == "validated":
+            return f"? {who}: structured response validated", "wiz.flow"
+        return f"? {who}: provider {stage}", "wiz.flow"
+
+    if ev_type == "agent.completed":
+        return f"? {payload.get('agent_type', 'agent')} decision completed", "wiz.flow"
 
     if ev_type == "agent.consulted":
         agent = str(payload.get("agent_type") or "agent").lower()

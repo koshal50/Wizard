@@ -46,11 +46,15 @@ def test_dropping_systemroot_is_not_survivable(monkeypatch):
 
 
 def test_the_whitelist_still_drops_what_it_does_not_name(monkeypatch):
-    """A whitelist that keeps everything is not a whitelist.
+    """A whitelist that keeps everything is not a whitelist — on POSIX.
 
-    The point of reducing the environment is that a command does not inherit the
-    credentials and configuration of the process that launched it. Case-folding
-    the comparison must not turn that into "pass everything through".
+    On POSIX the environment is reduced so a command does not inherit the
+    launching process's credentials. On Windows the whitelist is deliberately
+    abandoned (`_safe_env` returns the full environment): Node/npm/`concurrently`
+    need a cluster of Windows variables with original casing to spawn `cmd.exe`,
+    and dropping them made every shelling `npm run` script die with
+    `spawn cmd.exe ENOENT`. The local sandbox is a dev runtime, not an isolation
+    boundary, so full passthrough is correct there.
     """
     monkeypatch.setattr(os, "environ", {
         "PATH": "/bin",
@@ -59,15 +63,20 @@ def test_the_whitelist_still_drops_what_it_does_not_name(monkeypatch):
         "NPM_TOKEN": "should-not-travel",
     })
     env = _safe_env()
-    assert set(env) == {"PATH"}
+    if os.name == "nt":
+        assert set(env) == {"PATH", "AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "NPM_TOKEN"}
+    else:
+        assert set(env) == {"PATH"}
 
 
 def test_a_command_runs_with_the_reduced_environment(tmp_path, monkeypatch):
-    """`_safe_env` is only worth anything if exec actually uses it.
+    """`_safe_env` is only worth anything if exec actually uses it — POSIX only.
 
-    The variable is set here rather than assumed: on a machine that happens not
-    to define it, asserting its absence would pass without testing anything.
+    On Windows the full environment is passed (see the test above), so a secret
+    WOULD travel; the reduction is a POSIX guarantee, asserted there.
     """
+    if os.name == "nt":
+        pytest.skip("Windows passes the full environment by design (see _safe_env)")
     monkeypatch.setenv("WIZARD_TEST_SECRET", "should-not-travel")
     sandbox = LocalProcessRuntime()
     sandbox.start(str(tmp_path))
@@ -126,3 +135,20 @@ def test_a_command_that_emits_invalid_utf8_does_not_lose_its_output(tmp_path):
 
     assert result.ok, result.stderr
     assert "before" in result.stdout and "after" in result.stdout
+
+
+def test_windows_path_gets_system32_for_cmd_exe(monkeypatch):
+    """On Windows, _safe_env must guarantee System32 is on PATH so cmd.exe
+    resolves — otherwise concurrently/npm scripts die with spawn cmd.exe ENOENT.
+    Simulated cross-platform by driving the helper directly."""
+    from wizard_kernel.world.sandbox.local import _ensure_windows_system_path
+    # A Git-Bash-style PATH with no System32, plus a SystemRoot to derive from.
+    root = os.environ.get("SystemRoot") or os.environ.get("SYSTEMROOT") or r"C:\Windows"
+    env = {"Path": "/usr/bin:/bin", "SystemRoot": root}
+    _ensure_windows_system_path(env)
+    if os.path.isdir(os.path.join(root, "System32")):
+        assert "system32" in env["Path"].lower()
+    # Idempotent: a second call does not duplicate the entry.
+    before = env["Path"]
+    _ensure_windows_system_path(env)
+    assert env["Path"] == before

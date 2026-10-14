@@ -19,7 +19,10 @@ line worth reading, and the only one that was ever news.
 from __future__ import annotations
 
 import logging
+import threading
 import time
+from dataclasses import asdict
+from wizard_kernel.storage import fs_store
 from dataclasses import dataclass, field
 from typing import Callable, Any
 
@@ -68,10 +71,15 @@ class EventBus:
 
     def __init__(self, inv_id: str) -> None:
         self._inv_id = inv_id
+        self._lock = threading.RLock()
         self._listeners: dict[str, list[Callable[[dict], None]]] = {}
         self._all_listeners: list[Callable[[InvestigationEvent], None]] = []
         self._history: list[InvestigationEvent] = []
         self._seq = 0
+        saved = fs_store.read(inv_id, "events.json") or []
+        for item in saved:
+            self._history.append(InvestigationEvent(**item))
+        self._seq = max((event.seq for event in self._history), default=0)
 
     def on(self, event_type: str, listener: Callable[[dict], None]) -> None:
         """Register a listener for a specific event type."""
@@ -91,24 +99,27 @@ class EventBus:
         Use this for poll-based CLI output: track the last seq number received
         and call this on each poll to get only new events.
         """
-        return [e for e in self._history if e.seq > since_seq]
+        with self._lock:
+            return [e for e in self._history if e.seq > since_seq]
 
     def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
         """Fire all listeners registered for `event_type`.
         Listener failures are logged but never propagated (invariant 4).
         All events are appended to the immutable history for polling."""
-        self._seq += 1
         data = {"investigation_id": self._inv_id, "event": event_type,
                 **(payload or {})}
 
         # Append to immutable history (polling interface)
-        event = InvestigationEvent(
-            seq=self._seq,
-            investigation_id=self._inv_id,
-            event_type=event_type,
-            payload=data,
-        )
-        self._history.append(event)
+        with self._lock:
+            event = InvestigationEvent(
+                seq=self._seq + 1,
+                investigation_id=self._inv_id,
+                event_type=event_type,
+                payload=data,
+            )
+            fs_store.write(self._inv_id, "events.json", [asdict(e) for e in self._history] + [asdict(event)])
+            self._seq = event.seq
+            self._history.append(event)
 
         # Fire typed listeners
         for fn in self._listeners.get(event_type, []):
@@ -131,11 +142,12 @@ def get_recent_events(since_seq: int, inv_id: str) -> list[InvestigationEvent]:
     """Retrieve recent events from the in-memory bus for an investigation."""
     bus = _BUSSES.get(inv_id)
     if not bus:
-        return []
+        bus = EventBus(inv_id)
+        _BUSSES[inv_id] = bus
     return bus.get_recent_events(since_seq)
 
 # Module-level factory — loop creates one per investigation
 def create(inv_id: str) -> EventBus:
-    bus = EventBus(inv_id)
+    bus = _BUSSES.get(inv_id) or EventBus(inv_id)
     _BUSSES[inv_id] = bus
     return bus

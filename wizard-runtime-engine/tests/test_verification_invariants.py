@@ -57,6 +57,14 @@ def test_execution_tools_create_only_proven_categories():
     assert evidence_categories_for_tool("browser_navigate", {"ok": True}) == ["browser_navigation"]
     assert evidence_categories_for_tool("browser_snapshot", {"ok": True}) == ["browser_observation"]
     assert evidence_categories_for_tool("browser_click", {"ok": True}) == ["browser_interaction"]
+    assert "browser_form_submission" not in evidence_categories_for_tool(
+        "browser_click", {"ok": True, "data": {"clicked": True}}
+    )
+    assert set(evidence_categories_for_tool("browser_click", {
+        "ok": True,
+        "data": {"clicked": True, "submitted_form": True,
+                 "page_observation": {"url": "http://local/", "snapshot": "form result"}},
+    })) >= {"browser_interaction", "browser_form_submission"}
     assert evidence_categories_for_tool("browser_type", {"ok": True, "data": {"typed": True}}) == ["browser_interaction", "browser_form_input"]
     assert evidence_categories_for_tool("http_request", {"ok": True, "data": {"status_code": 200}}) == ["http_response"]
     assert evidence_categories_for_tool("read_file", {"ok": True, "data": {"status_code": 200}}) == ["repository_read"]
@@ -76,8 +84,11 @@ def test_runtime_goal_policies_carry_required_evidence():
         "browser_navigation", "browser_interaction", "browser_observation"
     }
     assert set(goal_evidence_for("Test sign up and log in using the observed form").required_evidence) >= {
-        "browser_interaction", "browser_form_input"
+        "browser_interaction", "browser_form_input", "browser_form_submission"
     }
+    assert "browser_form_submission" in goal_evidence_for(
+        "Verify that the Login component renders and can submit credentials"
+    ).required_evidence
     assert set(goal_evidence_for("Launch backend and confirm it listens on port").required_evidence) >= {
         "process_execution", "http_response"
     }

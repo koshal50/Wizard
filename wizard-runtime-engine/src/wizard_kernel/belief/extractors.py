@@ -309,7 +309,12 @@ def _extract_browser_action(obs: Observation) -> list[ExtractResult]:
     means — the browser's job is to say plainly that it was inert.
     """
     data = obs.payload.get("data", {}) or {}
-    url = data.get("url")
+    # A batched fill (`browser_fill_form`) carries the resulting page under
+    # `page_observation` and its per-field outcomes under `fields`, not the
+    # single-action top-level shape. Fall back to the nested page so the URL
+    # guard below does not bail and the fills still produce evidence.
+    page = data.get("page_observation") if isinstance(data.get("page_observation"), dict) else {}
+    url = data.get("url") or page.get("url")
     if not url:
         return []
     results = [ExtractResult("WEB", "current_url", url)]
@@ -319,7 +324,7 @@ def _extract_browser_action(obs: Observation) -> list[ExtractResult]:
             "WEB", f"http_status:{url}", status,
             support_type="support" if 200 <= int(status) < 400 else "contradict",
         ))
-    if title := data.get("title"):
+    if title := (data.get("title") or page.get("title")):
         results.append(ExtractResult("WEB", "page_title", title))
 
     selector = data.get("selector") or ""
@@ -342,6 +347,19 @@ def _extract_browser_action(obs: Observation) -> list[ExtractResult]:
         # the wizard comparing two things that were never the same question.
         if effect := data.get("effect"):
             results.append(ExtractResult("INTERACTION", f"field_effect:{selector}", effect))
+
+    # Batched form fill: one INTERACTION claim per field actually typed, same
+    # keys a single browser_type produces, so a form filled in one action closes
+    # the same goal evidence as four separate types would.
+    for field in (data.get("fields") or []):
+        if not isinstance(field, dict) or not field.get("typed"):
+            continue
+        fsel = field.get("selector")
+        if not fsel:
+            continue
+        results.append(ExtractResult("INTERACTION", f"interacted:{fsel}", True))
+        if (fval := field.get("value")) is not None:
+            results.append(ExtractResult("INTERACTION", f"field_value:{fsel}", fval))
 
     return results
 

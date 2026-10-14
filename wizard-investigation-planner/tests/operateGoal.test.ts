@@ -154,6 +154,13 @@ test("operating the web surface is proven by INTERACTION, not by reaching a page
   assert.equal(evidence.requires_execution_evidence, true);
 });
 
+test("auth goals that promise submission require a real form submission", () => {
+  const evidence = goalEvidenceFor("Verify the Login component renders and can submit credentials");
+  assert.ok(evidence.required_evidence.includes("browser_form_input"));
+  assert.ok(evidence.required_evidence.includes("browser_form_submission"));
+  assert.ok(!goalEvidenceFor("Verify the login page renders").required_evidence.includes("browser_form_submission"));
+});
+
 test("the operate route wins over the web route it contains", () => {
   // "Operate Web Surface" contains "Web". Only the prefix test keeps it from
   // being routed as the read-the-page goal it is the opposite of — and a WEB

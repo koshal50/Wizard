@@ -72,6 +72,7 @@ RUNTIME_TOOLS: List[ToolName] = [
     ToolName.BROWSER_SNAPSHOT,
     ToolName.BROWSER_CLICK,
     ToolName.BROWSER_TYPE,
+    ToolName.BROWSER_FILL_FORM,
     ToolName.BROWSER_BACK,
     ToolName.BROWSER_EXTRACT,
 ]
@@ -132,10 +133,11 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
 
     budget = packet.get("remaining_budget")
     active_goals = packet.get("active_goals") or []
-    active_goal = next((g for g in active_goals
-                        if node.get("goal_id") is not None
-                        and g.get("id") == node.get("goal_id")),
-                       active_goals[0] if active_goals else None)
+    if node.get("goal_id") is not None:
+        active_goal = next((g for g in active_goals
+                            if g.get("id") == node.get("goal_id")), None)
+    else:
+        active_goal = active_goals[0] if active_goals else None
     evidence_context = ""
     missing_evidence: list[str] = []
     if active_goal:
@@ -155,7 +157,10 @@ def _to_explorer_input(packet: Dict[str, Any]) -> ExplorerInput:
         # Route requires current_node.node_id to appear in node_order.
         route=Route(node_order=[node_id], current_index=0),
         nodes=[current],
-        active_goals=[g.get("name", "") for g in active_goals],
+        # Explorer makes one decision for this node, so unrelated open goals
+        # are not useful tactical context. Including every technology goal here
+        # made a single browser/form decision reason over the whole graph.
+        active_goals=[active_goal.get("name", "")] if active_goal else [],
         known_claims=[],
         context=(f"intent={packet.get('intent')} targets={packet.get('targets')}"
                  f"{evidence_context}\nRUNTIME RESOURCE STATE: "

@@ -24,20 +24,6 @@ import {
   AsciiArtHandle,
 } from "@/components/ui/sss"
 
-import {
-  createClient,
-} from "@supabase/supabase-js"
-
-const supabase =
-  createClient(
-    process.env
-      .NEXT_PUBLIC_SUPABASE_URL!,
-    process.env
-      .NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-      process.env
-        .NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-  )
-
 export default function Hero() {
   const heroRef =
     useRef<HTMLElement>(null)
@@ -60,17 +46,7 @@ export default function Hero() {
   const [isExpanded, setIsExpanded] =
     useState(false)
 
-  const [isSubmitting, setIsSubmitting] =
-    useState(false)
-
-  const [
-    submissionStatus,
-    setSubmissionStatus,
-  ] = useState<
-    "idle" |
-    "success" |
-    "error"
-  >("idle")
+  const [showContactNotice, setShowContactNotice] = useState(false)
 
   /*
    * --------------------------------------------------
@@ -274,108 +250,15 @@ export default function Hero() {
     () => {
       setIsExpanded(false)
 
-      setSubmissionStatus(
-        "idle"
-      )
+      setShowContactNotice(false)
     }
 
-  const handleSubmit =
-    async (
-      event: React.FormEvent<HTMLFormElement>
-    ) => {
-      event.preventDefault()
-
-      setIsSubmitting(true)
-
-      setSubmissionStatus(
-        "idle"
-      )
-
-      const form =
-        event.currentTarget
-
-      if (
-        !form.reportValidity()
-      ) {
-        setIsSubmitting(false)
-        return
-      }
-
-      const formData =
-        new FormData(form)
-
-      const {
-        error,
-      } =
-        await supabase
-          .from(
-            "wizard_contact_submissions"
-          )
-          .insert({
-            name: String(
-              formData.get(
-                "name"
-              ) ?? ""
-            ).trim(),
-
-            email: String(
-              formData.get(
-                "email"
-              ) ?? ""
-            ).trim(),
-
-            website:
-              String(
-                formData.get(
-                  "website"
-                ) ?? ""
-              ).trim() ||
-              null,
-
-            role:
-              String(
-                formData.get(
-                  "role"
-                ) ?? ""
-              ).trim() ||
-              null,
-
-            message:
-              String(
-                formData.get(
-                  "message"
-                ) ?? ""
-              ).trim() ||
-              null,
-          })
-
-      setIsSubmitting(false)
-
-      if (error) {
-        setSubmissionStatus(
-          "error"
-        )
-
-        return
-      }
-
-      form.reset()
-
-      setSubmissionStatus(
-        "success"
-      )
-
-      window.setTimeout(
-        () => {
-          setIsExpanded(false)
-
-          setSubmissionStatus(
-            "idle"
-          )
-        },
-        3000
-      )
-    }
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!event.currentTarget.reportValidity()) return
+    // Sending is unavailable until a contact service is connected.
+    setShowContactNotice(true)
+  }
 
   /*
    * --------------------------------------------------
@@ -524,10 +407,15 @@ export default function Hero() {
             {!isExpanded && (
               <motion.div
                 className="
-                  relative
-                  inline-block
+                  flex
+                  flex-col
+                  items-stretch
+                  gap-3
+                  sm:flex-row
+                  sm:items-center
                 "
               >
+                <div className="relative">
                 <motion.div
                   layout
                   layoutId="cta-card"
@@ -583,12 +471,23 @@ export default function Hero() {
                     font-normal
                     tracking-[-0.01em]
                     text-[#EAF7FB]
+                    rounded-full
+                    focus-visible:outline-2
+                    focus-visible:outline-offset-4
+                    focus-visible:outline-[#7FC6E6]
                     sm:px-8
                     sm:text-xl
                   "
                 >
                   Talk to the Wizard team
                 </motion.button>
+                </div>
+                <a
+                  href="/login.html"
+                  className="inline-flex h-15 items-center justify-center rounded-full border border-[#7FC6E6]/25 bg-[#123A6B] px-6 py-3 text-lg font-normal tracking-[-0.01em] text-[#EAF7FB] shadow-[0_8px_30px_rgba(18,58,107,0.35)] transition-colors hover:bg-[#1b4a8c] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#7FC6E6] sm:px-8 sm:text-xl"
+                >
+                  Login
+                </a>
               </motion.div>
             )}
           </AnimatePresence>
@@ -1107,8 +1006,7 @@ export default function Hero() {
                         mode="wait"
                         initial={false}
                       >
-                        {submissionStatus ===
-                          "error" && (
+                        {showContactNotice && (
                           <motion.p
                             key="error"
                             role="alert"
@@ -1123,26 +1021,14 @@ export default function Hero() {
                               text-[#EAF7FB]
                             "
                           >
-                            Something went wrong.
-                            Please try again.
+                            Contact form sending is currently unavailable. Your message has not been sent.
                           </motion.p>
                         )}
                       </AnimatePresence>
 
                       <motion.button
                         type="submit"
-                        disabled={
-                          isSubmitting ||
-                          submissionStatus ===
-                            "success"
-                        }
-                        animate={{
-                          backgroundColor:
-                            submissionStatus ===
-                            "success"
-                              ? "#19D66B"
-                              : "#EAF7FB",
-                        }}
+                        animate={{ backgroundColor: "#EAF7FB" }}
                         transition={{
                           duration: 0.45,
                           ease: [
@@ -1170,61 +1056,7 @@ export default function Hero() {
                           disabled:cursor-default
                         "
                       >
-                        <AnimatePresence
-                          mode="wait"
-                          initial={false}
-                        >
-                          {submissionStatus ===
-                          "success" ? (
-                            <motion.svg
-                              key="check"
-                              viewBox="0 0 28 20"
-                              className="
-                                h-6
-                                w-7
-                              "
-                              aria-hidden="true"
-                            >
-                              <motion.path
-                                d="M2 10.5 9.5 18 26 2"
-                                fill="none"
-                                stroke="#FFFFFF"
-                                strokeWidth="3.5"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                initial={{
-                                  pathLength: 0,
-                                }}
-                                animate={{
-                                  pathLength: 1,
-                                }}
-                                transition={{
-                                  duration: 0.65,
-                                  ease: [
-                                    0.65,
-                                    0,
-                                    0.35,
-                                    1,
-                                  ],
-                                }}
-                              />
-                            </motion.svg>
-                          ) : (
-                            <motion.span
-                              key="label"
-                              initial={{
-                                opacity: 0,
-                              }}
-                              animate={{
-                                opacity: 1,
-                              }}
-                            >
-                              {isSubmitting
-                                ? "Sending…"
-                                : "Submit"}
-                            </motion.span>
-                          )}
-                        </AnimatePresence>
+                        Submit
                       </motion.button>
                     </form>
                   </div>

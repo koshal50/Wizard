@@ -54,6 +54,8 @@ VALID_COMMANDS: list[str] = list(COMMAND_TARGETS.keys())
 
 # Local TUI controls; these never enter the four core command dispatch paths.
 SLASH_COMMANDS = {
+    "/login": "Connect your Wizard website account",
+    "/cancel-login": "Cancel pending account authorization",
     "/status": "Show persisted token usage",
     "/exit": "Cancel work and quit Wizard",
 }

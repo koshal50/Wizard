@@ -61,7 +61,8 @@ app = typer.Typer(
         "Wizard -- Intent Translation Layer.\n\n"
         "Translates user commands into structured investigation requests "
         "for the Runtime Engine.\n\n"
-        "Run with no arguments to open the interactive Wizard interface."
+        "Run with no arguments to open the interactive Wizard interface.\n"
+        "Use /login to connect your Wizard website account."
     ),
     no_args_is_help=False,
     rich_markup_mode="rich",
@@ -120,6 +121,9 @@ def main_callback(
             raise typer.Exit(run_command(path, words or [], console))
         if words:
             raise typer.BadParameter("Extra arguments require one of the four command names")
+        if path == "/login":
+            from wizard.cli.account_login import terminal_login
+            raise typer.Exit(terminal_login(console))
         if path == "/status":
             from wizard.cli.display.usage import format_status
             from wizard.cli.runtime_client.usage import standalone_status

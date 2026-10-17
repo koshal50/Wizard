@@ -53,3 +53,28 @@ images/
 token-usage.md
 tui-control-commands.md
 tui-usage-environment.md
+
+# Additional local configuration and credentials (examples remain shareable)
+.env.*
+!.env.example
+!.env.*.example
+.aws/
+.secrets/
+credentials.json
+*.key
+*.p12
+*.pfx
+.claude/settings.local.json
+
+# Local diagnostics, analysis caches, and coverage output
+*.log
+.ruff_cache/
+.mypy_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.DS_Store
+Thumbs.db

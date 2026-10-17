@@ -24,12 +24,17 @@ import os
 import time
 
 from prompt_toolkit.application import Application
-from prompt_toolkit.completion import ConditionalCompleter, WordCompleter
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout
-from prompt_toolkit.layout.containers import ConditionalContainer, HSplit, Window
+from prompt_toolkit.layout.containers import (
+    ConditionalContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Window,
+)
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.mouse_events import MouseEventType
@@ -40,6 +45,7 @@ from wizard.cli.parser.command_parser import COMMAND_TARGETS, SLASH_COMMANDS
 from wizard.cli.parser.frontend import Frontend, suggestion_for
 from wizard.cli.tui import history
 from wizard.cli.tui.session import TuiSession
+from wizard.cli.tui.slash_menu import SlashCompleter, SlashMenu
 from wizard.cli.tui.widgets import (
     command_box,
     intent_content,
@@ -139,6 +145,7 @@ class WizardTUI:
         self._status_request = None
         self._exiting = False
         self._input_notice = ""
+        self._account_login = None
 
         # One input buffer remains editable while the worker drives the run.
         self.input = TextArea(
@@ -148,12 +155,14 @@ class WizardTUI:
             accept_handler=self._on_accept,
             height=1,
             read_only=Condition(lambda: False),
-            completer=ConditionalCompleter(
-                WordCompleter(list(SLASH_COMMANDS), sentence=True),
-                filter=Condition(lambda: self.input.text.lstrip().startswith("/")),
-            ),
+            completer=SlashCompleter(SLASH_COMMANDS),
+            complete_while_typing=False,  # The inline menu owns highlighting, not buffer preview edits.
+            focus_on_click=True,
         )
         self.input_frame = Frame(self.input, style="class:inputbox")
+        self.slash_menu = SlashMenu(self.input.buffer, self.input.completer,
+            focused=lambda: hasattr(self, "app") and self.app.layout.has_focus(self.input),
+            size=self._geometry)
 
         # --- top window: the identity panel, fixed height, never scrolls ---
         # A fixed height — counted off the art and the terminal — is what makes
@@ -211,20 +220,28 @@ class WizardTUI:
                 ConditionalContainer(self.usage_window, filter=Condition(
                     lambda: self.session is not None and self.state in (WORKING, RESULT))),
                 ConditionalContainer(self.input_frame, filter=input_visible),
-                Window(content=FormattedTextControl(self._command_help),
-                       height=2, wrap_lines=True, always_hide_cursor=True),
+                ConditionalContainer(
+                    Window(content=FormattedTextControl(lambda: [("class:usage", self._input_notice)]),
+                           height=self._notice_height, wrap_lines=True, always_hide_cursor=True),
+                    filter=Condition(lambda: bool(self._input_notice))),
             ]
         )
 
 
+        self.composer_overlay = FloatContainer(content=root, floats=[
+            Float(content=self.slash_menu.container, left=1, right=1, ycursor=True,
+                  attach_to_window=self.input.window),
+        ])
         self.app: Application = Application(
-            layout=Layout(root, focused_element=self.right_window),
+            layout=Layout(self.composer_overlay, focused_element=self.right_window),
             key_bindings=self._bindings(),
             style=Style.from_dict(
                 {
                     "inputbox": "#5b2d7a",           # violet frame border
                     "inputbox frame.border": "#5b2d7a",
                     "usage": "#b8b1c5",
+                    "slash-menu": "bg:#211a2e #b8b1c5",
+                    "slash-menu.selected": "bg:#5b2d7a #ffffff bold",
                 }
             ),
             full_screen=True,
@@ -306,7 +323,7 @@ class WizardTUI:
                 return cached
 
         if self.state == MENU:
-            options = FAMILIES if self.menu_level == "family" else self._targets()
+            options = self._current_options()
             content = menu_content(self.menu_level, options, self.selected, self.family)
 
         elif self.state == INTENT:
@@ -525,7 +542,7 @@ class WizardTUI:
         if not opts and self.menu_level == "family":
             return
         if self.menu_level == "family":
-            self.family = FAMILIES[self.selected]
+            self.family = opts[self.selected]
             if self._targets():           # families with targets -> pick one
                 self.menu_level = "target"
                 self.selected = 0
@@ -694,15 +711,35 @@ class WizardTUI:
     # ------------------------------------------------------------------
     # Input accept (Enter in the text box)
     # ------------------------------------------------------------------
-    def _command_help(self):
-        help_text = " | ".join(f"{name}: {description}" for name, description in SLASH_COMMANDS.items())
-        return [("class:usage", help_text + ("\n" + self._input_notice if self._input_notice else ""))]
+    def _notice_height(self):
+        width = max(20, self._geometry()[0])
+        rows = sum(max(1, (len(line) + width - 1) // width) for line in self._input_notice.split("\n"))
+        return min(4, max(1, rows))
+
+    def _start_account_login(self):
+        if self._account_login and self._account_login.running:
+            self._input_notice = "Account login is already active. Paste the website code or /cancel-login."
+        else:
+            from wizard.cli.account_login import LoginWorker
+            def notify(message):
+                if self._exiting:
+                    return
+                self._usage_report = message
+                self.app.invalidate()
+            self._account_login = LoginWorker(notify)
+            self._account_login.start()
+            self._input_notice = "Account login: paste the website code here; /cancel-login cancels."
+        self._status_input = True
+        self.input.text = ""
+        self.app.layout.focus(self.input)
 
     def _request_exit(self) -> None:
         if self._exiting:
             return
         self._exiting = True
         self._status_request = None
+        if self._account_login:
+            self._account_login.cancel()
         if self.session:
             self.session.cancel()
         self.app.exit()
@@ -712,6 +749,20 @@ class WizardTUI:
         command = text.strip()
         if command == "/exit":
             self._request_exit()
+            return False
+        if command == "/cancel-login":
+            if self._account_login:
+                self._account_login.cancel()
+            self._input_notice = "Account login cancellation requested."
+            buff.text = ""
+            return False
+        if command == "/login":
+            self._start_account_login()
+            buff.text = ""
+            return False
+        if self._account_login and self._account_login.running and not command.startswith("/"):
+            self._account_login.submit(command)
+            buff.text = ""
             return False
         if command.startswith("/") and command not in SLASH_COMMANDS:
             self._input_notice = "Unknown command. Available: " + ", ".join(SLASH_COMMANDS)
@@ -873,6 +924,43 @@ class WizardTUI:
         @kb.add("f2", filter=Condition(lambda: self.state == INTENT))
         def _(event):
             self._use_suggested_url()
+
+        slash_menu = Condition(lambda: self.slash_menu.visible)
+
+        @kb.add("up", filter=slash_menu)
+        def slash_up(event):
+            self.slash_menu.move(-1)
+
+        @kb.add("down", filter=slash_menu)
+        def slash_down(event):
+            self.slash_menu.move(1)
+
+        @kb.add("pageup", filter=slash_menu)
+        def slash_page_up(event):
+            self.slash_menu.move(-max(1, self.slash_menu.height()))
+
+        @kb.add("pagedown", filter=slash_menu)
+        def slash_page_down(event):
+            self.slash_menu.move(max(1, self.slash_menu.height()))
+
+        @kb.add("enter", filter=slash_menu)
+        def slash_accept(event):
+            self.slash_menu.apply()
+            # All currently registered controls are argument-free. Use the same
+            # accept handler as a typed command, without a second dispatcher.
+            self.input.buffer.validate_and_handle()
+
+        @kb.add("tab", filter=Condition(lambda: self.app.layout.has_focus(self.input)
+                                      and bool(self.slash_menu.entries)))
+        def slash_complete(event):
+            if self.slash_menu.visible:
+                self.slash_menu.apply()  # Fill only; leave the composer editable.
+            else:
+                self.slash_menu.open()
+
+        @kb.add("escape", filter=slash_menu)
+        def slash_dismiss(event):
+            self.slash_menu.dismiss()  # Preserve draft/cursor and do not cancel a run.
 
         return kb
 

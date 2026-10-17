@@ -49,7 +49,9 @@ def test_normal_intent_still_dispatches_once(monkeypatch):
         assert calls == ["architecture"]
 
 
-def test_finishing_keeps_draft_focus_and_restores_report_shortcuts_when_empty(monkeypatch):
+def test_finishing_keeps_draft_focus_and_restores_report_shortcuts_when_empty(
+    monkeypatch,
+):
     with ui() as app:
         monkeypatch.setattr(app, "_record_history", lambda snap: None)
         for text in ("draft j k b r q", ""):
@@ -62,18 +64,19 @@ def test_finishing_keeps_draft_focus_and_restores_report_shortcuts_when_empty(mo
             assert app.app.layout.has_focus(app.input if text else app.body)
 
 
-def test_slash_help_and_completion_use_actual_registry():
+def test_inline_completion_uses_actual_registry_without_persistent_help():
     with ui() as app:
-        help_text = app._command_help()[0][1]
-        for name, description in SLASH_COMMANDS.items():
-            assert name in help_text and description in help_text
-        app.state = WORKING
-        assert app._command_help()[0][1] == help_text
-        app.input.text = "/e"
-        completions = app.input.completer.get_completions(
-            Document("/e"), SimpleNamespace(completion_requested=True)
+        completions = list(
+            app.input.completer.get_completions(
+                Document("/"), SimpleNamespace(completion_requested=True)
+            )
         )
-        assert [item.text for item in completions] == ["/exit"]
+        assert [(item.text, item.display_meta_text) for item in completions] == list(
+            SLASH_COMMANDS.items()
+        )
+        assert not hasattr(app, "_command_help")
+        assert app._input_notice == ""
+        assert app._current_options() == VALID_COMMANDS
         assert VALID_COMMANDS == ["investigate", "verify", "report", "explain"]
 
 
@@ -121,7 +124,8 @@ def test_unknown_slash_is_never_an_llm_intent(monkeypatch):
         )
         app.input.text = "/unsupported"
         assert app._on_accept(app.input.buffer) is True
-        assert "Unknown command" in app._command_help()[0][1]
+        assert "Unknown command" in app._input_notice
+        assert app.input.text == "/unsupported"
 
 
 def test_cancel_stops_and_closes_existing_usage_consumer(monkeypatch):

@@ -40,6 +40,7 @@ dev = [
     "ruff>=0.6",
 ]
 usage = ["psycopg[binary,pool]>=3.2,<4"]
+account-oauth = ["PyJWT[crypto]>=2.10,<3"]
 
 [project.scripts]
 wizard = "wizard.cli.main:main"
@@ -56,13 +57,14 @@ build-backend = "setuptools.build_meta"
 # `pip install -e .` from the repository root enough.
 [tool.setuptools.packages.find]
 where = [".", "wizard-runtime-engine/src"]
-include = ["wizard", "wizard.*", "wizard_kernel", "wizard_kernel.*"]
+include = ["wizard", "wizard.*", "wizard_kernel", "wizard_kernel.*", "backend", "backend.*"]
 
 [tool.setuptools.package-data]
 wizard_kernel = ["storage/migrations/*.sql"]
+backend = ["migrations/*.sql"]
 
 [tool.pytest.ini_options]
-testpaths = ["wizard/tests"]
+testpaths = ["wizard/tests", "backend/tests"]
 pythonpath = ["."]
 
 # npm dependencies cannot be declared as Python distributions. This records the

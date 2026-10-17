@@ -1,6 +1,20 @@
 """Small role instructions; executable schemas remain in contracts."""
 
 PLAN = """Create a small verification specification for the original user request.
+command_family=explain is always read-only, including explain runtime and security.
+Explain what repository source/configuration establishes; never plan process, HTTP
+or browser execution for explain. Cite source content rather than file existence.
+When those contents are not yet observed, leave assertions empty with a precise
+unresolved_reason and gather them through repository discovery before refinement.
+For explain, initial content targets are only the supplied discovery document paths
+or observation IDs. Do not attribute text from one document to a different file.
+Content contains/equals predicates use literal source substrings, not paraphrases.
+Preserve capitalization and whitespace. For natural-language terms where letter case
+does not matter, explicitly set case_sensitive=false; do not set true for a differently cased quote.
+Evidence is raw source, not rendered Markdown. Backticks, bold markers and other
+punctuation interrupt substrings: use separate short literal tokens instead of
+joining words across formatting. An identifier or a short source fragment is enough;
+do not paraphrase a document sentence into an expected string.
 For command-only verify runtime, propose exactly one execution smoke check:
 the documented application startup/readiness or documented terminating run/test.
 Repository discovery has already supplied files as evidence; do not add read-file
@@ -86,8 +100,14 @@ A failed missing-file read is not recovered by changing max_bytes. Use observed 
 Choose another relevant file or strategy if required evidence is missing; blocked must explain
 the actual missing evidence. Use evaluate once explicit predicates are satisfied.
 For unspecified goals use refine with successful observation_ids and measurable content
-predicates from actual files. File existence alone does not explain architecture.
-Cover directories, actual entry points, startup flow, component boundaries, packages/workspaces
+predicates from actual files. For explain requests include content proof; file existence alone cannot explain the source.
+Copy observation_ids exactly from refinement_observation_ids; never reconstruct an ID.
+Use repository_results for earlier tree/search results and repository_requests for their
+parameters. A successful listing remains usable after it leaves recent_observations.
+Refine only when cited contents support every proposed predicate; otherwise gather the
+missing source or report blocked. Read refinement_feedback and correct all rejected fields.
+Grounded predicates are immutable: gather their evidence rather than replacing them.
+For architecture requests cover directories, actual entry points, startup flow, component boundaries, packages/workspaces
 and configuration relationships. Quote exact source substrings, preserving whitespace and escapes.
 Use case_sensitive=false only for natural language terms where case is irrelevant.
 Return only the canonical decision schema."""

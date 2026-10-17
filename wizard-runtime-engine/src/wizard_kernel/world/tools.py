@@ -59,7 +59,8 @@ class ToolExecutor:
     def _tool_list_tree(self, max_depth: int = 3) -> dict:
         import os
         tree: list[str] = []
-        for dirpath, dirnames, filenames in os.walk(self._repo):
+        errors = []
+        for dirpath, dirnames, filenames in os.walk(self._repo, onerror=errors.append):
             rel = Path(dirpath).relative_to(self._repo)
             if len(rel.parts) >= max_depth:
                 dirnames.clear()
@@ -67,8 +68,9 @@ class ToolExecutor:
             from wizard_kernel.world.scanner import _SKIP_DIRS
             dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS]
             tree.extend((rel / f).as_posix() for f in filenames)
-        return {"ok": True, "data": {"tree": tree, "count": len(tree)},
-                "error": None, "meta": {}}
+        return {"ok": not errors, "data": {"tree": tree, "count": len(tree), "incomplete": bool(errors)},
+                "error": 'Repository listing incomplete: ' + ', '.join(sorted({type(e).__name__ for e in errors})) if errors else None,
+                "meta": {}}
 
     def _tool_read_file(self, path: str, max_bytes: int = 65536) -> dict:
         raw = self._sandbox.read_file(path, max_bytes)

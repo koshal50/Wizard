@@ -130,13 +130,25 @@ class ArchitectureReport(StrictModel):
         return self
 
 
-def planning_model(commands: list[str]):
+def planning_model(commands: list[str], *, read_only: bool = False, repository_targets: list[str] | None = None,
+                   discovery_only: bool = False):
     """Constrain executable identities using repository discovery, not labels."""
     targets = Literal[tuple(dict.fromkeys(["", *commands]))]
     predicates = tuple(create_model(p.__name__ + "_declared", __base__=p, target=(targets, ""))
                        if p.model_fields["source"].annotation == Literal["process"] else p for p in _predicates)
     predicate = RootModel[Annotated[Union[predicates], Field(discriminator="field")]]
-    check = create_model("PlannedCheck", __base__=CheckSpec, assertions=(list[predicate], Field(default_factory=list)))
+    if read_only:
+        content = next(p for p in _predicates if p.model_fields['field'].annotation == Literal['content'])
+        if repository_targets:
+            content = create_model('ObservedExplanationContent', __base__=content,
+                target=(Literal[tuple(dict.fromkeys(repository_targets))], ...))
+        repository_assertion = create_model('ExplanationAssertion', __base__=Assertion, root=(content, ...))
+        check = create_model('ExplanationCheck', __base__=CheckSpec,
+            assertions=(list[repository_assertion], Field(default_factory=list,
+                **({'max_length': 0} if repository_targets == [] or discovery_only else {}))),
+            capabilities=(list[Literal['repository']], Field(default_factory=list)))
+    else:
+        check = create_model("PlannedCheck", __base__=CheckSpec, assertions=(list[predicate], Field(default_factory=list)))
     return create_model("GroundedVerificationSpec", __base__=VerificationSpec,
                         checks=(list[check], Field(min_length=1, max_length=8)))
 
@@ -201,7 +213,8 @@ class DecisionEnvelope(StrictModel):
 def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, value_refs: list[str] | None = None,
                    allow_refine: bool = True, browser_refinement: bool = False, allow_blocked: bool = True,
                    browser_targets: list[str] | None = None, require_submission: bool | None = None,
-                   process_targets: list[str] | None = None, repository_refinement: bool = False):
+                   process_targets: list[str] | None = None, repository_refinement: bool = False,
+                   observation_ids: list[str] | None = None, repository_targets: list[str] | None = None):
     """Only advertise allowed tools, with structurally exclusive decision kinds."""
     registered = dict(TOOL_ACTIONS)
     if value_refs:
@@ -232,6 +245,12 @@ def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, v
                                       assertions=(list[browser_assertion], Field(min_length=1)))
     elif repository_refinement:
         predicates = tuple(p for p in _predicates if p.model_fields['source'].annotation == Literal['repository'])
+        if repository_targets is not None:
+            allow_refine = allow_refine and bool(repository_targets)
+            if repository_targets:
+                targets = Literal[tuple(dict.fromkeys(repository_targets))]
+                predicates = tuple(create_model(p.__name__ + '_observed_repository', __base__=p, target=(targets, ...))
+                                   for p in predicates)
         predicate = RootModel[Annotated[Union[predicates], Field(discriminator='field')]]
         refinement_type = create_model('RepositoryRefinement', __base__=CheckRefinement,
                                       assertions=(list[predicate], Field(min_length=1)))
@@ -242,6 +261,12 @@ def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, v
         predicate = RootModel[Annotated[Union[predicates], Field(discriminator="field")]]
         refinement_type = create_model("ProcessRefinement", __base__=CheckRefinement,
                                       assertions=(list[predicate], Field(min_length=1)))
+    if observation_ids is not None:
+        allow_refine = allow_refine and bool(observation_ids)
+        if observation_ids:
+            reference = Literal[tuple(dict.fromkeys(observation_ids))]
+            refinement_type = create_model("ObservedRefinement", __base__=refinement_type,
+                observation_ids=(list[reference], Field(min_length=1)))
     refine = create_model("RefineDecision", __base__=StrictModel,
         kind=(Literal["refine"], ...), action=(None, None),
         refinement=(refinement_type, ...), reason=(str, ...))

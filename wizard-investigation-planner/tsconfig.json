@@ -10,6 +10,9 @@
     "exactOptionalPropertyTypes": false,
 
     "allowImportingTsExtensions": true,
+
+
+
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "noEmit": true,

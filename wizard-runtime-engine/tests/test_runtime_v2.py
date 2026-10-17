@@ -734,8 +734,9 @@ def test_explain_cannot_execute_a_model_proposed_runtime_check(tmp_path):
     verification.run(inv, manager, policy)
     state = fs_store.read(inv.id, "verification.json")
     assert state["executions"] == []
-    assert state["results"]["check"]["status"] == "unverified"
-    assert "Execution capability disabled" in state["results"]["check"]["reason"]
+    assert inv.state.value == "failed"
+    assert state["checks"] == []  # Invalid execution plan never enters admission.
+    assert state["stop_reason"]
     assert policy.contexts == []
 
 

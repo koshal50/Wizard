@@ -151,7 +151,55 @@ def _effective_request(inv):
     return f"Show the saved report for {scopes}; do not perform another investigation."
 
 
-def _context(inv, check, results, observations, available, discovery, authorized, public_refs=()):
+def supporting_repository_sources(assertion, observations):
+    """Locate existing positive proof for feedback; never retarget accepted criteria."""
+    from wizard_kernel.contracts.verification import Assertion, CheckSpec
+    if assertion.source != 'repository' or assertion.field != 'content' or assertion.operator not in {'contains', 'equals'}:
+        return []
+    matches = []
+    for obs in observations:
+        if not obs.success or obs.source_tool != 'read_file':
+            continue
+        predicate = Assertion.model_validate({**assertion.model_dump(), 'target': obs.id})
+        preview = CheckSpec(id='evidence_lookup', description='Locate existing proof', assertions=[predicate])
+        if checks.verdict(checks.evaluate(preview, [obs])) == 'passed':
+            matches.append({'observation_id': obs.id, 'path': (obs.payload.get('data') or {}).get('path')})
+    return matches
+
+
+def refinement_errors(check, refinement, observations, eligible_ids, *, require_content=False):
+    """Explain rejected references without changing accepted requirements or evidence."""
+    errors = {}
+    if check.assertions:
+        errors['grounded_requirements'] = [a.model_dump() for a in check.assertions]
+    invalid = sorted(set(refinement.observation_ids) - set(eligible_ids))
+    if invalid:
+        errors['invalid_observation_ids'] = invalid
+    cited = [o for o in observations if o.id in refinement.observation_ids and o.id in eligible_ids]
+    invalid_targets = sorted({a.target for a in refinement.assertions
+        if a.target.startswith('obs_') and a.target not in {o.id for o in cited}})
+    if invalid_targets:
+        errors['uncited_observation_targets'] = invalid_targets
+    # Repository refinements discover criteria from retrieved content. A proposed
+    # criterion unsupported by those records must remain unresolved, not become
+    # a new grounded requirement that prevents later correction.
+    if not check.assertions and all(a.source == 'repository' for a in refinement.assertions):
+        if require_content and not any(a.field == 'content' for a in refinement.assertions):
+            errors['missing_content_proof'] = 'An explanation requires source content; file existence alone cannot resolve it'
+        preview = check.model_copy(update={'assertions': refinement.assertions})
+        unsupported = [{'assertion_index': index, 'assertion': r['assertion'],
+                        'observation_id': r.get('observation_id'), 'verdict': r['verdict'],
+                        'reason': r.get('reason') or 'Cited content does not satisfy the proposed predicate'}
+                       for index, r in enumerate(checks.evaluate(preview, cited)) if r['verdict'] != 'passed']
+        if unsupported:
+            for item in unsupported:
+                item['supporting_sources'] = supporting_repository_sources(
+                    refinement.assertions[item['assertion_index']], [o for o in observations if o.id in eligible_ids])
+            errors['unsupported_assertions'] = unsupported
+    return errors
+
+
+def _context(inv, check, results, observations, available, discovery, authorized, public_refs=(), *, preferred_ids=()):
     from wizard_kernel.ports.prompts import BROWSER_COMMANDS
     recent = []
     for obs in observations[-3:]:
@@ -160,6 +208,8 @@ def _context(inv, check, results, observations, available, discovery, authorized
             data = {k: v for k, v in data.items() if k in {"url", "clicked", "typed", "all_filled", "submitted_form", "fields"}}
         elif obs.source_tool in {"start_process", "read_process"}:
             data = {k: v for k, v in data.items() if k in {"handle_id", "is_running", "exit_code"}}
+        elif obs.source_tool == 'read_file':
+            data = {k: v for k, v in data.items() if k != 'content'}
         recent.append({"id": obs.id, "tool": obs.source_tool, "success": obs.success,
                        "result": flow_trace.safe_text(json.dumps(data or obs.payload, default=str), limit=2000)})
     resource_state = _resources(observations)
@@ -196,7 +246,9 @@ def _context(inv, check, results, observations, available, discovery, authorized
             for o in scoped if o.obs_type == "agent_failure"][-2:]
     packet = {"original_request": flow_trace.safe_text(_redact(_effective_request(inv), authorized), limit=8000), "command_family": inv.intent,
             "targets": [flow_trace.safe_text(t, limit=1600) for t in inv.targets],
-            "current_check": check.model_dump(), "assertion_results": results,
+            "current_check": check.model_dump(), "assertion_results": [
+                {**r, 'actual': flow_trace.safe_text(str(r['actual']), limit=400) if r.get('actual') is not None else None}
+                for r in results],
             "check_scope": "Complete this check only; dependent UI checks run after its readiness requirements pass",
             "refinement_policy": "For authentication, process readiness is preparation, not an authentication result. Navigate and inspect the actual page first; refine only browser post-submission result criteria using this check's browser observations.",
             "discovery_required": bool(not check.assertions and not resource_state["browser"] and "browser_navigate" in available),
@@ -220,8 +272,25 @@ def _context(inv, check, results, observations, available, discovery, authorized
             "remaining_tool_budget": inv.budget_remaining}
     packet['repository_evidence'] = [
         {'observation_id': o.id, 'path': (o.payload.get('data') or {}).get('path'),
-         'success': o.success, 'bytes_read': (o.payload.get('data') or {}).get('bytes_read')}
+         'success': o.success, 'bytes_read': (o.payload.get('data') or {}).get('bytes_read'),
+         'excerpt': flow_trace.safe_text(str((o.payload.get('data') or {}).get('content') or ''), limit=1200)}
         for o in observations if o.source_tool == 'read_file']
+    content_budget = 12000
+    contents = list(zip(packet['repository_evidence'], [o for o in observations if o.source_tool == 'read_file']))
+    contents.reverse()
+    contents.sort(key=lambda pair: pair[1].id not in preferred_ids)
+    for item, obs in contents:
+        content = str((obs.payload.get('data') or {}).get('content') or '')
+        limit = min(8000, content_budget)
+        item['excerpt'] = flow_trace.safe_text(content, limit=limit) if limit else ''
+        item['content_complete'] = len(content) <= limit
+        content_budget -= min(len(content), limit)
+    packet['repository_results'] = [
+        {'observation_id': o.id, 'tool': o.source_tool, 'success': o.success,
+         'result': _redact(o.payload.get('data') or {}, authorized, public_refs)}
+        for o in observations if o.source_tool in {'list_tree', 'search_files', 'path_exists'}][-8:]
+    packet['refinement_feedback'] = [o.payload for o in observations
+        if o.goal_id == check.id and o.obs_type == 'agent_failure' and o.payload.get('details')][-3:]
     packet['evidence_instruction'] = 'Repository evidence is shared across checks. Reuse listed observation IDs; identical reads return cached evidence, not new information. Choose a different relevant file or evaluate satisfied predicates.'
     if available and set(available) <= {'read_file', 'search_files', 'list_tree', 'path_exists'}:
         for key in ('refinement_policy', 'discovery_required', 'discovery_instruction', 'authentication_progress',
@@ -509,7 +578,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
     store = ObservationStore(inv.id, on_append=index_observation)
     sandbox = get_sandbox(inv.options.get("sandbox_mode", "local_dev"))
     browser = None
-    validator = ToolRequestValidator(inv.repository_path, inv.options.get("allowed_domains", []), False, navigation_targets=inv.targets)
+    validator = ToolRequestValidator(inv.repository_path, inv.options.get("allowed_domains", []), False,
+                                     navigation_targets=inv.targets, read_only=inv.intent == 'explain')
     state = {"version": 2, "checks": [], "results": {}, "executions": [], "model_calls": 0,
              "decisions": [], "cleanup": "Pending", "stop_reason": ""}
     deadline = time.monotonic() + inv.options.get("max_elapsed_seconds", 600)
@@ -699,12 +769,37 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             if inv.intent == 'investigate' and 'architecture' in inv.targets:
                 planning_discovery = {**discovery, 'documents': [
                     {**d, 'content': d['content'][:1000]} for d in discovery['documents']]}
-            spec = request("planner", {"original_request": flow_trace.safe_text(_redact(_effective_request(inv), authorized, public_refs), limit=8000),
+            planning_context = {"original_request": flow_trace.safe_text(_redact(_effective_request(inv), authorized, public_refs), limit=8000),
                                       "command_family": inv.intent, "targets": inv.targets, "discovery": planning_discovery,
                                       "knowledge": [{"id": c.id, "type": c.claim_type, "key": c.key, "value": c.value}
                                                     for c in kg.all_claims()[:16]],
-                                      "authorized_value_refs": list(authorized)},
-                           planning_model([c["command"] for c in discovery["command_candidates"]]))
+                                      "authorized_value_refs": list(authorized)}
+            plan_model = planning_model([c['command'] for c in discovery['command_candidates']], read_only=inv.intent == 'explain',
+                repository_targets=[v for d in discovery['documents'] for v in (d['path'], d['observation_id'])])
+            for attempt in range(2):
+                spec = request('planner', planning_context, plan_model)
+                feedback = []
+                if inv.intent == 'explain':
+                    # These are proposals, not admitted requirements yet. Reject
+                    # invented content before it becomes an immutable predicate.
+                    for proposed_check in spec.checks:
+                        for index, result in enumerate(checks.evaluate(proposed_check, store.all())):
+                            if result['verdict'] != 'passed':
+                                feedback.append({'check_id': proposed_check.id, 'assertion_index': index,
+                                    'assertion': result['assertion'], 'verdict': result['verdict'],
+                                    'observation_id': result.get('observation_id'),
+                                    'reason': result.get('reason') or 'Proposed content is not supported by the supplied document',
+                                    'supporting_sources': supporting_repository_sources(proposed_check.assertions[index], store.all())})
+                    state.setdefault('explanation_plan_attempts', []).append({'proposal': spec.model_dump(), 'feedback': feedback})
+                if not feedback:
+                    break
+                if attempt == 1:
+                    raise InterruptedError('Explanation plan remains unsupported by observed content after one correction')
+                planning_context['planning_feedback'] = feedback
+                planning_context['correction_instruction'] = ('The proposed content criteria were not grounded and have not been admitted. '
+                    'Preserve the original explanation request as repository discovery goals with assertions=[] and a precise unresolved_reason. '
+                    'The Explorer must inspect actual observations before proposing content criteria. Do not invent replacement literals.')
+                plan_model = planning_model([], read_only=True, discovery_only=True)
             spec = VerificationSpec.model_validate(spec.model_dump())
             fs_store.write(inv.id, "proposed_plan.json", spec.model_dump())
             state["effective_request"] = _effective_request(inv)
@@ -758,6 +853,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 reused = set()
                 def resource_identity():
                     current = _resources(store.all())
+                    current['repository_observation_ids'] = [o.id for o in store.all() if o.success
+                        and o.source_tool in {'read_file', 'list_tree', 'search_files', 'path_exists'}]
                     for endpoint in current["reachable_endpoints"]:
                         endpoint.pop("observation_id", None)
                     return hashlib.sha256(json.dumps(current, sort_keys=True, default=str).encode()).hexdigest()
@@ -780,13 +877,18 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     auth_check = check.workflow in {"registration", "login", "form_submission"}
                     browser_grounded = any(o.goal_id == check.id and o.success and o.source_tool.startswith("browser_")
                                            for o in store.all())
-                    context = _context(inv, check, results, store.all(), available, discovery, authorized, public_refs)
+                    context = _context(inv, check, results, store.all(), available, discovery, authorized, public_refs,
+                        preferred_ids=[e['observation_id'] for e in state.get('evidence_reuse', [])[-2:]])
+                    context['evidence_reuse'] = state.get('evidence_reuse', [])[-8:]
                     context['repository_requests'] = [
-                        {'parameters': e['parameters'], 'observation_id': e.get('observation_id'),
+                        {'tool': e['tool'], 'parameters': e['parameters'], 'observation_id': e.get('observation_id'),
                          'success': e.get('success'),
                          'error': (store.get(e.get('observation_id')).payload.get('error')
                                    if store.get(e.get('observation_id')) else None)}
-                        for e in state['executions'] if e['tool'] == 'read_file'][-24:]
+                        for e in state['executions'] if e['tool'] in {'read_file', 'list_tree', 'search_files', 'path_exists'}][-24:]
+                    eligible = [o.id for o in store.all() if o.success
+                        and (not auth_check or o.goal_id == check.id and o.source_tool.startswith('browser_'))]
+                    context['refinement_observation_ids'] = eligible
                     relevant_ids = {o.id for o in store.all() if o.goal_id == check.id or o.source_tool == "read_file"}
                     context["knowledge"] = [{"id": c.id, "type": c.claim_type, "key": c.key,
                         "value": flow_trace.safe_text(json.dumps(_redact(c.value, authorized, public_refs), default=str), limit=350),
@@ -819,14 +921,19 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                                            browser_targets=[(_resources(store.all())["browser"] or {}).get("url", "")],
                                            require_submission=auth_check,
                                            process_targets=process_commands if process_only else None,
-                                           repository_refinement=set(available) <= {'read_file', 'search_files', 'list_tree', 'path_exists'})
+                                           repository_refinement=set(available) <= {'read_file', 'search_files', 'list_tree', 'path_exists'},
+                                           observation_ids=eligible,
+                                           repository_targets=[v for o in store.all() if o.id in eligible
+                                               and o.source_tool in {'read_file', 'path_exists'}
+                                               for v in (o.id, str((o.payload.get('data') or {}).get('path') or '').replace('\\', '/'),
+                                                         str((o.payload.get('data') or {}).get('path') or '')) if v])
                     decision = request("explorer", context, model)
                     refresh_processes(check)
                     results = checks.evaluate(check, store.all())
                     if decision.kind == "refine":
                         from wizard_kernel.contracts.verification import CheckRefinement
                         refinement = CheckRefinement.model_validate(decision.refinement.model_dump())
-                        known = {o.id for o in store.all() if o.success}
+                        known = set(eligible)
                         observed_urls = {((o.payload.get("data") or {}).get("page_observation") or o.payload.get("data") or {}).get("url")
                                          for o in store.all() if o.success and o.goal_id == check.id and o.source_tool.startswith("browser_")}
                         observed_commands = {(o.payload.get("data") or {}).get("command")
@@ -841,16 +948,18 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         if auth_check:
                             known = {o.id for o in store.all() if o.success and o.goal_id == check.id
                                      and o.source_tool.startswith("browser_")}
-                        if (check.assertions or decision.action is not None or refinement is None or not process_grounded
+                        details = refinement_errors(check, refinement, store.all(), known, require_content=inv.intent == 'explain')
+                        if (details or decision.action is not None or refinement is None or not process_grounded
                                 or not set(refinement.observation_ids) <= known
                                 or any(a.source == "browser" and a.target and a.target not in observed_urls for a in refinement.assertions)):
-                            reason = "Refinement rejected: use actual observation IDs to resolve unspecified expectations; grounded requirements cannot be weakened"
+                            reason = "Refinement rejected: " + json.dumps(details or {'resource_scope': 'Use observed commands and browser URLs'}, sort_keys=True)
                             fingerprint = hashlib.sha256(decision.model_dump_json().encode()).hexdigest()
                             if rejected.get(fingerprint) == resource_identity():
                                 raise InterruptedError("No progress: identical rejected refinement repeated")
                             rejected[fingerprint] = resource_identity()
                             store.append(node_id=check.id, goal_id=check.id, source_tool="explorer", obs_type="agent_failure",
-                                         payload={"ok": False, "reason": reason})
+                                         payload={"ok": False, "reason": reason, "details": details,
+                                                  "available_observation_ids": eligible})
                             bus.emit(events.ToolRejected, {"tool": "refine", "node_id": check.id, "reason": reason})
                             save(last_event=reason)
                             continue
@@ -986,20 +1095,22 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         reused.add(existing.id)
                         state.setdefault('evidence_reuse', []).append({'check_id': check.id, 'tool': tool,
                             'observation_id': existing.id, 'reason': validation.reason})
-                        context_discovery = discovery.setdefault('documents', [])
-                        context_discovery.insert(0, {'path': (existing.payload.get('data') or {}).get('path'),
-                            'observation_id': existing.id, 'content': (existing.payload.get('data') or {}).get('content', '')})
+                        if tool == 'read_file':
+                            context_discovery = discovery.setdefault('documents', [])
+                            context_discovery.insert(0, {'path': (existing.payload.get('data') or {}).get('path'),
+                                'observation_id': existing.id, 'content': (existing.payload.get('data') or {}).get('content', '')})
                         save(last_event=validation.reason)
                         continue
                     if not validation.valid:
                         rejected[action_id] = resource_identity()
                         store.append(node_id=check.id, goal_id=check.id, source_tool="explorer", obs_type="agent_failure",
-                                     payload={"ok": False, "tool": tool, "reason": validation.reason})
+                                     payload={"ok": False, "tool": tool, "reason": validation.reason,
+                                              "details": validation.details})
                         bus.emit(events.ToolRejected, {"tool": tool, "node_id": check.id, "reason": validation.reason})
                         save(last_event=validation.reason)
                         continue
                     obs = execute(tool, proposed, validation.sanitised_params, check.id)
-                    if not obs.success:
+                    if not obs.success and not validator.retry_eligible(tool, validation.sanitised_params):
                         rejected[action_id] = resource_identity()
                     latest = checks.evaluate(check, store.all())
                     state["results"][check.id] = {"status": "pending", "assertions": latest}

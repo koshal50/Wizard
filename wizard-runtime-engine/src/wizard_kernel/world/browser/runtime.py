@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -49,7 +50,12 @@ class BrowserRuntime:
             raise ValueError("Browser allowed_domains is empty; navigation is blocked")
         self._command = browser_command()
         self._directory = tempfile.TemporaryDirectory(prefix="wizard-browser-")
-        (Path(self._directory.name) / "config.json").write_text("{}", encoding="utf-8")
+        config = {}
+        local_browsers = Path(sys.prefix) / "browser-home" / ".agent-browser" / "browsers"
+        chrome = next(local_browsers.glob("chrome-*/chrome.exe"), None)
+        if chrome is not None:
+            config["executablePath"] = str(chrome)
+        (Path(self._directory.name) / "config.json").write_text(json.dumps(config), encoding="utf-8")
         self._started = True  # CLI available; actual Chrome starts on accepted navigation.
 
     def _run(self, *args, input=None):

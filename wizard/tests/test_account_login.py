@@ -386,3 +386,35 @@ def test_login_is_available_in_inline_completion_not_primary_menu(monkeypatch):
         assert calls == ["login"]
         assert ui.app.layout.has_focus(ui.input) and ui._status_input
         assert ui.family is None
+
+
+def test_terminal_authorization_url_survives_narrow_output(monkeypatch):
+    """The manual browser fallback must be copyable even from redirected output."""
+    import io
+
+    from rich.console import Console
+
+    from wizard.cli import account_login
+
+    url = (
+        "http://localhost:3000/cli/authorize#request_id="
+        + "a" * 36
+        + "&ticket="
+        + "b" * 43
+    )
+
+    class Flow:
+        active = True
+        complete = False
+
+        def start(self):
+            return "Open this URL manually:\n" + url
+
+        def close(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(account_login, "LoginFlow", Flow)
+    monkeypatch.setattr("builtins.input", lambda _: "/cancel-login")
+    output = io.StringIO()
+    assert account_login.terminal_login(Console(file=output, width=35)) == 1
+    assert url in output.getvalue()

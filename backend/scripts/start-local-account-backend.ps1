@@ -1,5 +1,9 @@
 #requires -Version 5.1
 # Local manual-test launcher. Configuration is encrypted for the current Windows user.
+param(
+    [ValidateSet('http://localhost:8090', 'http://localhost:3000')]
+    [string]$PublicOrigin = 'http://localhost:3000'
+)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $configPath = Join-Path $root '.secrets\wizard-account-local.clixml'
@@ -18,7 +22,7 @@ function Set-ProtectedEnvironment {
 }
 Set-ProtectedEnvironment 'WIZARD_ACCOUNT_DATABASE_URL' $configuration.Database
 Set-ProtectedEnvironment 'WIZARD_ACCOUNT_SECRET' $configuration.Secret
-$env:WIZARD_ACCOUNT_PUBLIC_ORIGIN = 'http://localhost:8090'
+$env:WIZARD_ACCOUNT_PUBLIC_ORIGIN = $PublicOrigin
 $env:WIZARD_ACCOUNT_LOCAL_DEV = '1'
 $python = Join-Path $root 'venv\Scripts\python.exe'
 Push-Location $root

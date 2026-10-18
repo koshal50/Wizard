@@ -278,7 +278,7 @@ def terminal_login(console):
     flow = None
     try:
         flow = LoginFlow()
-        console.print(flow.start(), markup=False)
+        console.print(flow.start(), markup=False, soft_wrap=True)
         while flow.active:
             code = input("Website code (or /cancel-login): ").strip()
             if code in {"/cancel-login", "/exit"}:

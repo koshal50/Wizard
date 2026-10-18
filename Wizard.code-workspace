@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "name": "Wizard backend and CLI",
+      "path": "."
+    },
+    {
+      "name": "Wizard website",
+      "path": "../Wizard-web"
+    }
+  ],
+  "settings": {}
+}

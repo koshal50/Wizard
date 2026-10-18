@@ -1,3 +1,5 @@
+> Historical preview documentation. The live integration now supersedes this document; see [CLI_AUTH_INTEGRATION.md](./CLI_AUTH_INTEGRATION.md).
+
 # Wizard CLI authorization UI
 
 This is a frontend preview only. No CLI authorization requests, authentication

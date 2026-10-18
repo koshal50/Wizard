@@ -27,3 +27,8 @@ yarn-error.log*
 next-env.d.ts
 
 prompt.md
+# Browser test output may contain sensitive authorization context
+/test-results/
+/playwright-report/
+
+!.env.example

@@ -18,7 +18,7 @@
   var pw = document.querySelector('#register-form #password');
   if (meter && pw) {
     var rules = {
-      len: function (v) { return v.length >= 10; },
+      len: function (v) { return v.length >= 12; },
       letter: function (v) { return /[A-Za-z]/.test(v); },
       number: function (v) { return /[0-9]/.test(v); }
     };
@@ -59,7 +59,7 @@
       if (v('fullName').trim().length < 2) bad = e('fullName', 'Enter your full name.') || bad;
       if (!EMAIL_RE.test(v('email').trim())) bad = e('email', 'Enter a valid email address.') || bad;
       var p = v('password');
-      if (p.length < 10 || !/[A-Za-z]/.test(p) || !/[0-9]/.test(p)) bad = e('password', 'Password does not meet the requirements below.') || bad;
+      if (p.length < 12 || p.length > 256 || !/[A-Za-z]/.test(p) || !/[0-9]/.test(p)) bad = e('password', 'Password does not meet the requirements below.') || bad;
       if (p !== v('confirmPassword')) bad = e('confirmPassword', 'Passwords do not match.') || bad;
       if (!f.elements.acceptTerms.checked) bad = e('acceptTerms', 'Accept the terms to create an account.') || bad;
       return bad;
@@ -70,7 +70,9 @@
     var btn = form.querySelector('button[type=submit]');
     var label = btn.textContent;
 
-    form.addEventListener('submit', function (ev) {
+    form.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      if (btn.disabled) return;
       var box = document.getElementById('form-alert');
       if (box) { box.classList.remove('show'); box.textContent = ''; }
       form.querySelectorAll('.field-error').forEach(function (el) { el.textContent = ''; });
@@ -82,11 +84,53 @@
         if (first) first.focus();
         return;
       }
-      // Valid: the form now submits normally to its action URL.
+      // Submit established handlers with fresh session CSRF and safe redirects.
       btn.disabled = true;
       btn.setAttribute('aria-busy', 'true');
       btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span></span>';
       btn.lastChild.textContent = btn.dataset.loading || 'Working…';
+      try {
+        var ctxResponse = await fetch('/api/auth/context', {
+          credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000)
+        });
+        var ctx = await ctxResponse.json();
+        if (!ctxResponse.ok || !/^[a-f0-9]{64}$/.test(ctx.csrf)) throw new Error('Cannot verify your session. Retry.');
+        var fields = new URLSearchParams();
+        new FormData(form).forEach(function (value, key) { fields.append(key, value); });
+        fields.set('csrf', ctx.csrf);
+        var response = await fetch(form.getAttribute('action'), {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'manual',
+          headers: { 'X-CSRF-Token': ctx.csrf }, body: fields, signal: AbortSignal.timeout(15000)
+        });
+        if (response.type === 'opaqueredirect') {
+          // Manual redirects preserve rotated cookies without fetching the destination HTML.
+          // A redirect is not authentication proof: re-read the verified server session.
+          var verifiedResponse = await fetch('/api/auth/context', {
+            credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000)
+          });
+          var verified = await verifiedResponse.json();
+          if (!verifiedResponse.ok || !verified.account || typeof verified.account.id !== 'string' ||
+              typeof verified.cli_pending !== 'boolean') {
+            throw new Error('Authentication was not verified. Reload and try signing in.');
+          }
+          window.location.assign(verified.cli_pending ? '/cli/connect' : '/');
+          return;
+        }
+        var result = await response.json();
+        var message = response.status === 429 ? 'Too many attempts. Wait at least ' + (response.headers.get('Retry-After') || '60') + ' seconds.'
+          : result.error === 'password_reset_delivery_unconfigured' ? 'Password reset email delivery is not configured.'
+          : response.status === 401 ? 'Email or password was not accepted.'
+          : response.status === 409 ? 'Registration or session unavailable. Try signing in, or reload this page.'
+          : 'Authentication was not confirmed. Check your details and retry.';
+        throw new Error(message);
+      } catch (error) {
+        if (box) { box.textContent = error.message || 'Connection failed. Retry.'; box.classList.add('show'); box.focus(); }
+        form.querySelectorAll('input[type=password]').forEach(function (input) { input.value = ''; });
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+        btn.textContent = label;
+      }
+
     });
 
     // Restore the button when returning via the back button

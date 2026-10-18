@@ -30,6 +30,32 @@ class Database:
         self.pool.close()
 
 
+ACCOUNT_TABLES = (
+    "website_accounts",
+    "website_sessions",
+    "cli_authorizations",
+    "account_cli_credentials",
+    "account_rate_limits",
+    "website_oidc_attempts",
+    "website_oidc_identities",
+)
+
+
+def missing_account_tables(url):
+    """Read-only preflight in the configured account database/search path."""
+    import psycopg
+
+    with psycopg.connect(url, connect_timeout=3) as conn:
+        conn.read_only = True
+        conn.execute("SET LOCAL statement_timeout = '5s'")
+        rows = conn.execute(
+            "SELECT name FROM unnest(%s::text[]) AS required(name) "
+            "WHERE to_regclass(name) IS NULL ORDER BY name",
+            (list(ACCOUNT_TABLES),),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
 def migrate(url):
     import psycopg
 
@@ -73,12 +99,21 @@ if __name__ == "__main__":
     if not url:
         raise SystemExit("Set WIZARD_ACCOUNT_DATABASE_URL to the account database")
     try:
-        if sys.argv[1:] == ["cleanup"]:
+        if sys.argv[1:] == ["check"]:
+            missing = missing_account_tables(url)
+            if missing:
+                raise SystemExit(
+                    "Account tables missing: "
+                    + ", ".join(missing)
+                    + ". Run python -m backend.db against this account database."
+                )
+            print("All seven account tables are present")
+        elif sys.argv[1:] == ["cleanup"]:
             cleanup(url)
         elif not sys.argv[1:]:
             migrate(url)
         else:
-            raise SystemExit("Usage: python -m backend.db [cleanup]")
+            raise SystemExit("Usage: python -m backend.db [check|cleanup]")
     except Exception:  # noqa: BLE001 -- never expose DSN credentials in migration failures
         raise SystemExit(
             "Account database operation failed; check connectivity, privileges, and schema"

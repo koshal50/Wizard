@@ -15,6 +15,81 @@ from wizard.cli.tui.app import INTENT, WORKING, WizardTUI
 from wizard.cli.tui.session import TuiSession
 
 
+def test_startup_menu_has_visible_intent_box_before_slash():
+    import asyncio
+
+    from prompt_toolkit.application.current import set_app
+
+    with ui() as app:
+        assert app.input.text == ""
+        assert not app._status_input
+
+        async def render():
+            with set_app(app.app):
+                app.app.renderer.render(app.app, app.app.layout)
+                await app.app.cancel_and_wait_for_background_tasks()
+
+        asyncio.run(render())
+        assert app.input.window.render_info is not None
+        assert app.input.window.render_info.window_height == 1
+        assert app.input_frame.title == "Intent / command"
+
+
+def test_account_label_is_beside_activity_and_updates_cached_header(monkeypatch):
+    from prompt_toolkit.formatted_text import to_formatted_text
+    from wizard.cli.tui import widgets
+
+    # Rich's dumb-terminal fallback otherwise ignores the requested test width.
+    monkeypatch.setattr(widgets._console, "_height", 40)
+
+    def plain(frame):
+        return "".join(fragment[1] for fragment in to_formatted_text(frame))
+
+    with ui() as app:
+        app._geometry = lambda: (140, 40)
+        before = app._render_top()
+        heading = next(line for line in plain(before).splitlines() if "Recent activity" in line)
+        assert "(default user)" in heading
+        assert heading.index("(default user)") > heading.index("Recent activity")
+        app._set_account({"full_name": "Ada Lovelace", "email": "ada@example.test"})
+        after = app._render_top()
+        assert after is not before
+        assert "(Ada Lovelace)" in plain(after)
+        assert "default user" not in plain(after)
+        assert app._render_top() is after
+        app._set_account(None)
+        assert "(default user)" in plain(app._render_top())
+
+
+def test_startup_account_check_cannot_overwrite_new_login(monkeypatch):
+    from wizard.cli import account_login
+
+    with ui() as app:
+        jobs = []
+        monkeypatch.setattr(
+            threading, "Thread",
+            lambda target, **kwargs: SimpleNamespace(start=lambda: jobs.append(target)),
+        )
+
+        class Flow:
+            store = SimpleNamespace(load=lambda: {})
+
+            def authenticated_account(self, existing):
+                app._set_account({"full_name": "New login"})
+                return {"full_name": "Old account"}
+
+            def close(self):
+                pass
+
+            def cancelled(self):
+                return False
+
+        monkeypatch.setattr(account_login, "LoginFlow", Flow)
+        app._load_account_identity()
+        jobs[0]()
+        assert app._account_name == "New login"
+
+
 @contextmanager
 def ui():
     with create_app_session(input=DummyInput(), output=DummyOutput()):
@@ -159,6 +234,7 @@ def test_windows_cleanup_targets_owned_process_tree(monkeypatch):
 
 def test_cancel_during_post_acknowledgement_stops_the_new_run(monkeypatch):
     from wizard.cli.runtime_client import client
+    monkeypatch.setattr("wizard.cli.runtime_client.account.account_headers", lambda: {})
 
     stop = threading.Event()
     cancelled = []

@@ -35,10 +35,15 @@ Terminal 3:
 
 ```powershell
 cd 'D:\all projects\Wizard'
-$env:WIZARD_ACCOUNT_URL = 'http://localhost:3000'
-$env:WIZARD_ACCOUNT_LOCAL_DEV = '1'
 .\venv\Scripts\wizard.exe /login
 ```
+
+Set `WIZARD_ACCOUNT_URL=http://localhost:3000` and
+`WIZARD_ACCOUNT_LOCAL_DEV=1` in the Wizard worktree's `.env` once (see
+`.env.example`). Both standalone `/login` and the TUI read these account settings
+from that file, including when Wizard is launched from another project directory.
+Explicit environment variables override the file. The website and account backend
+above must be running. The TUI's intent/command box is visible on launch.
 
 Use the actual website, not the simulator. Review the account and explicitly
 approve, then paste the code into the original terminal. Website completion is

@@ -95,7 +95,7 @@ def format_status(report):
         "",
         "Usage by command",
     ]
-    for command in ("investigate", "verify", "explain", "report"):
+    for command in ("investigate", "verify", "explain", "report", "btw"):
         totals = report.get("by_command", {}).get(command, {})
         lines.append(f"  {command + ':':<16}{totals.get('total_tokens', 0):,}")
     if report["totals"].get("incomplete") or any(
@@ -105,6 +105,9 @@ def format_status(report):
         lines.append(
             "Usage is incomplete; some records are awaiting persistence or unavailable"
         )
-    lines.append(f"Scope: local profile {report['profile_id']} (all sessions)")
+    if report.get("scope") == "account":
+        lines.append(f"Scope: Wizard account {report.get('account_id') or report['profile_id']} (all sessions)")
+    else:
+        lines.append(f"Scope: local profile {report['profile_id']} (all sessions)")
     lines.append("----------------------------------------")
     return "\n".join(lines)

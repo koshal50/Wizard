@@ -146,10 +146,17 @@ class UsageStore:
 
     def begin(self, inv, session_id=None):
         with self.lock:
+            account_id = getattr(inv, "account_id", None)
+            profile = "account:" + account_id if account_id else self.profile_id
+            session = session_id or getattr(inv, "usage_session_id", None) or self.session_id
+            # A supplied/reused session cannot move usage between permanent owners.
+            if account_id and not (session_id is None and session.startswith("account-session:")):
+                from hashlib import sha256
+                session = "account-session:" + sha256((profile + ":" + session).encode()).hexdigest()
             self.runs[inv.id] = {
                 "run_id": inv.id,
-                "session_id": session_id or self.session_id,
-                "profile_id": self.profile_id,
+                "session_id": session,
+                "profile_id": profile,
                 "command": inv.intent,
                 "status": "running",
                 "started_at": inv.started_at.isoformat(),

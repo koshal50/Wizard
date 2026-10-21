@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from wizard_kernel.api.account_auth import account_profile, authenticated_account_id
 from wizard_kernel.storage import fs_store
 from wizard_kernel.storage.usage import get_usage
 
@@ -43,6 +44,7 @@ class RunUsage(Totals):
 class OverallUsage(BaseModel):
     scope: str
     profile_id: str
+    account_id: str | None = None
     session_id: str | None = None
     totals: Totals
     by_command: dict[str, Totals] = Field(default_factory=dict)
@@ -74,32 +76,35 @@ def local_usage(request: Request):
     return store
 
 
-def read_run(store, run_id):
+def read_run(store, run_id, profile=None):
+    profile = profile or store.profile_id
     try:
-        result = store.database.run(store.profile_id, run_id)
+        result = store.database.run(profile, run_id)
     except Exception:
         raise HTTPException(503, "PostgreSQL usage history is temporarily unavailable") from None
     if result is None:
         # Creation is asynchronous; pending spool entries are never exact history.
-        if run_id in store.runs:
+        if run_id in store.runs and store.runs[run_id].get("profile_id", store.profile_id) == profile:
             raise HTTPException(503, "Run usage is awaiting PostgreSQL persistence")
         raise HTTPException(404, "Usage run not found in the local profile")
     return {**result, **store.health(run_id)}
 
 
 @router.get("/investigations/{run_id}/usage", response_model=RunUsage)
-def run_usage(run_id: str, store=Depends(local_usage)):
-    return read_run(store, run_id)
+def run_usage(run_id: str, store=Depends(local_usage), account_id=Depends(authenticated_account_id)):
+    return read_run(store, run_id, account_profile(account_id) if isinstance(account_id, str) else None)
 
 
 @router.get("/usage", response_model=OverallUsage)
 def overall_usage(
-    session_id: str | None = None, run_id: str | None = None, store=Depends(local_usage)
+    session_id: str | None = None, run_id: str | None = None, store=Depends(local_usage),
+    account_id=Depends(authenticated_account_id),
 ):
     try:
-        result = store.database.overall(store.profile_id, session_id)
+        profile = account_profile(account_id) if isinstance(account_id, str) else store.profile_id
+        result = store.database.overall(profile, session_id)
         if run_id:
-            result["current_run"] = read_run(store, run_id)
+            result["current_run"] = read_run(store, run_id, profile)
         if result.get("current_run"):
             run = result["current_run"]
             run.update(store.health(run["run_id"]))
@@ -124,7 +129,7 @@ def overall_usage(
         raise HTTPException(503, "PostgreSQL usage history is temporarily unavailable") from None
 
 
-async def usage_stream(request, store, run_id, initial):
+async def usage_stream(request, store, run_id, initial, profile=None):
     """Snapshots replace totals; Last-Event-ID is advisory, never an additive delta."""
     snapshot = initial
     last = None
@@ -146,17 +151,18 @@ async def usage_stream(request, store, run_id, initial):
             heartbeat = time.monotonic()
         await asyncio.sleep(0.5)
         try:
-            snapshot = await asyncio.to_thread(read_run, store, run_id)
+            snapshot = await asyncio.to_thread(read_run, store, run_id, profile)
         except HTTPException:
             yield 'event: unavailable\ndata: {"incomplete": true}\n\n'
             return
 
 
 @router.get("/investigations/{run_id}/usage/stream")
-async def stream_usage(run_id: str, request: Request, store=Depends(local_usage)):
-    initial = await asyncio.to_thread(read_run, store, run_id)
+async def stream_usage(run_id: str, request: Request, store=Depends(local_usage), account_id=Depends(authenticated_account_id)):
+    profile = account_profile(account_id) if isinstance(account_id, str) else None
+    initial = await asyncio.to_thread(read_run, store, run_id, profile)
     return StreamingResponse(
-        usage_stream(request, store, run_id, initial),
+        usage_stream(request, store, run_id, initial, profile),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

@@ -21,7 +21,7 @@ from wizard.cli.tui.slash_menu import SlashCompleter, slash_prefix
     "text,expected",
     [
         ("/", list(SLASH_COMMANDS)),
-        ("/log", ["/login"]),
+        ("/log", ["/login", "/logout"]),
         ("/login", ["/login"]),
         ("/status", ["/status"]),
         ("  /can", ["/cancel-login"]),
@@ -93,7 +93,7 @@ def run_ui(scenario, state=INTENT):
                 )
                 await scenario(ui, keys, session.output)
             finally:
-                if not ui.app.is_done:
+                if ui.app.is_running and not ui.app.is_done:
                     ui.app.exit()
                 await asyncio.wait_for(task, 3)
 
@@ -140,7 +140,7 @@ def test_arrows_highlight_without_rewriting_and_escape_preserves_draft_cursor(
         await until(lambda: ui.slash_menu.selected == 1)
         assert ui.input.buffer.document == before
         assert any(
-            "selected" in style and "/cancel-login" in text
+            "selected" in style and "/logout" in text
             for style, text in ui.slash_menu.fragments()
         )
         keys.send_text("\x1b[A")
@@ -149,7 +149,7 @@ def test_arrows_highlight_without_rewriting_and_escape_preserves_draft_cursor(
         await until(lambda: not ui.slash_menu.visible)
         assert ui.input.buffer.document == before
         assert ui.state == WORKING and not cancelled and ui.session.running
-        keys.send_text("log")
+        keys.send_text("logi")
         await until(lambda: ui.slash_menu.visible and len(ui.slash_menu.entries) == 1)
         assert ui.slash_menu.entries[0].text == "/login"
 

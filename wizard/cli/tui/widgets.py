@@ -20,9 +20,8 @@ drawn between them; the spacing above is the grid's own padding.)
 
 One bordered box at the bottom holds every state — command picker, target
 picker, intent, working, result. The content swaps; the box stays. The top
-panel does not change at all while the app is open, so it is rendered once and
-its Window is given a fixed height, which is what lets the box below it scroll
-on its own.
+panel is cached until the account or terminal size changes. Its Window has a
+fixed height, which lets the box below it scroll on its own.
 
 Nothing here reports a number it did not measure. The top panel used to be
 sourced from a hardcoded identity — a name, an "API Usage" figure and a mock
@@ -211,13 +210,12 @@ def _art_box(terminal_rows: int, terminal_cols: int) -> tuple[int, int]:
 
 
 def top_panel(repo_path: str = "", terminal_rows: int = 40,
-              terminal_cols: int = 120) -> RenderableType:
+              terminal_cols: int = 120, account_name: str = "default user") -> RenderableType:
     """The identity panel: what this is, what it will read, and what has run before.
 
     Left half is the wizard and the repository it will investigate; right half is
     the last few runs, read from the history file the session appends to when an
-    investigation ends. Both halves are facts about this machine — there is no
-    account to greet and nothing here is a placeholder standing in for one.
+    investigation ends, beside the authenticated account or the default user.
 
     Titled with the version and split with `Table.grid(expand=True)` at two equal
     ratios, so the two halves stay half the terminal however wide it is rather
@@ -233,7 +231,10 @@ def top_panel(repo_path: str = "", terminal_rows: int = 40,
     # is fixed by the art, so the wrapped half is clipped off the bottom rather
     # than accommodated. The tail is kept because the tail is the folder.
     if terminal_rows < 32:
-        return Panel(Group(Text(f'wizard v{__version__}', style='wiz.welcome'),
+        heading = Text(f'wizard v{__version__}', style='wiz.welcome')
+        heading.append(f'   ({sanitize_terminal(account_name)})', style='wiz.activity.line')
+        heading.truncate(max(1, terminal_cols - 4), overflow='ellipsis')
+        return Panel(Group(heading,
                            Text(_elide(repo_path or os.getcwd(), max(20, terminal_cols - 8)), style='wiz.footer')),
                      box=ROUNDED, border_style='wiz.panel', padding=(0, 1))
     repo_line = Text(justify="center")
@@ -260,7 +261,14 @@ def top_panel(repo_path: str = "", terminal_rows: int = 40,
 
     # ── Right: what has been run from here before ─────────────────────────────
     recent = load_recent(_RECENT_SHOWN)
-    right_parts: list[RenderableType] = [Text("Recent activity", style="wiz.activity"), Text("")]
+    activity_heading = Table.grid(expand=True, padding=(0, 2))
+    activity_heading.add_column(no_wrap=True)
+    activity_heading.add_column(ratio=1, justify="right", no_wrap=True, overflow="ellipsis")
+    activity_heading.add_row(
+        Text("Recent activity", style="wiz.activity"),
+        Text(f"({sanitize_terminal(account_name)})", style="wiz.activity.line"),
+    )
+    right_parts: list[RenderableType] = [activity_heading, Text("")]
     if recent:
         for entry in recent:
             right_parts.append(Text(entry.display_line(), style="wiz.activity.line"))
@@ -354,10 +362,10 @@ def menu_content(
     """Family or target selection list — the commands, inside the box."""
     if level == "family":
         heading = Text("what shall we do?", style="wiz.title")
-        sub = Text("↑ ↓ to move  ·  Enter to open", style="wiz.dim")
+        sub = Text("click a command, or ↑ ↓ and Enter", style="wiz.dim")
     else:
         heading = Text(f"{family}  ·  pick a target", style="wiz.title")
-        sub = Text("↑ ↓ to move  ·  Enter to choose  ·  Esc to go back", style="wiz.dim")
+        sub = Text("click a target, or ↑ ↓ and Enter  ·  Esc to go back", style="wiz.dim")
 
     rows = Text()
     for i, opt in enumerate(options):

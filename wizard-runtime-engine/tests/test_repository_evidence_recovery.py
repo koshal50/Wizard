@@ -231,8 +231,9 @@ def test_unspecified_architecture_goal_recovers_from_repeated_missing_file(tmp_p
     verification.run(inv, manager, Policy())
     saved = fs_store.read(inv.id, 'verification.json')
     assert inv.state.value == 'completed'
-    assert saved['model_calls'] == 4 and len(saved['executions']) == (2 if vary_parameters else 1)
-    assert len(saved['cycle_recovery']) == 1
+    assert saved['model_calls'] == 2 and saved['executions'] == []
+    assert saved['architecture_coverage']['candidate_files'] == 0
+    assert not saved.get('cycle_recovery')
     assert saved['results']['discover']['status'] == 'passed'
 
 

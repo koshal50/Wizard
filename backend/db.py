@@ -61,11 +61,8 @@ def migrate(url):
 
     with psycopg.connect(url) as conn:
         conn.execute("SELECT pg_advisory_xact_lock(752894011)")
-        conn.execute(
-            (
-                Path(__file__).parent / "migrations/001_account_authorization.sql"
-            ).read_text()
-        )
+        for migration in sorted((Path(__file__).parent / "migrations").glob("*.sql")):
+            conn.execute(migration.read_text())
 
 
 def cleanup(url):

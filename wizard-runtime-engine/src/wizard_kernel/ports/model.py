@@ -81,7 +81,13 @@ class ModelPolicy:
     def request(self, role, context, response_model, *, max_input_chars=60000, cancel_check=None, deadline=None, on_progress=None):
         from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY, REPOSITORY_DECIDE, ARCHITECTURE_SYNTHESIZE
         schema = strict_schema(response_model)
-        instruction = {'planner': PLAN, 'explorer': DECIDE, 'verifier': VERIFY}[role]
+        instruction = {'planner': PLAN, 'explorer': DECIDE, 'verifier': VERIFY,
+                       'btw': ('You are Wizard’s side-conversation assistant. Answer only the current user request, '
+                               'respecting its requested format, scope and detail. Use only this side conversation’s '
+                               'messages as memory. Ask clarification only when necessary. You have no tools and '
+                               'must not execute commands, modify files, claim to inspect the project, or start an '
+                               'investigation. Give guidance and commands as text when requested. Put the complete '
+                               'user-facing answer in the text field of the response schema.') }[role]
         if role == 'explorer':
             if context.get('architecture_synthesis'):
                 instruction = ARCHITECTURE_SYNTHESIZE
@@ -92,7 +98,9 @@ class ModelPolicy:
         size = len(json.dumps(messages)) + len(json.dumps(schema))
         if size > max_input_chars:
             raise ModelFailure("context_budget", f"Final request size {size} exceeds {max_input_chars} characters")
-        payload = {"model": self.model, "temperature": 0, "max_completion_tokens": 2048 if context.get('architecture_synthesis') else 1024,
+        architecture_planning = role == "planner" and context.get("command_family") == "investigate" and "architecture" in context.get("targets", [])
+        payload = {"model": self.model, "temperature": 0,
+                   "max_completion_tokens": 8192 if context.get('architecture_synthesis') else 2048 if architecture_planning else 1024,
                    "stream": False, "messages": messages,
                    "response_format": {"type": "json_schema", "json_schema": {
                        "name": response_model.__name__, "strict": True, "schema": schema}}}

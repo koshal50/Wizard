@@ -21,12 +21,15 @@ run crosses to RESULT on its own last event rather than waiting to be asked.
 from __future__ import annotations
 
 import os
+import threading
 import time
+from uuid import uuid4
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 from prompt_toolkit.layout import Layout
 from prompt_toolkit.layout.containers import (
     ConditionalContainer,
@@ -41,7 +44,7 @@ from prompt_toolkit.mouse_events import MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
-from wizard.cli.parser.command_parser import COMMAND_TARGETS, SLASH_COMMANDS
+from wizard.cli.parser.command_parser import BTW_COMMANDS, COMMAND_TARGETS, SLASH_COMMANDS
 from wizard.cli.parser.frontend import Frontend, suggestion_for
 from wizard.cli.tui import history
 from wizard.cli.tui.session import TuiSession
@@ -90,6 +93,19 @@ class _FixedControl(FormattedTextControl):
         return super().mouse_handler(mouse_event)
 
 
+class _CommandControl(FormattedTextControl):
+    """Give the existing command menu real mouse focus and row selection."""
+
+    def __init__(self, *args, menu_mouse, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.menu_mouse = menu_mouse
+
+    def mouse_handler(self, mouse_event):
+        if self.menu_mouse(mouse_event):
+            return None
+        return super().mouse_handler(mouse_event)
+
+
 class WizardTUI:
     """Owns all mutable UI state and wires prompt_toolkit together."""
 
@@ -115,6 +131,11 @@ class WizardTUI:
         )
 
         self.session: TuiSession | None = None
+        self.side_chat = None
+        self.show_btw = False
+        self._btw_session_id = str(uuid4())
+        self._chat_drafts = {False: "", True: ""}
+        self._chat_scroll = {False: 0, True: 0}
 
         # The web client this repository serves, and the line that tells the
         # user how to get a browser phase for it. Found when the intent screen
@@ -146,6 +167,13 @@ class WizardTUI:
         self._exiting = False
         self._input_notice = ""
         self._account_login = None
+        self._account_name = "default user"
+        self._account_id = None
+        self._session_account_id = None
+        self._account_revision = 0
+        self._account_state_lock = threading.RLock()
+        self._auth_operation = object()
+        self._account_logout_running = False
 
         # One input buffer remains editable while the worker drives the run.
         self.input = TextArea(
@@ -155,11 +183,11 @@ class WizardTUI:
             accept_handler=self._on_accept,
             height=1,
             read_only=Condition(lambda: False),
-            completer=SlashCompleter(SLASH_COMMANDS),
+            completer=SlashCompleter(dict(SLASH_COMMANDS)),
             complete_while_typing=False,  # The inline menu owns highlighting, not buffer preview edits.
             focus_on_click=True,
         )
-        self.input_frame = Frame(self.input, style="class:inputbox")
+        self.input_frame = Frame(self.input, title="Intent / command", style="class:inputbox")
         self.slash_menu = SlashMenu(self.input.buffer, self.input.completer,
             focused=lambda: hasattr(self, "app") and self.app.layout.has_focus(self.input),
             size=self._geometry)
@@ -182,8 +210,9 @@ class WizardTUI:
         # `focusable`: this window takes focus in every state except INTENT, so
         # the scroll keys land here rather than in the text box.
         self.body = Window(
-            content=FormattedTextControl(
+            content=_CommandControl(
                 self._render_body,
+                menu_mouse=self._menu_mouse,
                 focusable=True,
                 # Without this, scrolling does not stick. A Window's `_scroll`
                 # keeps the *cursor* visible, and this control's cursor sits at
@@ -211,15 +240,13 @@ class WizardTUI:
             wrap_lines=False, always_hide_cursor=True, style="class:usage",
         )
 
-        input_visible = Condition(lambda: self._status_input or (
-            self.state in (INTENT, WORKING, RESULT)))
         root = HSplit(
             [
                 self.top_window,
                 self.body,
                 ConditionalContainer(self.usage_window, filter=Condition(
                     lambda: self.session is not None and self.state in (WORKING, RESULT))),
-                ConditionalContainer(self.input_frame, filter=input_visible),
+                self.input_frame,
                 ConditionalContainer(
                     Window(content=FormattedTextControl(lambda: [("class:usage", self._input_notice)]),
                            height=self._notice_height, wrap_lines=True, always_hide_cursor=True),
@@ -237,8 +264,8 @@ class WizardTUI:
             key_bindings=self._bindings(),
             style=Style.from_dict(
                 {
-                    "inputbox": "#5b2d7a",           # violet frame border
-                    "inputbox frame.border": "#5b2d7a",
+                    "inputbox": "#c084fc",           # visible violet frame border
+                    "inputbox frame.border": "#c084fc",
                     "usage": "#b8b1c5",
                     "slash-menu": "bg:#211a2e #b8b1c5",
                     "slash-menu.selected": "bg:#5b2d7a #ffffff bold",
@@ -278,25 +305,41 @@ class WizardTUI:
     # Content rendering (per frame)
     # ------------------------------------------------------------------
     def _render_top(self):
-        """The identity panel. Rendered once and cached: it is a function of nothing.
-
-        Nothing about it depends on the state, the run or the clock, so it is
-        rasterized on the first frame and reused for the life of the app. It is
-        still a callable rather than a fixed string because the repository it
-        names is chosen at construction, after prompt_toolkit has resolved its
-        output and the terminal's width is finally knowable.
-        """
+        """Cache the identity panel until the account or terminal size changes."""
+        width, rows = self._geometry()
+        identity = (width, rows, self._account_name)
         cached = self._static_frames.get("top")
-        if cached is None:
-            width, rows = self._geometry()
-            cached = render_to_ansi(top_panel(self.repo_path, rows, width), width)
+        if cached is None or self._static_frames.get("top_identity") != identity:
+            cached = render_to_ansi(
+                top_panel(self.repo_path, rows, width, self._account_name), width
+            )
             self._static_frames["top"] = cached
+            self._static_frames["top_identity"] = identity
         return cached
 
     def _render_body(self):
         """The command box — the whole current screen, inside one border."""
         width, _ = self._geometry()
         t = self._t()
+        if self.show_btw and self._usage_report is None:
+            from rich.text import Text
+
+            from wizard.cli.tui.session import sanitize_terminal
+            snap = self.side_chat.snapshot()
+            content = Text("/btw · " + snap["id"] + "\n\n")
+            for message in snap["messages"]:
+                content.append("You\n" if message["role"] == "user" else "Wizard\n", style="bold")
+                content.append(sanitize_terminal(message["content"]) + "\n\n")
+            if snap["pending"]:
+                content.append("Thinking… You can navigate while the response finishes.\n")
+            if snap["error"]:
+                content.append(snap["error"] + "\n", style="red")
+            content.append("\nNavigate to main chat: /btw main · Alt+B\n"
+                           "Copy answer: /btw copy · Copy transcript: /btw copy all\n"
+                           "New conversation: /btw new · /exit quits Wizard")
+            rendered = render_to_ansi(command_box(content), width)
+            self._body_lines = rendered.value.count("\n") + 1
+            return rendered
         if self._usage_report is not None:
             from rich.text import Text
             rendered = render_to_ansi(command_box(Text(self._usage_report)), width)
@@ -310,7 +353,7 @@ class WizardTUI:
         # so they always re-render.
         static = self.state in (MENU, INTENT)
         key = ("body", self.state, width, self.menu_level, self.selected,
-               self.family, self.target, self.repo_path, self.frontend_hint)
+               self.family, self.target, self.repo_path, self.frontend_hint, bool(self.side_chat))
         if static:
             cached = self._static_frames.get(key)
             if cached is not None:
@@ -350,6 +393,9 @@ class WizardTUI:
         elif self.state == RESULT:
             s = self.session
             snap = s.snapshot() if s else {}
+            diagram = getattr(self, "_diagram", None)
+            if diagram and diagram[0] is s:
+                snap["report_markdown"] = diagram[2] + "\n\n" + snap.get("report_markdown", "")
             snap["usage_in_footer"] = True
             if self.show_page:
                 content = page_content(snap, t, width)
@@ -359,6 +405,10 @@ class WizardTUI:
         else:
             content = menu_content("family", FAMILIES, self.selected, self.family)
 
+        if self.side_chat:
+            from rich.console import Group
+            from rich.text import Text
+            content = Group(content, Text("\nReturn to your conversation: /btw return · Alt+B"))
         rendered = render_to_ansi(command_box(content), width)
         if self.state == WORKING:
             self._follow_tail()
@@ -372,7 +422,7 @@ class WizardTUI:
             if len(self._static_frames) > 64:   # a resize storm must not grow it
                 self._static_frames.clear()
                 self._static_frames["top"] = render_to_ansi(
-                    top_panel(self.repo_path, self._geometry()[1], width), width
+                    top_panel(self.repo_path, self._geometry()[1], width, self._account_name), width
                 )
             self._static_frames[key] = rendered
         return rendered
@@ -381,8 +431,20 @@ class WizardTUI:
         """Pinned outside the scrollable flow, including page/status views."""
         from wizard.cli.display.usage import counter
         snap = self.session.snapshot() if self.session else {}
+        if self.session and not self._owns_usage_session():
+            return [("class:usage", "Previous account run. /status shows current account usage.")]
         elapsed = (snap.get("ended_at") or time.monotonic()) - snap.get("started_at", time.monotonic())
         return [("class:usage", counter(snap.get("usage"), elapsed, compact=True))]
+
+    def _owns_usage_session(self):
+        if not self.session:
+            return False
+        profile = (self.session.snapshot().get("usage") or {}).get("profile_id")
+        if isinstance(profile, str) and profile.startswith("account:"):
+            return profile == "account:" + str(self._account_id)
+        if profile and self._account_id:
+            return False
+        return self._session_account_id == self._account_id
 
 
     # ------------------------------------------------------------------
@@ -515,6 +577,29 @@ class WizardTUI:
         if n:
             self.selected = (self.selected + delta) % n
 
+    def _menu_mouse(self, event):
+        if (self.show_btw or self.state != MENU or self._usage_report is not None
+                or event.event_type not in (MouseEventType.MOUSE_DOWN, MouseEventType.MOUSE_UP)):
+            return False
+        from prompt_toolkit.formatted_text import to_formatted_text
+        from prompt_toolkit.formatted_text.utils import split_lines
+
+        self._status_input = False
+        self._input_notice = ""
+        self.slash_menu.dismiss()
+        self.app.layout.focus(self.body)
+        lines = list(split_lines(to_formatted_text(self._render_body())))
+        row = event.position.y
+        if 0 <= row < len(lines):
+            label = "".join(fragment[1] for fragment in lines[row]).strip(" │┃▸")
+            options = self._current_options()
+            if label in options:
+                self.selected = options.index(label)
+                if event.event_type == MouseEventType.MOUSE_UP:
+                    self._select()
+        self.app.invalidate()
+        return True
+
     # ------------------------------------------------------------------
     # State transitions
     # ------------------------------------------------------------------
@@ -555,7 +640,6 @@ class WizardTUI:
 
     def _enter_intent(self) -> None:
         self.state = INTENT
-        self.input.text = ""
         # Looked for here rather than once at startup, so a client the user
         # starts while the wizard is open is found on the next visit rather than
         # after a restart. This is also the screen the answer is shown on.
@@ -583,11 +667,14 @@ class WizardTUI:
         self.input.buffer.cursor_position = len(self.frontend.url)
 
     def _back(self) -> None:
+        if self.show_btw and self._usage_report is None:
+            self._navigate_btw(False)
+            return
         if self._usage_report is not None or self._status_input:
             self._status_request = None
             self._usage_report = None
-            self._status_input = False
-            self.app.layout.focus(self.input if self.state in (INTENT, WORKING, RESULT) else self.body)
+            self._status_input = self.show_btw
+            self.app.layout.focus(self.input if self.show_btw or self.state in (INTENT, WORKING, RESULT) else self.body)
             return
         if self.state == INTENT:
             # back to the menu step we came from
@@ -598,6 +685,9 @@ class WizardTUI:
         elif self.state == MENU and self.menu_level == "target":
             self.menu_level = "family"
             self.selected = 0
+        elif self.state == MENU:
+            self._status_input = False
+            self.app.layout.focus(self.body)
         elif self.state == WORKING:
             s = self.session
             if s and not s.snapshot().get("finished"):
@@ -615,13 +705,18 @@ class WizardTUI:
     def _show_result(self) -> None:
         self.state = RESULT
         self.show_page = False
-        self._reset_scroll()
-        if not self.input.text and not self._status_input:
+        if self.show_btw:
+            self._chat_scroll[False] = 0
+        else:
+            self._reset_scroll()
+        if not self.show_btw and not self.input.text and not self._status_input:
             self.app.layout.focus(self.body)
 
     def _begin_work(self, raw_intent: str) -> None:
         """Start the run, handing the typed text to the command that parses it."""
         self.raw_intent = raw_intent
+        self._diagram = None
+        self._session_account_id = self._account_id
         self._status_request = None
         self._usage_report = None
         self._status_input = False
@@ -674,16 +769,76 @@ class WizardTUI:
             return
         self._show_result()
         self._record_history(snap)
-        self._reset_scroll()
+        from wizard.cli.parser.intent_parser import parse_intent
+        architecture_requested = self.session.family == "investigate" and "architecture" in parse_intent(
+            self.session.intent_text, "investigate", menu_target=self.session.target or None).targets
+        if architecture_requested and snap.get("status") in {"completed", "incomplete", "failed"}:
+            self._prepare_diagram(self.session)
+        if not self.show_btw:
+            self._reset_scroll()
         def focus_result():
             # Preserve report shortcuts when no draft is being edited. A
             # finishing worker must never move focus away from typed text.
-            if self.state == RESULT and not self.input.text and not self._status_input:
-                self.app.layout.focus(self.body)
+            if not self.show_btw and self.state == RESULT and not self.input.text and not self._status_input:
+                pending = getattr(self, "_diagram", None)
+                self.app.layout.focus(self.input if pending and pending[0] is self.session and pending[1] is not None else self.body)
         if self.app.loop:
             self.app.loop.call_soon_threadsafe(focus_result)
         else:
             focus_result()
+
+    def _prepare_diagram(self, session):
+        def run():
+            from wizard.cli.runtime_client.architecture import prepare
+            try:
+                graph = prepare(session.investigation_id)
+                from wizard.cli.account_login import account_origin
+                destination = account_origin()
+                message = (f"Upload architecture to {destination}?\n\n"
+                           f"Graph status: {graph['status']}\n\n"
+                           f"Repository: {graph['repository_name']} | Groups: {len(graph.get('groups', []))} | Nodes: {len(graph['nodes'])} | "
+                           f"Relationships: {len(graph['relationships'])} | Evidence: {len(graph['evidence'])}\n\n"
+                           "Uploads labels, descriptions, relative file paths, and evidence references. "
+                           "Includes short verified content predicates when available; literal module references are observed and reasoned relationships are marked inferred. "
+                           "No full source files are uploaded.\n\n"
+                           "Type yes to consent or no to keep results local.")
+                ready = (session, graph, message, destination)
+            except Exception:
+                ready = (session, None, "Architecture upload unavailable. Check account configuration and local evidence. Local results are preserved.", None)
+            if self.session is session:
+                self._diagram = ready
+                def focus():
+                    if self.session is session and self.state == RESULT and ready[1]:
+                        self.app.layout.focus(self.input)
+                    self.app.invalidate()
+                if self.app.loop:
+                    self.app.loop.call_soon_threadsafe(focus)
+        threading.Thread(target=run, name="architecture-summary", daemon=True).start()
+
+    def _answer_diagram(self, answer):
+        pending = getattr(self, "_diagram", None)
+        if not pending or pending[0] is not self.session or pending[1] is None:
+            return False
+        if answer.lower() not in {"yes", "no"}:
+            return False
+        session, graph, _, destination = pending
+        self._diagram = (session, None, "Keeping architecture results local." if answer.lower() == "no" else "Saving architecture...", destination)
+        if answer.lower() == "yes":
+            def run():
+                from wizard.cli.runtime_client.architecture import upload
+                from wizard.cli.account_login import account_origin
+                try:
+                    if account_origin() != destination:
+                        raise ValueError("Upload destination changed; investigate again to review consent.")
+                    message = upload(graph, consent=True)
+                except Exception as exc:
+                    from wizard.cli.tui.session import sanitize_terminal
+                    message = "Architecture upload failed. " + sanitize_terminal(str(exc)) + " Local results are preserved."
+                if self.session is session:
+                    self._diagram = (session, None, message, destination)
+                    self.app.invalidate()
+            threading.Thread(target=run, name="architecture-upload", daemon=True).start()
+        return True
 
     def _record_history(self, snap: dict) -> None:
         """Append this run to the file the top panel reads.
@@ -717,26 +872,121 @@ class WizardTUI:
         return min(4, max(1, rows))
 
     def _start_account_login(self):
+        with self._account_state_lock:
+            self._start_account_login_locked()
+
+    def _start_account_login_locked(self):
+        if self._account_logout_running:
+            self._input_notice = "Logout is in progress. Run /login when it finishes."
+            return
         if self._account_login and self._account_login.running:
             self._input_notice = "Account login is already active. Paste the website code or /cancel-login."
         else:
             from wizard.cli.account_login import LoginWorker
+            operation = self._auth_operation = object()
             def notify(message):
-                if self._exiting:
-                    return
-                self._usage_report = message
-                self.app.invalidate()
+                with self._account_state_lock:
+                    if self._exiting or self._auth_operation is not operation:
+                        return
+                    self._usage_report = message
+                    self.app.invalidate()
             self._account_login = LoginWorker(notify)
+            def authenticated(account):
+                with self._account_state_lock:
+                    if self._auth_operation is operation:
+                        self._set_account(account)
+            self._account_login.on_authenticated = authenticated
             self._account_login.start()
             self._input_notice = "Account login: paste the website code here; /cancel-login cancels."
         self._status_input = True
         self.input.text = ""
         self.app.layout.focus(self.input)
 
+    def _start_account_logout(self):
+        with self._account_state_lock:
+            self._start_account_logout_locked()
+
+    def _start_account_logout_locked(self):
+        import threading
+
+        if self._account_logout_running:
+            return
+        operation = self._auth_operation = object()
+        self._account_revision += 1
+        self._status_request = None
+        if self._account_login:
+            self._account_login.cancel()
+        self._account_logout_running = True
+        self._input_notice = "Logging out..."
+        self._usage_report = None
+
+        def run():
+            from wizard.cli.account_login import LoginError
+            from wizard.cli.account_logout import logout
+            from wizard.cli.account_storage import StorageError
+
+            try:
+                message = logout(on_removed=lambda: self._set_account(None))
+            except (LoginError, StorageError) as exc:
+                message = "Logout failed. " + str(exc)
+            finally:
+                self._account_logout_running = False
+            with self._account_state_lock:
+                if not self._exiting and self._auth_operation is operation:
+                    self._input_notice = message
+                    self.app.invalidate()
+
+        threading.Thread(target=run, name="account-logout", daemon=True).start()
+
+    def _set_account(self, account):
+        with self._account_state_lock:
+            self._set_account_locked(account)
+
+    def _set_account_locked(self, account):
+        if self._exiting:
+            return
+        from wizard.cli.tui.session import sanitize_terminal
+
+        name = (account or {}).get("full_name") or (account or {}).get("email")
+        self._account_id = (account or {}).get("id")
+        self._status_request = None
+        self._account_name = sanitize_terminal(name or "default user").replace("\n", " ").replace("\r", " ")
+        self._account_revision += 1
+        self.app.invalidate()
+
+    def _load_account_identity(self):
+        """Check persisted authentication off the UI thread; never open a browser."""
+        import threading
+
+        revision = self._account_revision
+        operation = self._auth_operation
+
+        def load():
+            from wizard.cli.account_login import LoginError, LoginFlow
+            from wizard.cli.account_storage import StorageError
+
+            flow = None
+            try:
+                flow = LoginFlow()
+                account = flow.authenticated_account(flow.store.load())
+            except (LoginError, StorageError):
+                return
+            finally:
+                if flow:
+                    flow.close()
+            valid = not flow.cancelled()
+            with self._account_state_lock:
+                if self._account_revision == revision and self._auth_operation is operation and valid:
+                    self._set_account(account)
+
+        threading.Thread(target=load, name="account-identity", daemon=True).start()
+
     def _request_exit(self) -> None:
         if self._exiting:
             return
         self._exiting = True
+        if self.side_chat:
+            self.side_chat.close()
         self._status_request = None
         if self._account_login:
             self._account_login.cancel()
@@ -747,9 +997,37 @@ class WizardTUI:
     def _on_accept(self, buff) -> bool:
         text = buff.text
         command = text.strip()
+        if self.state == RESULT and not self.show_btw and self._answer_diagram(command):
+            return False
         if command == "/exit":
             self._request_exit()
             return False
+        if command == "/btw" or command.startswith("/btw "):
+            action = command[4:].strip()
+            if action in ("main", "return", "new"):
+                buff.text = ""
+                if action == "new":
+                    if self.side_chat and self.side_chat.snapshot()["pending"]:
+                        self._input_notice = "Wait for the current side response before starting a new conversation."
+                        return False
+                    if self.side_chat:
+                        self.side_chat.close()
+                    self.side_chat = None
+                    self._chat_drafts[True] = ""
+                    self._chat_scroll[True] = 0
+                self._navigate_btw(action != "main")
+            elif action in ("copy", "copy all"):
+                if self.show_btw:
+                    self._copy_btw(action == "copy all")
+                else:
+                    self._input_notice = "Open your side conversation to copy an answer."
+                buff.text = ""
+            else:
+                buff.text = ""
+                self._navigate_btw(True)
+                if action:
+                    self._submit_btw(action)
+            return True
         if command == "/cancel-login":
             if self._account_login:
                 self._account_login.cancel()
@@ -760,11 +1038,20 @@ class WizardTUI:
             self._start_account_login()
             buff.text = ""
             return False
+        if command == "/logout":
+            self._start_account_logout()
+            buff.text = ""
+            return False
+        if self.show_btw and command not in SLASH_COMMANDS:
+            return self._submit_btw(text)
         if self._account_login and self._account_login.running and not command.startswith("/"):
             self._account_login.submit(command)
             buff.text = ""
             return False
-        if command.startswith("/") and command not in SLASH_COMMANDS:
+        # Reject command-shaped typos without treating paths, dates or embedded
+        # slashes as commands. Ordinary side-chat text is handled above.
+        import re
+        if re.match(r"^/[a-zA-Z-]+(?:\s|$)", command) and command not in SLASH_COMMANDS:
             self._input_notice = "Unknown command. Available: " + ", ".join(SLASH_COMMANDS)
             return True
         if text.strip() == "/status":
@@ -775,8 +1062,9 @@ class WizardTUI:
             self._status_request = token
             self.app.layout.focus(self.body)
             self._reset_scroll()
-            run_id = self.session.investigation_id if self.session else None
-            pending_run = bool(self.session and self.session.running and not run_id)
+            own_run = self._owns_usage_session()
+            run_id = self.session.investigation_id if self.session and own_run else None
+            pending_run = bool(self.session and own_run and self.session.running and not run_id)
             import threading
             def load():
                 from wizard.cli.display.usage import format_status
@@ -789,9 +1077,10 @@ class WizardTUI:
                 except Exception as exc:
                     from wizard.cli.tui.session import _safe_display
                     report = _safe_display(str(exc)) or "Usage unavailable: check runtime and PostgreSQL configuration"
-                if self._status_request is token:
-                    self._usage_report = report + "\n\nEsc to return"
-                    self.app.invalidate()
+                with self._account_state_lock:
+                    if self._status_request is token:
+                        self._usage_report = report + "\n\nEsc to return"
+                        self.app.invalidate()
             threading.Thread(target=load, name="usage-status", daemon=True).start()
             return False
         if self._status_input:
@@ -811,11 +1100,106 @@ class WizardTUI:
             return True
         return False  # never keep the text; we manage it ourselves
 
+    def _navigate_btw(self, show):
+        from wizard.cli.tui.side_chat import SideChat
+        if show and self.side_chat is None:
+            self.side_chat = SideChat(self._invalidate, session_id=self._btw_session_id)
+        if show != self.show_btw:
+            self._chat_drafts[self.show_btw] = self.input.text
+            self._chat_scroll[self.show_btw] = self.scroll
+            self.show_btw = show
+            self.input.text = self._chat_drafts[show]
+            self.scroll = self._chat_scroll[show]
+        self._usage_report = None
+        self._status_request = None
+        self._input_notice = ""
+        self.input_frame.title = "/btw conversation" if show else "Intent / command"
+        commands = dict(SLASH_COMMANDS)
+        if show:
+            commands.update(BTW_COMMANDS)
+        elif self.side_chat:
+            commands["/btw return"] = "Return to your conversation"
+        self.input.completer.commands = commands
+        self.slash_menu.open()
+        self._status_input = show
+        self.app.layout.focus(self.input)
+        self.app.invalidate()
+
+    def _submit_btw(self, text):
+        if not text.strip():
+            self._input_notice = "Type a question for your side conversation."
+            return True
+        if not self.side_chat.submit(text):
+            self._input_notice = "A side response is pending; your draft is retained."
+            self.input.text = text
+            return True
+        self.input.text = ""
+        self._input_notice = ""
+        return False
+
+    def _copy_btw(self, all_messages=False):
+        from wizard.cli.tui.clipboard import ClipboardError, write_text
+        messages = self.side_chat.snapshot()["messages"] if self.side_chat else []
+        answer = ("\n\n".join(m["role"] + ":\n" + m["content"] for m in messages)
+                  if all_messages else next((m["content"] for m in reversed(messages) if m["role"] == "assistant"), ""))
+        if not answer:
+            self._input_notice = "No side-conversation answer to copy yet."
+            return
+        try:
+            write_text(answer)
+            self._input_notice = "Copied conversation." if all_messages else "Copied answer."
+        except ClipboardError as exc:
+            self._input_notice = str(exc)
+
     # ------------------------------------------------------------------
     # Key bindings
     # ------------------------------------------------------------------
+    def _copy_intent(self, cut=False):
+        from wizard.cli.tui.clipboard import ClipboardError, write_text
+
+        buff = self.input.buffer
+        if not buff.selection_state:
+            return
+        _, data = buff.document.cut_selection()
+        if not data.text:
+            return
+        try:
+            write_text(data.text)
+        except ClipboardError as exc:
+            self._input_notice = str(exc)
+            return
+        self.app.clipboard.set_data(data)
+        if cut:
+            buff.cut_selection()
+
+    def _paste_intent(self, text=None):
+        from wizard.cli.tui.clipboard import ClipboardError, read_text
+
+        if text is None:
+            try:
+                text = read_text()
+            except ClipboardError as exc:
+                self._input_notice = str(exc)
+                return
+        if not text:
+            return
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        self.app.layout.focus(self.input)
+        if self.state == MENU:
+            self._status_input = True
+        buff = self.input.buffer
+        if buff.selection_state:
+            buff.cut_selection()
+        # Pasting always edits the draft; it never submits commands or intent.
+        buff.insert_text(text)
+        self.app.invalidate()
+
     def _bindings(self) -> KeyBindings:
         kb = KeyBindings()
+        @kb.add("f6")
+        @kb.add("escape", "b")
+        def navigate_conversation(event):
+            self._navigate_btw(not self.show_btw)
         @kb.add("/", filter=Condition(lambda: not self.app.layout.has_focus(self.input)))
         def open_status(event):
             self._status_input = True
@@ -823,15 +1207,48 @@ class WizardTUI:
             self.app.layout.focus(self.input)
 
         typing = Condition(lambda: self._status_input or self.state in (INTENT, WORKING) or self.app.layout.has_focus(self.input))
-        navigating = Condition(lambda: self.state == MENU and not self._status_input and self._usage_report is None)
+        navigating = Condition(lambda: not self.show_btw and self.state == MENU and not self._status_input
+                               and self._usage_report is None
+                               and not self.app.layout.has_focus(self.input))
         # The box has something to scroll in every state except the ones that
         # own the keyboard.
-        scrollable = Condition(lambda: self.state in (WORKING, RESULT) or self._usage_report is not None)
+        scrollable = Condition(lambda: self.show_btw or self.state in (WORKING, RESULT) or self._usage_report is not None)
         pane_keys = scrollable & Condition(lambda: not self.app.layout.has_focus(self.input))
 
         @kb.add("c-c")
         def _(event):
-            self._request_exit()
+            if self.app.layout.has_focus(self.input) and self.input.buffer.selection_state:
+                self._copy_intent()
+            else:
+                self._request_exit()
+
+        editing = Condition(lambda: self.app.layout.has_focus(self.input))
+
+        @kb.add("c-a", filter=editing)
+        def select_intent(event):
+            buff = self.input.buffer
+            if buff.text:
+                buff.cursor_position = 0
+                buff.start_selection()
+                buff.selection_state.enter_shift_mode()
+                buff.cursor_position = len(buff.text)
+
+        @kb.add("c-insert", filter=editing)
+        def copy_intent(event):
+            self._copy_intent()
+
+        @kb.add("c-x", filter=editing)
+        def cut_intent(event):
+            self._copy_intent(cut=True)
+
+        @kb.add("c-v")
+        @kb.add("s-insert")
+        def paste_intent(event):
+            self._paste_intent()
+
+        @kb.add(Keys.BracketedPaste)
+        def terminal_paste_intent(event):
+            self._paste_intent(event.data)
 
         # q quits only when not typing: in the box, `q` is a letter.
         @kb.add("q", filter=~typing)
@@ -896,7 +1313,7 @@ class WizardTUI:
         # offset above is read back off the Window rather than owned by us.
 
         # r is the explicit "do it again" on the result screen.
-        @kb.add("r", filter=Condition(lambda: self.state == RESULT and not self.app.layout.has_focus(self.input)))
+        @kb.add("r", filter=Condition(lambda: not self.show_btw and self.state == RESULT and not self.app.layout.has_focus(self.input)))
         def _(event):
             self._enter_menu()
 
@@ -905,7 +1322,7 @@ class WizardTUI:
         # who opened it before the run went back to the flow would be stuck
         # looking at a page that is no longer there.
         @kb.add("b", filter=Condition(
-            lambda: self.state in (WORKING, RESULT) and not self.app.layout.has_focus(self.input) and (self.show_page or self._has_page())
+            lambda: not self.show_btw and self.state in (WORKING, RESULT) and not self.app.layout.has_focus(self.input) and (self.show_page or self._has_page())
         ))
         def _(event):
             self._toggle_page()
@@ -921,7 +1338,7 @@ class WizardTUI:
         # Runtime's egress guard is fail-closed, and a target the wizard added
         # on its own would either be refused as unnamed or quietly widen what
         # this run is allowed to reach.
-        @kb.add("f2", filter=Condition(lambda: self.state == INTENT))
+        @kb.add("f2", filter=Condition(lambda: not self.show_btw and self.state == INTENT))
         def _(event):
             self._use_suggested_url()
 
@@ -946,8 +1363,7 @@ class WizardTUI:
         @kb.add("enter", filter=slash_menu)
         def slash_accept(event):
             self.slash_menu.apply()
-            # All currently registered controls are argument-free. Use the same
-            # accept handler as a typed command, without a second dispatcher.
+            # Use the typed-command handler, including side-chat navigation.
             self.input.buffer.validate_and_handle()
 
         @kb.add("tab", filter=Condition(lambda: self.app.layout.has_focus(self.input)
@@ -966,7 +1382,12 @@ class WizardTUI:
 
     # ------------------------------------------------------------------
     def run(self) -> None:
-        self.app.run()
+        self._load_account_identity()
+        try:
+            self.app.run()
+        finally:
+            if self.side_chat:
+                self.side_chat.close()
 
 
 def run_tui(repo_path: str | None = None) -> None:
@@ -1002,7 +1423,11 @@ def run_tui(repo_path: str | None = None) -> None:
     print("agent-browser available" if find_chromium() else "agent-browser unavailable; run npm install -g agent-browser@0.27.0 and agent-browser install", flush=True)
 
     supervisor = ServiceSupervisor()
-    report = supervisor.ensure_all()
+    try:
+        report = supervisor.ensure_all()
+    except BaseException:
+        supervisor.stop()
+        raise
     for line in report.lines():
         print(line, flush=True)
 

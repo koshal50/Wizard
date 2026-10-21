@@ -12,6 +12,7 @@ from wizard_kernel.control import verification as kernel_loop
 from wizard_kernel.control.investigation_graph import get_graph
 from wizard_kernel.world.sandbox import docker_status
 from urllib.parse import urlparse
+from wizard_kernel.api.account_auth import authenticated_account_id
 
 # The tools that put a page on screen. A node that ran one of these and reached
 # `complete` is proof the browser opened something, which is what separates "the
@@ -50,6 +51,7 @@ def create_investigation(
     req: InvestigationRequest,
     manager: InvestigationManager = Depends(get_manager),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    account_id=Depends(authenticated_account_id),
 ):
     submitted = {
         "intent": req.intent,
@@ -87,7 +89,7 @@ def create_investigation(
 
     req.idempotency_key = idempotency_key if isinstance(idempotency_key, str) else req.idempotency_key
     try:
-        inv = manager.create(req)
+        inv = manager.create(req, account_id=account_id) if isinstance(account_id, str) else manager.create(req)
     except ValueError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
     if not manager.claim_execution(inv.id):
@@ -279,6 +281,18 @@ def get_report(
         # a path the caller could not open.
         report_path=str(fs_store.inv_dir(inv.id) / "verification_report.md"),
     )
+
+
+@router.get("/{inv_id}/architecture")
+def architecture_export(inv_id: str, manager: InvestigationManager = Depends(get_manager)):
+    from wizard_kernel.session.architecture import export_architecture
+
+    inv = manager.get(inv_id)
+    if not inv:
+        raise HTTPException(404, detail="Investigation not found")
+    if inv.intent != "investigate" or "architecture" not in inv.targets or not is_terminal(inv.state):
+        raise HTTPException(409, detail="Architecture investigation has not finished")
+    return export_architecture(inv)
 
 
 @router.get("/{inv_id}/trace", summary="Get the redacted investigation flow trace")

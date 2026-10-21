@@ -25,6 +25,54 @@ class Store:
             raise StorageError("disk unavailable")
         self.value = value
 
+    def delete(self):
+        if self.fail:
+            raise StorageError("Secure credential removal failed")
+        self.value = None
+
+
+def test_logout_during_exchange_cannot_persist_or_recover_authentication(protocol):
+    from wizard.cli.account_logout import logout
+
+    flow, store, calls, _ = protocol
+    store.value = None
+    flow.start()
+    original = flow.call
+
+    def call(path, *args, **kwargs):
+        result = original(path, *args, **kwargs)
+        if path == "/api/cli/exchange":
+            logout(flow.origin, store=store, client=flow.client)
+        return result
+
+    flow.call = call
+    with pytest.raises(LoginError, match="cancelled"):
+        flow.submit("ABCD1234ABCD")
+    assert store.value is None
+    flow.close(cancel=True)
+    assert calls[-1][0] == "/api/cli/cancel"
+
+
+def test_logout_during_request_creation_cancels_new_remote_request(protocol):
+    from wizard.cli.account_logout import logout
+
+    flow, store, calls, _ = protocol
+    store.value = None
+    original = flow.call
+
+    def call(path, *args, **kwargs):
+        result = original(path, *args, **kwargs)
+        if path == "/api/cli/requests":
+            logout(flow.origin, store=store, client=flow.client)
+        return result
+
+    flow.call = call
+    with pytest.raises(LoginError, match="cancelled"):
+        flow.start()
+    assert store.value is None
+    assert calls[-1][0] == "/api/cli/cancel"
+    assert not flow.active
+
 
 @pytest.fixture
 def protocol():
@@ -120,6 +168,74 @@ def test_manual_fallback_exchange_and_actual_account_verification(protocol):
     }
 
 
+@pytest.mark.parametrize("run", range(2))
+def test_completed_login_then_login_again_verifies_without_browser(protocol, run):
+    flow, store, calls, _ = protocol
+    flow.start()
+    flow.submit("ABCD1234ABCD")
+    opened = []
+    again = LoginFlow(
+        flow.origin, client=flow.client, store=store, opener=opened.append
+    )
+    try:
+        before = len(calls)
+        assert "already authenticated" in again.start()
+        assert again.complete and not again.active
+        assert calls[before:] == [("/api/account/me", None)]
+        assert opened == []
+    finally:
+        again.close()
+
+
+@pytest.mark.parametrize("status", [401, 503])
+def test_saved_credential_revalidation_failure(protocol, status):
+    flow, store, calls, _ = protocol
+    store.value["expires_at"] = (datetime.now(UTC) + timedelta(minutes=10)).isoformat()
+    original = flow.client
+
+    def transport(request):
+        if request.url.path == "/api/account/me":
+            return httpx.Response(
+                status, json={"error": "credential_expired_or_revoked"}
+            )
+        return original.send(request)
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        flow.client = client
+        if status == 401:
+            assert "Open this URL" in flow.start()
+            assert flow.active
+        else:
+            with pytest.raises(APIError):
+                flow.start()
+            assert not calls
+        flow.close(cancel=True)
+
+
+def test_terminal_already_authenticated_returns_success_without_prompt(monkeypatch):
+    import io
+
+    from rich.console import Console
+
+    from wizard.cli import account_login
+
+    class Flow:
+        active = False
+        complete = True
+
+        def start(self):
+            return "You are already authenticated."
+
+        def close(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(account_login, "LoginFlow", Flow)
+    monkeypatch.setattr(
+        "builtins.input", lambda _: pytest.fail("Unexpected code prompt")
+    )
+    assert account_login.terminal_login(Console(file=io.StringIO())) == 0
+
+
 @pytest.mark.parametrize("mode", ["timeout", "duplicate", "malformed"])
 def test_response_loss_or_duplicate_uses_separate_recovery_not_reexchange(
     protocol, mode
@@ -194,6 +310,68 @@ def test_http_is_explicitly_loopback_only(monkeypatch):
         account_origin()
     monkeypatch.setenv("WIZARD_ACCOUNT_URL", "http://127.0.0.1:8090")
     assert account_origin() == "http://127.0.0.1:8090"
+
+
+def test_account_origin_loads_wizard_config_from_another_directory(
+    tmp_path, monkeypatch
+):
+    from wizard.cli import account_login
+
+    configuration = tmp_path / "wizard.env"
+    configuration.write_text(
+        "WIZARD_ACCOUNT_URL=http://localhost:3000\nWIZARD_ACCOUNT_LOCAL_DEV=1\n"
+    )
+    monkeypatch.setattr(account_login, "ACCOUNT_ENV_FILE", configuration)
+    monkeypatch.delenv("WIZARD_ACCOUNT_URL", raising=False)
+    monkeypatch.delenv("WIZARD_ACCOUNT_LOCAL_DEV", raising=False)
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".env").write_text("WIZARD_ACCOUNT_URL=https://unrelated.example.test\n")
+    monkeypatch.chdir(project)
+    assert account_origin() == "http://localhost:3000"
+    monkeypatch.setenv("WIZARD_ACCOUNT_URL", "https://accounts.example.test")
+    assert account_origin() == "https://accounts.example.test"
+
+
+def test_login_worker_reports_specific_configuration_error(monkeypatch):
+    from wizard.cli import account_login
+
+    def fail(**kwargs):
+        raise LoginError("Set WIZARD_ACCOUNT_URL in Wizard's .env.")
+
+    monkeypatch.setattr(account_login, "LoginFlow", fail)
+    messages = []
+    worker = account_login.LoginWorker(messages.append)
+    worker._run()
+    assert messages == [
+        "Account login unavailable. Set WIZARD_ACCOUNT_URL in Wizard's .env."
+    ]
+    assert not worker.running
+
+
+@pytest.mark.parametrize("already_authenticated", [False, True])
+def test_login_worker_publishes_verified_account_after_exchange(
+    protocol, monkeypatch, already_authenticated
+):
+    from wizard.cli import account_login
+
+    flow, store, _, _ = protocol
+    if already_authenticated:
+        flow.start()
+        flow.submit("ABCD1234ABCD")
+        flow = LoginFlow(
+            flow.origin, client=flow.client, store=store, opener=lambda _: False
+        )
+    monkeypatch.setattr(account_login, "LoginFlow", lambda **kwargs: flow)
+    accounts = []
+    worker = account_login.LoginWorker(lambda message: None)
+    worker.on_authenticated = accounts.append
+    worker.submit("ABCD1234ABCD")
+    worker._run()
+    assert accounts == [flow.account]
+    assert accounts[0]["email"] == store.value["account"]["email"]
+    assert flow.complete
+    assert not worker.running
 
 
 def test_platform_store_failure_preserves_previous_value(protocol):
@@ -380,7 +558,7 @@ def test_login_is_available_in_inline_completion_not_primary_menu(monkeypatch):
                 Document("/lo"), SimpleNamespace(completion_requested=True)
             )
         )
-        assert [item.text for item in completions] == ["/login"]
+        assert [item.text for item in completions] == ["/login", "/logout"]
         ui.input.buffer.document = Document("/login")
         ui._on_accept(ui.input.buffer)
         assert calls == ["login"]

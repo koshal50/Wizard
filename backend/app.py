@@ -371,6 +371,36 @@ def create_app(settings=None, database=None, clock=None):
         row = browser_mutation(request, data)
         return result(app.state.auth.browser(row, cancel=True))
 
+    @app.post("/api/cli/browser/change-account")
+    async def change_account(request: Request):
+        data = await body(request)
+        row = browser_mutation(request, data)
+        with app.state.db.connection() as conn:
+            pending = conn.execute(
+                "SELECT * FROM cli_authorizations WHERE id=%s AND browser_session_id=%s FOR UPDATE",
+                (row.get("pending_authorization"), row["id"]),
+            ).fetchone()
+            if not pending:
+                raise Denied("missing_context", 404)
+            if (
+                pending["state"] not in {"pending", "approved"}
+                or pending["expires_at"] <= app.state.auth.clock()
+            ):
+                raise Denied("expired_or_cancelled", 410)
+            # Preserve the request, invalidate its previous approval/code, and
+            # rotate the browser session before allowing a different account.
+            token, seconds = rotate(conn, row, None)
+            conn.execute(
+                "UPDATE cli_authorizations SET state='pending', account_id=NULL, "
+                "code_nonce=NULL, code_hash=NULL, code_expires_at=NULL WHERE id=%s",
+                (pending["id"],),
+            )
+        response = JSONResponse(
+            {"continue_to": "/login.html?returnTo=%2Fcli%2Fconnect"}
+        )
+        set_cookie(response, token, seconds)
+        return response
+
     async def cli_action(request, action):
         if request.headers.get("origin"):
             raise Denied("cli_only", 403)
@@ -426,6 +456,67 @@ def create_app(settings=None, database=None, clock=None):
             },
             "credential_expires_at": row["expires_at"].isoformat(),
         }
+
+    def investigation_owner(request):
+        if request.headers.get("authorization"):
+            return bearer(request)["id"]
+        row, _ = session(request)
+        if not row["account_id"]:
+            raise Denied("session_required", 401)
+        return row["account_id"]
+
+    @app.post("/api/investigations", status_code=201)
+    async def save_architecture(request: Request):
+        from backend.architecture import ArchitectureGraph
+        from pydantic import ValidationError
+        from psycopg.types.json import Jsonb
+
+        # CLI-only writes reuse the existing credential; browser reads use sessions.
+        owner = bearer(request)["id"]
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 2_000_000:
+                raise Denied("body_too_large", 413)
+            raw.extend(chunk)
+        try:
+            graph = ArchitectureGraph.model_validate_json(raw)
+        except (ValidationError, ValueError, RecursionError):
+            raise Denied("invalid_architecture_graph", 422) from None
+        public_id = uuid4()
+        with app.state.db.connection() as conn:
+            conn.execute(
+                "INSERT INTO architecture_investigations "
+                "(id,owner_id,title,repository_name,status,schema_version,graph) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (public_id, owner, graph.title, graph.repository_name, graph.status,
+                 graph.schema_version, Jsonb(graph.model_dump())),
+            )
+        # Leaving the connection context commits before success is returned.
+        return {"investigation_id": str(public_id)}
+
+    @app.get("/api/investigations")
+    def saved_architectures(request: Request):
+        owner = investigation_owner(request)
+        with app.state.db.connection() as conn:
+            rows = conn.execute(
+                "SELECT id,title,repository_name,status,created_at FROM architecture_investigations "
+                "WHERE owner_id=%s ORDER BY created_at DESC LIMIT 50", (owner,),
+            ).fetchall()
+        return {"investigations": [{**r, "id": str(r["id"]), "created_at": r["created_at"].isoformat()} for r in rows]}
+
+    @app.get("/api/investigations/{investigation_id}")
+    def saved_architecture(investigation_id: str, request: Request):
+        owner = investigation_owner(request)
+        public_id = identifier(investigation_id)
+        with app.state.db.connection() as conn:
+            row = conn.execute(
+                "SELECT id,graph,created_at FROM architecture_investigations WHERE id=%s AND owner_id=%s",
+                (public_id, owner),
+            ).fetchone()
+        if not row:
+            raise Denied("investigation_not_found", 404)
+        return {"investigation_id": str(row["id"]), "graph": row["graph"],
+                "created_at": row["created_at"].isoformat()}
 
     @app.delete("/api/account/credential")
     def revoke(request: Request):

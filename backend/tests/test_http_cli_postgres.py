@@ -5,6 +5,7 @@ import threading
 import time
 
 import httpx
+import pytest
 import uvicorn
 
 from backend.app import create_app
@@ -12,7 +13,8 @@ from backend.config import Settings
 from wizard.cli.account_login import LoginFlow
 
 
-def test_actual_http_cli_and_separate_website_session(database):
+@pytest.mark.parametrize("run", range(2))
+def test_actual_http_cli_and_separate_website_session(database, run):
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     origin = "http://127.0.0.1:" + str(sock.getsockname()[1])
@@ -83,6 +85,18 @@ def test_actual_http_cli_and_separate_website_session(database):
             assert "verified" in flow.submit(code)
             assert store.value["account"]["email"] == "http@example.test"
             assert browser.get("/api/cli/browser").json()["state"] == "exchanged"
+            with httpx.Client() as cli:
+                again = LoginFlow(
+                    origin,
+                    client=cli,
+                    store=store,
+                    opener=lambda _: pytest.fail("Second login opened a browser"),
+                )
+                try:
+                    assert "already authenticated" in again.start()
+                    assert again.complete and not again.active
+                finally:
+                    again.close()
             assert (
                 browser.get("/cli/complete").status_code == 404
             )  # No fabricated frontend completion.

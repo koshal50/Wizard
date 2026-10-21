@@ -90,6 +90,18 @@ def test_persistence_aggregation_duplicates_sessions_and_profile_isolation(datab
     assert database.run("local", "unauthorized") is None
 
 
+def test_btw_usage_is_separate_from_primary_run(database):
+    database.persist(job("parent", session="primary", command="investigate"))
+    database.persist(job("btw-turn", session="side", command="btw", input_tokens=3, output_tokens=2, total_tokens=5))
+    database.persist(job("btw-turn", session="side", command="btw", input_tokens=3, output_tokens=2, total_tokens=5))
+    assert database.run("local", "parent")["total_tokens"] == 15
+    assert database.run("local", "btw-turn")["total_tokens"] == 5
+    report = database.overall("local")
+    assert report["totals"]["total_tokens"] == 20
+    assert report["by_command"]["btw"]["total_tokens"] == 5
+    assert report["by_command"]["investigate"]["total_tokens"] == 15
+
+
 def test_authoritative_usage_replaces_provisional_without_double_counting(database):
     value = job(
         total_tokens=100,
@@ -167,7 +179,7 @@ def test_existing_execution_workers_api_sse_and_all_commands(database, monkeypat
     monkeypatch.setattr(store, "start", lambda: None)
     monkeypatch.setattr(store, "close", lambda: None)
 
-    def fixture_run(inv, manager, planner):
+    def fixture_run(inv, manager):
         control = RunControl(inv, manager)
         for index in range(2):
             value = job(inv.id)["events"][0]
@@ -180,7 +192,7 @@ def test_existing_execution_workers_api_sse_and_all_commands(database, monkeypat
                 ),
                 model=True,
             )
-        manager.update(inv.id, state=LifecycleState.completed, report_ready=True)
+        manager.finalize(inv.id, LifecycleState.completed, lambda state: None)
 
     monkeypatch.setattr(kernel_loop, "run", fixture_run)
     client = test_client(create_app())

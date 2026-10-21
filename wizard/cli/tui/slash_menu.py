@@ -34,6 +34,12 @@ class SlashCompleter(Completer):
 
     def get_completions(self, document: Document, complete_event: CompleteEvent):
         prefix = slash_prefix(document)
+        if prefix is None and document.cursor_position == len(document.text):
+            # Complete only explicitly registered multiword navigation/actions.
+            # Questions and ordinary slash-containing text remain normal input.
+            candidate = document.text.lstrip(" \t")
+            if candidate.startswith("/") and any(" " in name and name.startswith(candidate) for name in self.commands):
+                prefix = candidate
         if prefix is not None:
             for name, description in self.commands.items():
                 if name.startswith(prefix):

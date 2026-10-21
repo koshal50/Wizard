@@ -23,6 +23,7 @@ class Investigation:
     submission_key: str | None = None
     submission_hash: str | None = None
     usage_session_id: str | None = None
+    account_id: str | None = None
     cancel_requested: bool = False
     state: LifecycleState = LifecycleState.created
     budget_total: int = 40

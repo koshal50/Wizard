@@ -237,11 +237,13 @@ def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
         return
 
     # 1. Start investigation
+    from wizard.cli.runtime_client.account import account_headers
+    auth_headers = account_headers()
     try:
         req = urllib.request.Request(
             api,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Idempotency-Key": uuid.uuid4().hex},
+            headers={"Content-Type": "application/json", "Idempotency-Key": uuid.uuid4().hex, **auth_headers},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as response:
@@ -263,7 +265,7 @@ def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
     yield {"event_type": "usage.pending", "investigation_id": inv_id, "payload": {}}
     if "usage_enabled" in data:
         from wizard.cli.runtime_client.usage import UsageStream, usage_listener
-        monitor = UsageStream(f"{api}/{inv_id}/usage/stream", inv_id, on_update=usage_listener())
+        monitor = UsageStream(f"{api}/{inv_id}/usage/stream", inv_id, on_update=usage_listener(), headers=auth_headers)
         monitors.append(monitor)
         if control:
             control[1](monitor)

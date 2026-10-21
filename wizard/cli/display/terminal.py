@@ -119,6 +119,10 @@ def run_command(family, words, console):
                     display.refresh()
         if session.report_markdown:
             console.print(Markdown(session.report_markdown))
+        from wizard.cli.display.architecture import offer_upload
+
+        if offer_upload(session, console) is False:
+            return 1
         return 0 if session.status == "completed" else 1
     except KeyboardInterrupt:
         session.cancel()

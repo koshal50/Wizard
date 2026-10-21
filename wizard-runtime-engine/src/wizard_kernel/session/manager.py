@@ -79,8 +79,11 @@ class InvestigationManager:
 
     # ── Core API ──────────────────────────────────────────────────────────────
 
-    def create(self, req: InvestigationRequest) -> Investigation:
-        signature = hashlib.sha256(json.dumps(req.model_dump(exclude={"idempotency_key"}), sort_keys=True).encode()).hexdigest()
+    def create(self, req: InvestigationRequest, account_id: str | None = None) -> Investigation:
+        submission = req.model_dump(exclude={"idempotency_key"})
+        if account_id is not None:
+            submission["account_id"] = account_id
+        signature = hashlib.sha256(json.dumps(submission, sort_keys=True).encode()).hexdigest()
         inv_id = f"inv_{uuid.uuid4().hex[:12]}"
         inv = Investigation(
             id=inv_id,
@@ -92,6 +95,7 @@ class InvestigationManager:
             submission_key=req.idempotency_key,
             submission_hash=signature,
             usage_session_id=req.session_id,
+            account_id=account_id,
             budget_total=req.options.budget,
             budget_remaining=req.options.budget,
         )
@@ -99,6 +103,8 @@ class InvestigationManager:
             if req.idempotency_key:
                 existing = next((v for v in self._store.values() if v.submission_key == req.idempotency_key), None)
                 if existing:
+                    if existing.account_id != account_id:
+                        raise ValueError("Idempotency key belongs to a different account")
                     if existing.submission_hash and existing.submission_hash != signature:
                         raise ValueError("Idempotency key already belongs to a different request")
                     if (existing.question, existing.repository_path, existing.intent, existing.targets) != (req.question, req.repository_path, req.intent, list(req.targets)):

@@ -144,13 +144,52 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
         "PYTHONPATH": os.pathsep.join(filter(None, (
             str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", "")))),
     })
-    return [ServiceSpec(
+    return [*build_account_specs(root), ServiceSpec(
         key="kernel", label="Runtime Engine", port=8080, health_path="/health",
         cwd=str(root / "wizard-runtime-engine"),
         argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
               "--host", "127.0.0.1", "--port", "8080"),
         env=runtime_env, needs=("uvicorn",),
         why_unstartable="uvicorn is not importable by this interpreter",
+    )]
+
+
+def build_account_specs(root: Path | None = None) -> list[ServiceSpec]:
+    """Manage the local website stack; remote account services stay external."""
+    from urllib.parse import urlsplit
+    from dotenv import dotenv_values
+
+    root = root or repo_root()
+    configured = dotenv_values(root / ".env", interpolate=False)
+    url = os.environ.get("WIZARD_ACCOUNT_URL", configured.get("WIZARD_ACCOUNT_URL") or "")
+    local = os.environ.get("WIZARD_ACCOUNT_LOCAL_DEV", configured.get("WIZARD_ACCOUNT_LOCAL_DEV"))
+    parsed = urlsplit(url)
+    if local != "1" or parsed.scheme != "http" or parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return []
+    port = parsed.port or 80
+    if port not in {3000, 8090}:
+        return []
+    launcher = root / "backend" / "scripts" / "start-local-account-backend.ps1"
+    backend = ServiceSpec(
+        key="account", label="Account service", port=8090, health_path="/health",
+        cwd=str(root),
+        argv=("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+              str(launcher), "-PublicOrigin", url.rstrip("/")) if os.name == "nt" and launcher.is_file() else None,
+        why_unstartable="Local account service launcher is unavailable",
+    )
+    if port == 8090:
+        return [backend]
+    website = Path(os.environ.get("WIZARD_WEBSITE_DIR", str(root.parent / "Wizard-web" / "wizardsite")))
+    next_cli = website / "node_modules" / "next" / "dist" / "bin" / "next"
+    node = shutil.which("node")
+    return [backend, ServiceSpec(
+        key="website", label="Account website", port=3000,
+        health_path="/api/auth/context", cwd=str(website),
+        argv=(node, str(next_cli), "dev", "--hostname", "127.0.0.1", "--port", "3000")
+        if node and next_cli.is_file() else None,
+        env={**os.environ, "WIZARD_ACCOUNT_LOCAL_DEV": "1",
+             "WIZARD_ACCOUNT_BACKEND_URL": "http://127.0.0.1:8090"},
+        why_unstartable="Local account website or its installed dependencies are unavailable",
     )]
 
 
@@ -480,6 +519,7 @@ class ServiceSupervisor:
         """Bring up every service, and record what happened to each."""
         specs = specs if specs is not None else build_specs()
         report = ServiceReport()
+        self.report = report
         for spec in specs:
             report.states.append(ensure_service(spec, self.log_dir))
         self.report = report

@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS wizard_runs (
     incomplete boolean NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS wizard_runs_session_started_idx ON wizard_runs(session_id, started_at DESC);
+-- Side conversations share the existing metadata-only ledger, never transcripts.
+ALTER TABLE wizard_runs DROP CONSTRAINT IF EXISTS wizard_runs_command_check;
+ALTER TABLE wizard_runs ADD CONSTRAINT wizard_runs_command_check
+    CHECK (command IN ('investigate', 'verify', 'report', 'explain', 'btw'));
 CREATE TABLE IF NOT EXISTS token_usage_events (
     event_id text PRIMARY KEY,
     run_id text NOT NULL REFERENCES wizard_runs(run_id),

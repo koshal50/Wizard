@@ -62,7 +62,7 @@ app = typer.Typer(
         "Translates user commands into structured investigation requests "
         "for the Runtime Engine.\n\n"
         "Run with no arguments to open the interactive Wizard interface.\n"
-        "Use /login to connect your Wizard website account."
+        "Use /login to connect your Wizard website account; /logout to disconnect."
     ),
     no_args_is_help=False,
     rich_markup_mode="rich",
@@ -123,7 +123,20 @@ def main_callback(
             raise typer.BadParameter("Extra arguments require one of the four command names")
         if path == "/login":
             from wizard.cli.account_login import terminal_login
-            raise typer.Exit(terminal_login(console))
+            from wizard.cli.tui.services import ServiceSupervisor, build_account_specs
+            supervisor = ServiceSupervisor()
+            try:
+                report = supervisor.ensure_all(build_account_specs())
+                for line in report.lines():
+                    console.print(line, markup=False)
+                if any(not state.ok for state in report.states):
+                    raise typer.Exit(1)
+                raise typer.Exit(terminal_login(console))
+            finally:
+                supervisor.stop()
+        if path == "/logout":
+            from wizard.cli.account_logout import terminal_logout
+            raise typer.Exit(terminal_logout(console))
         if path == "/status":
             from wizard.cli.display.usage import format_status
             from wizard.cli.runtime_client.usage import standalone_status

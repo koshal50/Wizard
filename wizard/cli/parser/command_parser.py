@@ -55,9 +55,18 @@ VALID_COMMANDS: list[str] = list(COMMAND_TARGETS.keys())
 # Local TUI controls; these never enter the four core command dispatch paths.
 SLASH_COMMANDS = {
     "/login": "Connect your Wizard website account",
+    "/logout": "Log out of your Wizard CLI account",
     "/cancel-login": "Cancel pending account authorization",
     "/status": "Show persisted token usage",
     "/exit": "Cancel work and quit Wizard",
+    "/btw": "Open or continue your side conversation",
+}
+
+BTW_COMMANDS = {
+    "/btw main": "Navigate to main chat",
+    "/btw new": "Start a new side conversation",
+    "/btw copy": "Copy the latest answer (or /btw copy all)",
+    "/btw copy all": "Copy your side-conversation transcript",
 }
 
 

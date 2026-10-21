@@ -7,11 +7,15 @@ import secrets
 import threading
 import webbrowser
 from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
+from wizard.cli.account_session import current_generation, generation, session_guard
 from wizard.cli.account_storage import CredentialStore, StorageError
+
+ACCOUNT_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class LoginError(Exception):
@@ -35,15 +39,28 @@ class APIError(LoginError):
 
 
 def account_origin():
+    from dotenv import dotenv_values
+
     from backend.config import origin
 
-    value = os.environ.get("WIZARD_ACCOUNT_URL", "")
+    # Use Wizard's configuration, never the repository being investigated.
+    try:
+        configured = dotenv_values(ACCOUNT_ENV_FILE, interpolate=False)
+    except OSError:
+        raise LoginError("Could not read Wizard's account configuration.") from None
+    value = os.environ.get("WIZARD_ACCOUNT_URL", configured.get("WIZARD_ACCOUNT_URL"))
     if not value:
         raise LoginError(
-            "Set WIZARD_ACCOUNT_URL to the website account service origin."
+            "Set WIZARD_ACCOUNT_URL in Wizard's .env or your environment to the website account service origin."
         )
     try:
-        return origin(value, os.environ.get("WIZARD_ACCOUNT_LOCAL_DEV") == "1")
+        return origin(
+            value,
+            os.environ.get(
+                "WIZARD_ACCOUNT_LOCAL_DEV", configured.get("WIZARD_ACCOUNT_LOCAL_DEV")
+            )
+            == "1",
+        )
     except ValueError:
         raise LoginError(
             "WIZARD_ACCOUNT_URL requires HTTPS; loopback HTTP requires WIZARD_ACCOUNT_LOCAL_DEV=1."
@@ -70,6 +87,8 @@ class LoginFlow:
     ):
         self.cancel_event = cancel_event or threading.Event()
         self.origin = origin or account_origin()
+        self.store = store or CredentialStore(self.origin)
+        self.generation = current_generation(self.store)
         self.client = client or httpx.Client(
             base_url=self.origin,
             timeout=httpx.Timeout(8, connect=3),
@@ -77,12 +96,12 @@ class LoginFlow:
             trust_env=False,
         )
         self.owns_client = client is None
-        self.store = store or CredentialStore(self.origin)
         self.opener = opener or webbrowser.open
         self.verifier = secrets.token_urlsafe(32)
         self.rid = None
         self.active = False
         self.complete = False
+        self.account = None
         self.expires_at = None
         self._held_lock = False
         self._closed = False
@@ -115,6 +134,40 @@ class LoginFlow:
     def proof(self):
         return {"request_id": self.rid, "verifier": self.verifier}
 
+    def cancelled(self):
+        return (
+            self.cancel_event.is_set()
+            or current_generation(self.store) != self.generation
+        )
+
+    def authenticated_account(self, existing):
+        """Verify a saved credential without starting a browser authorization."""
+        if not isinstance(existing, dict) or not existing.get("access_token"):
+            return None
+        if self.cancelled():
+            raise LoginError("Account authorization cancelled.")
+        try:
+            expiry(existing.get("expires_at"))
+        except LoginError:
+            return None
+        try:
+            verified = self.call(
+                "/api/account/me", token=existing["access_token"], method="GET"
+            )
+        except APIError as exc:
+            if exc.status == 401:
+                return None
+            raise
+        account = verified.get("account")
+        if self.cancelled():
+            raise LoginError("Account authorization cancelled.")
+        if not isinstance(account, dict) or not all(
+            isinstance(account.get(k), str) and account[k]
+            for k in ("id", "email", "full_name")
+        ):
+            raise LoginError("Account service returned an invalid account response.")
+        return account
+
     def start(self):
         if self.active or not self._lock.acquire(blocking=False):
             raise LoginError(
@@ -123,8 +176,15 @@ class LoginFlow:
         self._held_lock = True
         self.active = True
         try:
+            if self.cancelled():
+                raise LoginError("Account authorization cancelled.")
             # Fail before remote issuance if the secure store cannot be read.
             existing = self.store.load()
+            self.account = self.authenticated_account(existing)
+            if self.account:
+                self.complete = True
+                self.close()
+                return "You are already authenticated with your Wizard website account."
             previous = (
                 "Existing account credentials will be preserved until replacement succeeds.\n"
                 if existing
@@ -144,6 +204,19 @@ class LoginFlow:
                     "Account service returned an invalid request identifier."
                 ) from None
             self.expires_at = expiry(data.get("expires_at"))
+            if self.cancelled():
+                raise LoginError("Account authorization cancelled.")
+            if hasattr(self.store, "pending_store"):
+                with session_guard(self.store) as stream:
+                    if (
+                        generation(self.store, stream) != self.generation
+                        or self.cancel_event.is_set()
+                    ):
+                        raise LoginError("Account authorization cancelled.")
+                    pending = self.store.pending_store()
+                    proofs = pending.load() or {}
+                    proofs[self.rid] = self.proof()
+                    pending.save(proofs)
             url = data.get("authorization_url", "")
             if not isinstance(url, str):
                 raise LoginError("Account service returned a malformed browser URL.")
@@ -184,7 +257,7 @@ class LoginFlow:
             raise
 
     def submit(self, code):
-        if self.cancel_event.is_set():
+        if self.cancelled():
             raise LoginError(
                 "Account authorization cancelled; remote cancellation will be attempted."
             )
@@ -214,7 +287,7 @@ class LoginFlow:
                 raise LoginError(
                     "Exchange outcome could not be recovered. Cancel to revoke any issuance, then restart /login. Existing credentials are unchanged."
                 ) from None
-        if self.cancel_event.is_set():
+        if self.cancelled():
             raise LoginError(
                 "Account authorization cancelled after exchange; remote revocation will be attempted."
             )
@@ -237,22 +310,31 @@ class LoginFlow:
             raise LoginError(
                 "Issued credential could not be verified. Cancel and restart /login."
             )
-        if self.cancel_event.is_set():
+        if self.cancelled():
             raise LoginError(
                 "Account authorization cancelled before persistence; remote revocation will be attempted."
             )
         try:
-            self.store.save(
-                {
-                    "access_token": token,
-                    "expires_at": data["expires_at"],
-                    "account": account,
-                }
-            )
+            with session_guard(self.store) as stream:
+                if (
+                    self.cancel_event.is_set()
+                    or generation(self.store, stream) != self.generation
+                ):
+                    raise LoginError(
+                        "Account authorization cancelled before persistence."
+                    )
+                self.store.save(
+                    {
+                        "access_token": token,
+                        "expires_at": data["expires_at"],
+                        "account": account,
+                    }
+                )
         except StorageError:
             raise LoginError(
                 "Remote issuance succeeded but secure local storage failed. Existing credentials remain. Re-enter the code within 120 seconds to recover, or cancel to revoke and restart."
             ) from None
+        self.account = account
         self.complete = True
         self.close()
         return "Wizard website account connected and verified. Runtime and provider configuration are unchanged."
@@ -265,6 +347,18 @@ class LoginFlow:
                 self.call("/api/cli/cancel", self.proof())
             except LoginError:
                 pass  # Pending requests expire; unconfirmed issued credentials expire in 30 days.
+        if self.rid and hasattr(self.store, "pending_store"):
+            try:
+                with session_guard(self.store):
+                    pending = self.store.pending_store()
+                    proofs = pending.load() or {}
+                    proofs.pop(self.rid, None)
+                    if proofs:
+                        pending.save(proofs)
+                    else:
+                        pending.delete()
+            except StorageError:
+                pass  # Logout clears/cancels proofs left by an interrupted login.
         self.active = False
         if self._held_lock:
             self._held_lock = False
@@ -279,8 +373,15 @@ def terminal_login(console):
     try:
         flow = LoginFlow()
         console.print(flow.start(), markup=False, soft_wrap=True)
+        if flow.complete:
+            return 0
         while flow.active:
             code = input("Website code (or /cancel-login): ").strip()
+            if code == "/logout":
+                from wizard.cli.account_logout import terminal_logout
+
+                flow.cancel_event.set()
+                return terminal_logout(console)
             if code in {"/cancel-login", "/exit"}:
                 console.print("Account authorization cancelled.", markup=False)
                 return 1
@@ -289,6 +390,8 @@ def terminal_login(console):
                 return 0
             except LoginError as exc:
                 console.print(str(exc), markup=False)
+                if flow.cancelled():
+                    return 1
     except (EOFError, KeyboardInterrupt):
         console.print("Account authorization cancelled.", markup=False)
         return 1
@@ -307,6 +410,7 @@ class LoginWorker:
         import queue
 
         self.notify = notify
+        self.on_authenticated = None
         self.codes = queue.Queue(maxsize=1)
         self.stop = threading.Event()
         self.running = True
@@ -334,8 +438,11 @@ class LoginWorker:
         flow = None
         try:
             flow = LoginFlow(cancel_event=self.stop)
-            self.notify(flow.start())
-            while not self.stop.is_set() and flow.active:
+            message = flow.start()
+            if flow.complete and not flow.cancelled() and self.on_authenticated:
+                self.on_authenticated(flow.account)
+            self.notify(message)
+            while not flow.cancelled() and flow.active:
                 try:
                     code = self.codes.get(timeout=0.2)
                 except queue.Empty:
@@ -345,15 +452,15 @@ class LoginWorker:
                     continue
                 try:
                     message = flow.submit(code)
+                    if flow.complete and not flow.cancelled() and self.on_authenticated:
+                        self.on_authenticated(flow.account)
                     self.notify(message)
                 except LoginError as exc:
                     self.notify(
                         str(exc) + "\nEnter a fresh website code or /cancel-login."
                     )
-        except (LoginError, StorageError):
-            self.notify(
-                "Account login unavailable. Check WIZARD_ACCOUNT_URL, connectivity, and secure credential storage."
-            )
+        except (LoginError, StorageError) as exc:
+            self.notify("Account login unavailable. " + str(exc))
         except Exception:  # noqa: BLE001 -- isolate platform browser/worker errors from secrets
             self.notify(
                 "Account login failed. Existing account credentials were preserved."

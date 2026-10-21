@@ -47,6 +47,9 @@ these distinct submissions. Service/repository/API checks use workflow=general.
 Registration's authenticated session alone is not a login test.
 For explain/investigate use repository discovery unless the original request explicitly
 asks to execute application behavior. Do not start processes merely to explain code.
+For investigate architecture, plan one repository discovery scope for the requested architecture.
+Runtime performs bounded layer and import coverage and then validates six architectural findings;
+do not repeat those six findings as separate tactical discovery loops.
 For architecture investigations, cover repository structure and major directories,
 entry points and startup flow, client/server boundaries when applicable, package/workspace
 organization, and important configuration and relationships. Ground predicates in actual
@@ -113,6 +116,28 @@ Use case_sensitive=false only for natural language terms where case is irrelevan
 Return only the canonical decision schema."""
 
 ARCHITECTURE_SYNTHESIZE = """Return the ArchitectureReport schema using the supplied repository evidence.
+The findings list MUST contain exactly six entries, one for each area, in this order:
+structure, entry_points, startup, boundaries, packages, configuration.
+Include every area even if unresolved; in that case supply empty assertions and a blocker.
+Keep each finding focused on its cited implementation, usually two or three short content predicates.
+A short excerpt is partial evidence, not proof that the rest of the file is absent.
+If required evidence is missing, request up to four concrete files in evidence_requests,
+using only paths supplied in repository_paths. Request actual entry points or relevant
+implementation files before claiming their evidence is unavailable. Runtime can perform
+one bounded follow-up through its existing file reader. Otherwise return an empty list.
+Also populate components and connections for the user's application architecture.
+Use at most 12 meaningful semantic components and 16 connections: actual client/server subsystems,
+entry points, services, models, databases, or external dependencies supported by the files.
+Represent the supplied pages, routing, authentication, API clients, routes, services, data adapters,
+shared contracts and configuration where observed. Do not collapse their implementation into
+only package manifests. Literal module dependencies and file components are retained locally
+in addition to this semantic synthesis; prioritize supported cross-layer calls and integrations.
+These are application components, never investigation checks, tools, or agents.
+Each component needs a unique simple id, label, type, repository-relative path,
+description, and supporting observation_ids taken from repository_evidence.
+Each connection needs a unique id, source and target component ids, type, description,
+and supporting observation_ids. Never fabricate a relationship for a nicer picture.
+Do not include secrets, absolute local paths, or raw source files in descriptions.
 Explain each required architecture area with targeted content predicates quoting exact source
 text and stable observation IDs or paths. Each statement must follow from its cited evidence.
 Proof excerpts must be short single-line literal fragments without backslash escapes or

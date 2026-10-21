@@ -30,15 +30,23 @@ def usage_listener():
 
 
 def status(run_id=None):
+    from wizard.cli.runtime_client.account import account_headers
     from wizard.cli.runtime_client.client import base_url
 
+    headers = account_headers()
     with httpx.Client(timeout=5) as client:
         deadline = time.monotonic() + 2
         while True:
             response = client.get(
                 base_url().removesuffix("/investigations") + "/usage",
                 params={"run_id": run_id} if run_id else None,
+                headers=headers,
             )
+            if response.status_code == 404 and run_id:
+                # A run started under another account must not replace the
+                # current account's persisted totals after an account switch.
+                run_id = None
+                continue
             if response.status_code != 503 or time.monotonic() >= deadline:
                 break
             try:
@@ -110,7 +118,7 @@ def parse_sse(lines):
 
 
 class UsageStream:
-    def __init__(self, url, run_id, on_update=None):
+    def __init__(self, url, run_id, on_update=None, headers=None):
         self.url, self.run_id = url, run_id
         self.stop = threading.Event()
         self.completed = threading.Event()
@@ -121,6 +129,7 @@ class UsageStream:
         self.confirmed = None
         self.last_id = None
         self.on_update = on_update
+        self.headers = dict(headers or {})
         self.client = httpx.Client(timeout=httpx.Timeout(20, connect=2))
         self.thread = threading.Thread(target=self._read, name="usage-sse", daemon=True)
         self.thread.start()
@@ -153,7 +162,7 @@ class UsageStream:
         delay = 0.5
         while not self.stop.is_set():
             try:
-                headers = {"Accept": "text/event-stream"}
+                headers = {**self.headers, "Accept": "text/event-stream"}
                 if self.last_id:
                     headers["Last-Event-ID"] = self.last_id
                 with self.client.stream("GET", self.url, headers=headers) as response:
@@ -209,7 +218,9 @@ class UsageStream:
         self.completed.wait(timeout=2)
         try:
             with httpx.Client(timeout=2) as client:
-                response = client.get(self.url.removesuffix("/stream"))
+                response = client.get(
+                    self.url.removesuffix("/stream"), headers=self.headers
+                )
                 response.raise_for_status()
                 latest = response.json()
                 if latest.get("persistence_pending") or latest.get("pending_requests"):

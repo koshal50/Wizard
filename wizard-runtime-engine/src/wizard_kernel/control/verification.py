@@ -779,25 +779,34 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             for attempt in range(2):
                 spec = request('planner', planning_context, plan_model)
                 feedback = []
-                if inv.intent == 'explain':
+                architecture_plan = inv.intent == 'investigate' and 'architecture' in inv.targets
+                if inv.intent == 'explain' or architecture_plan:
+                    from wizard_kernel.contracts.verification import CheckSpec
                     # These are proposals, not admitted requirements yet. Reject
                     # invented content before it becomes an immutable predicate.
                     for proposed_check in spec.checks:
+                        proposed_check = CheckSpec.model_validate(proposed_check.model_dump())
                         for index, result in enumerate(checks.evaluate(proposed_check, store.all())):
-                            if result['verdict'] != 'passed':
+                            # Architecture discovery may legitimately need more
+                            # reads. Reject only claims already contradicted by
+                            # supplied content before admitting them as goals.
+                            unsupported = result['verdict'] != 'passed' if inv.intent == 'explain' else result['verdict'] == 'failed'
+                            if unsupported:
                                 feedback.append({'check_id': proposed_check.id, 'assertion_index': index,
                                     'assertion': result['assertion'], 'verdict': result['verdict'],
                                     'observation_id': result.get('observation_id'),
                                     'reason': result.get('reason') or 'Proposed content is not supported by the supplied document',
                                     'supporting_sources': supporting_repository_sources(proposed_check.assertions[index], store.all())})
-                    state.setdefault('explanation_plan_attempts', []).append({'proposal': spec.model_dump(), 'feedback': feedback})
+                    history_key = 'explanation_plan_attempts' if inv.intent == 'explain' else 'architecture_plan_attempts'
+                    state.setdefault(history_key, []).append({'proposal': spec.model_dump(), 'feedback': feedback})
                 if not feedback:
                     break
                 if attempt == 1:
-                    raise InterruptedError('Explanation plan remains unsupported by observed content after one correction')
+                    label = 'Explanation' if inv.intent == 'explain' else 'Architecture'
+                    raise InterruptedError(label + ' plan remains unsupported by observed content after one correction')
                 planning_context['planning_feedback'] = feedback
                 planning_context['correction_instruction'] = ('The proposed content criteria were not grounded and have not been admitted. '
-                    'Preserve the original explanation request as repository discovery goals with assertions=[] and a precise unresolved_reason. '
+                    'Preserve the original request as repository discovery goals with assertions=[] and a precise unresolved_reason. '
                     'The Explorer must inspect actual observations before proposing content criteria. Do not invent replacement literals.')
                 plan_model = planning_model([], read_only=True, discovery_only=True)
             spec = VerificationSpec.model_validate(spec.model_dump())
@@ -828,6 +837,46 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 browsers.register_runtime(inv.id, browser)
                 validator._browser_enabled = True
             tools = ToolExecutor(sandbox, inv.repository_path, browser=browser)
+            if inv.intent == 'investigate' and 'architecture' in inv.targets:
+                from wizard_kernel.control.architecture_coverage import candidates, imports, balanced_evidence, boundary
+                def architecture_evidence():
+                    return balanced_evidence(store.all())
+
+                # Strategic coverage remains inside this investigation and its
+                # existing tool budget, validator, observations and deadline.
+                known_paths = {p.replace('\\', '/') for p in manifest.directory_tree}
+                read_paths = {(o.payload.get('data') or {}).get('path', '').replace('\\', '/')
+                              for o in store.all() if o.success and o.source_tool == 'read_file'}
+                selected = candidates(known_paths, read_paths)
+                allowance = min(28, max(0, inv.budget_remaining - 4))
+                for path in selected[:allowance]:
+                    params = {'path': path, 'max_bytes': 6000}
+                    checked = validator.validate(ToolRequest(tool='read_file', parameters=params), inv.budget_remaining)
+                    if checked.valid:
+                        execute('read_file', params, checked.sanitised_params,
+                                'architecture_coverage', purpose='architecture_repository_coverage')
+                # Follow references into missed layers, not arbitrary extra files.
+                read_rows = [{'path': (o.payload.get('data') or {}).get('path', '').replace('\\', '/'),
+                              'content': str((o.payload.get('data') or {}).get('content', ''))}
+                             for o in store.all() if o.success and o.source_tool == 'read_file']
+                inspected = {r['path'] for r in read_rows}
+                missing_imports = sorted({target for row in read_rows
+                    for target, _, _ in imports(row['path'], row['content'], known_paths)
+                    if target not in inspected and target in selected})
+                for path in missing_imports[:min(4, max(0, inv.budget_remaining - 1))]:
+                    params = {'path': path, 'max_bytes': 6000}
+                    checked = validator.validate(ToolRequest(tool='read_file', parameters=params), inv.budget_remaining)
+                    if checked.valid:
+                        execute('read_file', params, checked.sanitised_params,
+                                'architecture_coverage', purpose='architecture_import_followup')
+                inspected = {r['path'] for r in architecture_evidence()}
+                missing = [p for p in selected if p not in inspected]
+                state['architecture_coverage'] = {'candidate_files': len(selected),
+                    'inspected_files': sorted(inspected), 'uninspected_files': missing,
+                    'unrepresented_boundaries': sorted({boundary(p)[1] for p in selected} -
+                                                       {boundary(p)[1] for p in inspected}),
+                    'strategy': 'bounded layer representatives and literal local imports'}
+
             save(state=LifecycleState.investigation_loop)
             bus.emit(events.InvestigationStarted, {"repository_path": inv.repository_path})
             ordered, remaining = [], list(spec.checks)
@@ -837,6 +886,13 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 remaining.remove(ready)
             for check in ordered:
                 guard()
+                if inv.intent == 'investigate' and 'architecture' in inv.targets and not check.assertions:
+                    # Unspecified architecture goals are grounded together by the
+                    # existing six-area synthesis below, after bounded discovery.
+                    state['results'][check.id] = {'status': 'unverified', 'reason':
+                        'Repository evidence collected; awaiting architectural synthesis'}
+                    save()
+                    continue
                 if not can_execute and (set(check.capabilities) - {"repository"} or any(a.source != "repository" for a in check.assertions)):
                     state["results"][check.id] = {"status": "unverified", "reason": "Execution capability disabled for this request"}
                     save()
@@ -1136,25 +1192,43 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             if inv.intent == 'investigate' and 'architecture' in inv.targets and state['results'] and all(
                     state['results'].get(c['id'], {}).get('status') == 'passed' or not c['assertions']
                     for c in state['checks']):
-                from wizard_kernel.contracts.verification import ArchitectureReport, CheckSpec
-                latest = {(o.payload.get('data') or {}).get('path'): o for o in store.all()
-                          if o.success and o.source_tool == 'read_file'}
-                evidence = []
-                remaining = 24000
-                for path, o in reversed(list(latest.items())):
-                    content = (o.payload.get('data') or {}).get('content', '')
-                    excerpt = content[:min(4000, remaining)]
-                    evidence.append({'observation_id': o.id, 'path': path, 'content': excerpt,
-                                     'excerpt_truncated': len(excerpt) < len(content)})
-                    remaining -= len(excerpt)
-                    if remaining <= 0:
+                from wizard_kernel.contracts.verification import CheckSpec, architecture_report_model
+                repository_evidence = architecture_evidence()
+                repository_paths, path_chars = [], 0
+                for path in dict.fromkeys(selected + sorted(known_paths)):
+                    if path_chars + len(path) > 7000:
                         break
+                    repository_paths.append(path.replace('\\', '/'))
+                    path_chars += len(path)
                 synthesis_context = {'original_request': _effective_request(inv),
                     'command_family': inv.intent, 'targets': inv.targets,
-                    'architecture_synthesis': True, 'repository_evidence': evidence,
+                    'architecture_synthesis': True, 'repository_evidence': repository_evidence,
+                    'repository_paths': repository_paths,
+                    'diagram_instruction': 'Also populate components and connections for a compact application architecture diagram. Components are real application subsystems, entry points, services, models, or databases, never investigation tasks. Use repository-relative paths, concise labels and types, and observation_ids from supplied repository_evidence for each component and connection. Connections must explain a supported application dependency or call, never mere shared directory membership. Omit unsupported components and connections. Use unique simple IDs and valid component endpoints. Do not include secrets or absolute local paths in any descriptions.',
                     'instruction': 'Synthesize all six architecture areas from supplied evidence. Explain actual entry files and startup flow, client/server component boundaries (not account isolation), workspace packages, directories and configuration relationships. Each statement must follow from cited content. Use short exact verbatim substrings as targeted content predicates, preserving JSON whitespace and escapes; use separate predicates for separate terms. Do not reformat JSON or treat a database healthcheck as application startup. File existence alone is insufficient. For missing evidence use empty assertions and an exact blocker; do not invent facts.'}
-                for attempt in range(2):
-                    synthesis = request('explorer', synthesis_context, ArchitectureReport)
+                proof_correction_used = False
+                for attempt in range(3):
+                    synthesis = request('explorer', synthesis_context,
+                                        architecture_report_model(synthesis_context['repository_evidence']))
+                    if attempt == 0 and synthesis.evidence_requests:
+                        followed_up = False
+                        for path in dict.fromkeys(synthesis.evidence_requests):
+                            path = path.replace('\\', '/')
+                            if path not in known_paths or inv.budget_remaining <= 0:
+                                continue
+                            params = {'path': path, 'max_bytes': 8000}
+                            checked = validator.validate(ToolRequest(tool='read_file', parameters=params), inv.budget_remaining)
+                            if not checked.valid:
+                                continue
+                            obs = execute('read_file', params, checked.sanitised_params,
+                                          'architecture_coverage', purpose='architecture_evidence_followup')
+                            state.setdefault('architecture_evidence_followup', []).append(
+                                {'path': path, 'observation_id': obs.id, 'success': obs.success})
+                            followed_up = True
+                        if followed_up:
+                            synthesis_context['repository_evidence'] = architecture_evidence()
+                            synthesis_context['evidence_followup'] = 'Use the new file observations to resolve earlier blockers. No further follow-up reads are available; cite actual content or retain the blocker.'
+                            continue
                     evaluated_findings = []
                     for finding in synthesis.findings:
                         coverage_id = 'architecture_' + finding.area
@@ -1163,8 +1237,9 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         coverage = CheckSpec(id=coverage_id, description=finding.area + ': ' + finding.summary,
                             assertions=finding.assertions, unresolved_reason=finding.blocker, capabilities=['repository'])
                         evaluated_findings.append((coverage, checks.evaluate(coverage, store.all())))
-                    if attempt or not any(checks.verdict(r) == 'failed' for _, r in evaluated_findings):
+                    if proof_correction_used or not any(checks.verdict(r) == 'failed' for _, r in evaluated_findings):
                         break
+                    proof_correction_used = True
                     fs_store.write(inv.id, 'architecture_proposed_report.json', synthesis.model_dump())
                     feedback = []
                     for c, rows in evaluated_findings:
@@ -1175,12 +1250,22 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                             sensitive = a['assertion'].get('case_sensitive', True)
                             present = [t for t in tokens if (t if sensitive else t.casefold()) in
                                        (actual if sensitive else actual.casefold())]
-                            details.append({**a, 'actual': actual[:500] if a.get('actual') is not None else None,
+                            details.append({**a, 'actual': actual[:160] if a.get('actual') is not None else None,
                                             'present_literal_tokens': present})
                         feedback.append({'area': c.id, 'results': details})
                     synthesis_context['evaluation_feedback'] = feedback
                     synthesis_context['recovery_instruction'] = 'One bounded correction is allowed for your synthesized predicates. A formatting mismatch does not mean the file or JSON fields are absent. Present literal tokens are diagnostics, not proof. Consult the supplied actual contents; for JSON use separate short exact predicates for keys and values instead of reformatted arrays. Preserve the architectural relation in the explanation and proof; do not weaken user requirements. If evidence does not support the finding, report its blocker.'
+                inspected = {r['path'] for r in architecture_evidence()}
+                coverage = state['architecture_coverage']
+                coverage['inspected_files'] = sorted(inspected)
+                coverage['uninspected_files'] = [p for p in candidates(known_paths) if p not in inspected]
+                coverage['unrepresented_boundaries'] = sorted({boundary(p)[1] for p in candidates(known_paths)} -
+                                                             {boundary(p)[1] for p in inspected})
                 state['architecture_findings'] = synthesis.model_dump()['findings']
+                state['architecture_diagram'] = {
+                    'components': synthesis.model_dump()['components'],
+                    'connections': synthesis.model_dump()['connections'],
+                }
                 state['architecture_coverage_ids'] = {f.area: c.id for f, (c, _) in zip(synthesis.findings, evaluated_findings)}
                 for coverage, evaluated in evaluated_findings:
                     state['checks'].append(coverage.model_dump())

@@ -211,7 +211,8 @@ class UsageDatabase:
             ).fetchone()
             current = self._run(conn, profile, latest["run_id"]) if latest else None
         return {
-            "scope": "local-profile",
+            "scope": "account" if profile.startswith("account:") else "local-profile",
+            "account_id": profile.removeprefix("account:") if profile.startswith("account:") else None,
             "profile_id": profile,
             "session_id": session_id,
             "totals": totals,

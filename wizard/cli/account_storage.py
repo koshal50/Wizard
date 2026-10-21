@@ -16,6 +16,7 @@ class StorageError(Exception):
 
 class CredentialStore:
     def __init__(self, origin):
+        self.origin = origin
         self.target = "Wizard/account/" + hashlib.sha256(origin.encode()).hexdigest()
         self.path = (
             Path.home()
@@ -24,6 +25,10 @@ class CredentialStore:
             / "accounts"
             / (self.target.rsplit("/", 1)[1] + ".json")
         )
+
+    def pending_store(self):
+        """Authorization proofs use the same secure platform storage, separately."""
+        return CredentialStore(self.origin + "#pending-cli-login")
 
     def _windows(self, value=None):
         class Credential(ctypes.Structure):
@@ -110,7 +115,12 @@ class CredentialStore:
     def load(self):
         try:
             if os.name == "nt":
-                return self._windows()
+                value = self._windows()
+                if value is not None and not isinstance(value, dict):
+                    raise StorageError(
+                        "Account credential storage contains invalid data"
+                    )
+                return value
             self._directory()
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             try:
@@ -125,7 +135,12 @@ class CredentialStore:
                     or not stat.S_ISREG(info.st_mode)
                 ):
                     raise StorageError("Account credential file must be private (0600)")
-                return json.load(stream)
+                value = json.load(stream)
+                if value is not None and not isinstance(value, dict):
+                    raise StorageError(
+                        "Account credential storage contains invalid data"
+                    )
+                return value
         except StorageError:
             raise
         except Exception:  # noqa: BLE001 -- sanitize platform and filesystem exceptions
@@ -163,4 +178,34 @@ class CredentialStore:
         except Exception:  # noqa: BLE001 -- sanitize platform and filesystem exceptions
             raise StorageError(
                 "Account credential could not be saved; existing credentials were not replaced before the atomic write"
+            ) from None
+
+    def delete(self):
+        """Remove only this origin's CLI credential; absence is success."""
+        try:
+            if os.name == "nt":
+                api = ctypes.WinDLL("Advapi32.dll", use_last_error=True)
+                api.CredDeleteW.argtypes = [
+                    wintypes.LPCWSTR,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                ]
+                api.CredDeleteW.restype = wintypes.BOOL
+                if (
+                    not api.CredDeleteW(self.target, 1, 0)
+                    and ctypes.get_last_error() != 1168
+                ):
+                    raise StorageError(
+                        "Windows Credential Manager could not remove the account credential"
+                    )
+            else:
+                self._directory()
+                # Validate private storage before unlinking; never follow a symlink.
+                self.load()
+                self.path.unlink(missing_ok=True)
+        except StorageError:
+            raise
+        except Exception:  # noqa: BLE001 -- sanitize filesystem/platform errors
+            raise StorageError(
+                "Account credential could not be removed from secure storage"
             ) from None

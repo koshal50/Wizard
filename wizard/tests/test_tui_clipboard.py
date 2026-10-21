@@ -137,6 +137,8 @@ def test_clipboard_failure_keeps_draft_and_selection(monkeypatch):
 
 
 def test_system_clipboard_errors_are_reported_without_exposing_contents(monkeypatch):
+    if clipboard.pyperclip is None:
+        pytest.skip("Optional system clipboard dependency is not installed")
     def fail(*args):
         raise clipboard.pyperclip.PyperclipException("private platform detail")
 
@@ -148,3 +150,11 @@ def test_system_clipboard_errors_are_reported_without_exposing_contents(monkeypa
         clipboard.read_text()
     assert "private" not in str(copied.value)
     assert "private" not in str(pasted.value)
+
+
+def test_missing_optional_clipboard_does_not_break_terminal_ui(monkeypatch):
+    monkeypatch.setattr(clipboard, 'pyperclip', None)
+    with pytest.raises(clipboard.ClipboardError, match="terminal's copy"):
+        clipboard.write_text('draft')
+    with pytest.raises(clipboard.ClipboardError, match="terminal's paste"):
+        clipboard.read_text()

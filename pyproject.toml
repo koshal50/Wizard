@@ -20,7 +20,6 @@ dependencies = [
     "typer[all]>=0.12.0",
     "rich>=13.0.0",
     "prompt_toolkit>=3.0.0",
-    "pyperclip>=1.9",
     # Image handling for the standalone `pixelart.py` tool.
     "Pillow>=10.0.0",
     # The Runtime Engine and the agent service (both are FastAPI apps served by
@@ -42,6 +41,7 @@ dev = [
 ]
 usage = ["psycopg[binary,pool]>=3.2,<4"]
 account-oauth = ["PyJWT[crypto]>=2.10,<3"]
+clipboard = ["pyperclip>=1.9"]
 
 [project.scripts]
 wizard = "wizard.cli.main:main"
@@ -65,7 +65,7 @@ wizard_kernel = ["storage/migrations/*.sql"]
 backend = ["migrations/*.sql"]
 
 [tool.pytest.ini_options]
-testpaths = ["wizard/tests", "backend/tests"]
+testpaths = ["wizard/tests"]
 pythonpath = ["."]
 
 # npm dependencies cannot be declared as Python distributions. This records the

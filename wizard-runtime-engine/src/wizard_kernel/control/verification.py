@@ -270,20 +270,22 @@ def _context(inv, check, results, observations, available, discovery, authorized
             "public_test_inputs": {key: authorized[key] for key in public_refs},
             "test_input_usage": "Reuse authorized identity refs for signup/login. For requested local data-entry operations, use authorized text/description refs for discovered text fields. Never substitute email/password refs for ordinary record contents. Values are not proof; observe the actual submission and resulting record.",
             "remaining_tool_budget": inv.budget_remaining}
+    repository_observations = [o for o in observations if o.source_tool == 'read_file']
+    repository_observations.reverse()
+    repository_observations.sort(key=lambda o: o.id not in preferred_ids)
+    repository_observations = repository_observations[:16]
     packet['repository_evidence'] = [
         {'observation_id': o.id, 'path': (o.payload.get('data') or {}).get('path'),
          'success': o.success, 'bytes_read': (o.payload.get('data') or {}).get('bytes_read'),
          'excerpt': flow_trace.safe_text(str((o.payload.get('data') or {}).get('content') or ''), limit=1200)}
-        for o in observations if o.source_tool == 'read_file']
-    content_budget = 12000
-    contents = list(zip(packet['repository_evidence'], [o for o in observations if o.source_tool == 'read_file']))
-    contents.reverse()
-    contents.sort(key=lambda pair: pair[1].id not in preferred_ids)
+        for o in repository_observations]
+    content_budget = 4000 if page else 12000
+    contents = zip(packet['repository_evidence'], repository_observations)
     for item, obs in contents:
         content = str((obs.payload.get('data') or {}).get('content') or '')
         limit = min(8000, content_budget)
         item['excerpt'] = flow_trace.safe_text(content, limit=limit) if limit else ''
-        item['content_complete'] = len(content) <= limit
+        item['content_complete'] = len(content) <= limit and not (obs.payload.get('data') or {}).get('truncated')
         content_budget -= min(len(content), limit)
     packet['repository_results'] = [
         {'observation_id': o.id, 'tool': o.source_tool, 'success': o.success,

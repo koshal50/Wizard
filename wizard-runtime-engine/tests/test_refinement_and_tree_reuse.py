@@ -157,6 +157,49 @@ def test_reused_older_content_is_prioritized_within_context_budget():
     assert sum(len(e['excerpt']) for e in context['repository_evidence']) <= 12100
 
 
+def test_repository_context_bounds_metadata_and_marks_partial_reads():
+    from types import SimpleNamespace
+    observations = [proof('obs_' + str(n), 'x' * 3000) for n in range(60)]
+    observations[0].payload['data']['truncated'] = True
+    inv = SimpleNamespace(intent='explain', targets=['security'], question='security', active_goals=[], budget_remaining=5)
+    check = CheckSpec(id='discover', description='Read source', unresolved_reason='Gather proof')
+    context = verification._context(inv, check, [], observations, ['read_file'], {}, {}, preferred_ids=['obs_0'])
+    assert len(context['repository_evidence']) == 16
+    assert context['repository_evidence'][0]['observation_id'] == 'obs_0'
+    assert not context['repository_evidence'][0]['content_complete']
+    assert sum(len(e['excerpt']) for e in context['repository_evidence']) <= 12100
+
+
+def test_failed_command_invalidates_cached_repository_reads(tmp_path):
+    validator = ToolRequestValidator(str(tmp_path))
+    request = ToolRequest(tool='read_file', parameters={'path': 'app.py', 'max_bytes': 3000})
+    first = validator.validate(request, 5)
+    validator.record_execution('read_file', first.sanitised_params,
+        {'ok': True, 'data': {'path': 'app.py', 'content': 'old'}}, 'obs_old')
+    validator.record_execution('execute_command', {'command': 'build'}, {'ok': False})
+    assert validator.validate(request, 5).observation_id is None
+
+
+def test_byte_limited_file_read_is_not_cached_as_complete(tmp_path):
+    from wizard_kernel.world.sandbox.local import LocalProcessRuntime
+    from wizard_kernel.world.tools import ToolExecutor
+    (tmp_path / 'app.py').write_text('first\nsecond\n', encoding='utf-8')
+    sandbox = LocalProcessRuntime()
+    sandbox.start(str(tmp_path))
+    try:
+        result = ToolExecutor(sandbox, str(tmp_path)).execute(
+            {'tool': 'read_file', 'params': {'path': 'app.py', 'max_bytes': 5}})
+        assert result['ok'] and result['data']['content'] == 'first'
+        assert result['data']['truncated'] is True
+        validator = ToolRequestValidator(str(tmp_path))
+        request = ToolRequest(tool='read_file', parameters={'path': 'app.py', 'max_bytes': 5})
+        accepted = validator.validate(request, 5)
+        validator.record_execution('read_file', accepted.sanitised_params, result, 'obs_partial')
+        assert validator.validate(request, 5).observation_id is None
+    finally:
+        sandbox.stop()
+
+
 def test_tree_defaults_are_normalized_and_success_is_reused_without_execution(tmp_path):
     validator = ToolRequestValidator(str(tmp_path))
     first = validator.validate(ToolRequest(tool='list_tree', parameters={}), 5)

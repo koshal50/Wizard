@@ -100,7 +100,7 @@ class ToolRequestValidator:
         """Advance prerequisites only from successful executor results."""
         data = payload.get("data") or {}
         fingerprint = self._fingerprint(tool, params)
-        if tool in {'execute_command', 'start_process'} and payload.get('ok'):
+        if tool in {'execute_command', 'start_process'}:
             # Execution can create/change repository files. Re-observe instead
             # of serving a cached pre-execution repository snapshot.
             self._seen_fingerprints.difference_update(self._observed_reads)

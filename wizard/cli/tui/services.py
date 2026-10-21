@@ -126,6 +126,7 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
     root = root or repo_root()
     build_id = _workspace_build_id(root)
     runtime_env = os.environ.copy()
+    configured = {}
     # Only explicitly supported configuration enters Runtime from root .env.
     # Test input values remain in Runtime; prompts receive reference names only.
     try:
@@ -144,14 +145,17 @@ def build_specs(root: Path | None = None) -> list[ServiceSpec]:
         "PYTHONPATH": os.pathsep.join(filter(None, (
             str(root / "wizard-runtime-engine" / "src"), os.environ.get("PYTHONPATH", "")))),
     })
-    return [*build_account_specs(root), ServiceSpec(
+    # Website development is optional, never a prerequisite for local verification.
+    account_specs = build_account_specs(root) if runtime_env.get(
+        "WIZARD_ACCOUNT_AUTOSTART", configured.get("WIZARD_ACCOUNT_AUTOSTART")) == "1" else []
+    return [ServiceSpec(
         key="kernel", label="Runtime Engine", port=8080, health_path="/health",
         cwd=str(root / "wizard-runtime-engine"),
         argv=(_kernel_python(), "-m", "uvicorn", "wizard_kernel.main:app",
               "--host", "127.0.0.1", "--port", "8080"),
         env=runtime_env, needs=("uvicorn",),
         why_unstartable="uvicorn is not importable by this interpreter",
-    )]
+    ), *account_specs]
 
 
 def build_account_specs(root: Path | None = None) -> list[ServiceSpec]:
@@ -179,7 +183,9 @@ def build_account_specs(root: Path | None = None) -> list[ServiceSpec]:
     )
     if port == 8090:
         return [backend]
-    website = Path(os.environ.get("WIZARD_WEBSITE_DIR", str(root.parent / "Wizard-web" / "wizardsite")))
+    website_root = next((p for p in (root.parent / "wizar-web", root.parent / "Wizard-web")
+                         if (p / "wizardsite").is_dir()), root.parent / "wizar-web")
+    website = Path(os.environ.get("WIZARD_WEBSITE_DIR", str(website_root / "wizardsite")))
     next_cli = website / "node_modules" / "next" / "dist" / "bin" / "next"
     node = shutil.which("node")
     return [backend, ServiceSpec(

@@ -32,6 +32,30 @@ def test_remote_account_service_is_never_started(tmp_path, monkeypatch):
     assert services.build_account_specs(tmp_path) == []
 
 
+def test_normal_verification_does_not_start_optional_website(tmp_path, monkeypatch):
+    monkeypatch.delenv('WIZARD_ACCOUNT_AUTOSTART', raising=False)
+    monkeypatch.setattr(services, '_workspace_build_id', lambda root: 'test')
+    monkeypatch.setattr(services, 'build_account_specs', lambda root: (_ for _ in ()).throw(
+        AssertionError('Account website must not be a local verification dependency')))
+    assert [spec.key for spec in services.build_specs(tmp_path)] == ['kernel']
+
+
+def test_website_worktree_name_matches_remote_branch(tmp_path, monkeypatch):
+    monkeypatch.setenv('WIZARD_ACCOUNT_URL', 'http://localhost:3000')
+    monkeypatch.setenv('WIZARD_ACCOUNT_LOCAL_DEV', '1')
+    monkeypatch.delenv('WIZARD_WEBSITE_DIR', raising=False)
+    website = tmp_path / 'wizar-web' / 'wizardsite'
+    website.mkdir(parents=True)
+    assert services.build_account_specs(tmp_path / 'wizard')[-1].cwd == str(website)
+
+
+def test_explicit_environment_opt_out_overrides_account_autostart_file(tmp_path, monkeypatch):
+    (tmp_path / '.env').write_text('WIZARD_ACCOUNT_AUTOSTART=1\n')
+    monkeypatch.setenv('WIZARD_ACCOUNT_AUTOSTART', '0')
+    monkeypatch.setattr(services, '_workspace_build_id', lambda root: 'test')
+    assert [spec.key for spec in services.build_specs(tmp_path)] == ['kernel']
+
+
 def test_supervisor_preserves_owned_children_if_later_start_raises(tmp_path, monkeypatch):
     first = services.ServiceSpec("account", "Account", 8090, "/health", str(tmp_path), None)
     second = services.ServiceSpec("website", "Website", 3000, "/", str(tmp_path), None)

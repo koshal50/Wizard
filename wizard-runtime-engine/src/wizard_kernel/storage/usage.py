@@ -63,7 +63,7 @@ class UsageStore:
 
     @staticmethod
     def _write(path, value):
-        tmp = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+        tmp = path.with_name(uuid4().hex + ".tmp")
         with tmp.open("w", encoding="utf-8") as stream:
             json.dump(value, stream)
             stream.flush()
@@ -185,7 +185,9 @@ class UsageStore:
             run = self.runs[run_id]
             run["revision"] = max(time.time_ns(), run["revision"] + 1)
             self._write(
-                self.spool / f"{run['revision']}_{run_id}_{uuid4().hex}.json",
+                # The run ID is already in the payload; long conversation IDs
+                # must not push Windows spool/staging paths past MAX_PATH.
+                self.spool / f"{run['revision']}_{uuid4().hex}.json",
                 {"run": dict(run), "events": list(events)},
             )
             self.wake.set()

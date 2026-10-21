@@ -83,7 +83,8 @@ class ToolExecutor:
                 pass
         return {
             "ok": True,
-            "data": {"content": content, "parsed": parsed, "path": path, "bytes_read": len(raw)},
+            "data": {"content": content, "parsed": parsed, "path": path, "bytes_read": len(raw),
+                     "truncated": len(raw) >= max_bytes},
             "error": None,
             "meta": {"path": path},
         }

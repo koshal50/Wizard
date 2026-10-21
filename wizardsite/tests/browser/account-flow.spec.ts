@@ -30,7 +30,7 @@ function storage(action: "snapshot" | "restore", value?: string) {
   return result.stdout.trim()
 }
 async function cli() {
-  const previous = storage("snapshot")
+  const previous = storage("snapshot"); storage("restore", "null")
   const processHandle = spawn(executable, ["/login"], {cwd: backend, env: {
     ...process.env, WIZARD_ACCOUNT_URL: origin, WIZARD_ACCOUNT_LOCAL_DEV: "1",
     COLUMNS: "2400", NO_COLOR: "1", FORCE_COLOR: "0", NODE_NO_WARNINGS: "1",
@@ -123,7 +123,7 @@ test.describe.serial("real frontend + PostgreSQL + actual wizard.exe /login", ()
     const second = await cli()
     try {
       await page.goto(second.url)
-      await page.getByRole("link", {name:"Continue", exact:true}).click()
+      await page.getByRole("link", {name:"Continue as Browser Integration", exact:true}).click()
       await expect(page).toHaveURL(/\/cli\/connect$/)
       await approveAndExchange(page, second)
     } finally { await cleanup(second) }

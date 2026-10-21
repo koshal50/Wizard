@@ -143,6 +143,16 @@ export default function CliFlow({ page }: { page: "authorize" | "connect" | "com
     } catch (e) { setError((e as Error).message) }
     finally { setBusy(false) }
   }
+  async function changeAccount() {
+    if (busy) return
+    setBusy(true); setError("")
+    try {
+      const fresh = await context()
+      const result = await api("/api/cli/browser/change-account", fresh.csrf, {})
+      if (result.continue_to !== "/login.html?returnTo=%2Fcli%2Fconnect") throw new Error("Invalid account continuation.")
+      window.location.assign(result.continue_to)
+    } catch (e) { setError((e as Error).message); setBusy(false) }
+  }
   async function cancel() {
     if (busy) return
     setBusy(true); setError("")
@@ -173,7 +183,8 @@ export default function CliFlow({ page }: { page: "authorize" | "connect" | "com
       <p>Account: <strong className="text-[#EAF7FB]">{view.context.account.full_name}</strong> ({view.context.account.email})</p>
       {state && <p className="mt-2 break-all font-mono text-xs">CLI request: {state.request_id}</p>}
     </div>}
-    {page === "authorize" && view && <a href={view.context.account ? "/cli/connect" : "/login.html?returnTo=%2Fcli%2Fconnect"} className={cliPrimaryLink + " mt-8"}>Continue{!view.context.account && " to sign in"}</a>}
+    {page === "authorize" && view && <a href={view.context.account ? "/cli/connect" : "/login.html?returnTo=%2Fcli%2Fconnect"} className={cliPrimaryLink + " mt-8"}>{view.context.account ? "Continue as " + view.context.account.full_name : "Continue to sign in"}</a>}
+    {view?.context.account && state?.state !== "exchanged" && <button onClick={changeAccount} disabled={busy} className={cliSecondaryLink + " mt-4"}>Use a different account</button>}
     {page !== "authorize" && state?.state === "pending" && !expired && seconds > 0 &&
       <button onClick={approve} disabled={busy} className={cliPrimaryLink + " mt-8"}>Authorize this account for this terminal</button>}
     {state?.state === "approved" && !expired && seconds > 0 && <section aria-labelledby="code-heading" className="mt-8 max-w-xl rounded-2xl border border-[#7FC6E6]/25 bg-[#123A6B]/40 p-6 sm:p-8">

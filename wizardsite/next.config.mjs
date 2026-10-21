@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  distDir: process.env.WIZARD_NEXT_DIST_DIR || ".next",
   eslint: {
     ignoreDuringBuilds: true,
   },
@@ -15,7 +16,7 @@ const nextConfig = {
       throw new Error("Account backend must be an HTTPS origin (loopback HTTP is development-only)")
     }
     return {
-      beforeFiles: ["/api/auth/:path*", "/api/cli/:path*", "/api/account/:path*",
+      beforeFiles: ["/api/auth/:path*", "/api/cli/:path*", "/api/account/:path*", "/api/investigations/:path*",
         "/login", "/register", "/forgot-password", "/logout", "/oauth/oidc/:path*"]
         .map(source => ({ source, destination: backend.replace(/\/$/, "") + source })),
     }
@@ -23,7 +24,7 @@ const nextConfig = {
   async headers() {
     return [
       "/cli/:path*", "/login.html", "/register.html", "/forgot-password.html",
-      "/api/auth/:path*", "/api/cli/:path*", "/api/account/:path*",
+      "/api/auth/:path*", "/api/cli/:path*", "/api/account/:path*", "/api/investigations/:path*",
     ].map(source => ({ source, headers: [
       { key: "Cache-Control", value: "no-store" },
       { key: "Referrer-Policy", value: "no-referrer" },

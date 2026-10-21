@@ -491,6 +491,14 @@ export default function Hero() {
               </motion.div>
             )}
           </AnimatePresence>
+          {!isExpanded && (
+            <a
+              href="/dashboard"
+              className="inline-flex items-center justify-center gap-2 rounded-full border border-[#7FC6E6]/25 bg-[#123A6B] px-6 py-3 text-base font-normal tracking-[-0.01em] text-[#EAF7FB] shadow-[0_8px_30px_rgba(18,58,107,0.35)] transition-colors hover:bg-[#1b4a8c] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#7FC6E6] sm:px-8"
+            >
+              Review Architectural Diagram <span aria-hidden="true">&rarr;</span>
+            </a>
+          )}
         </div>
       </section>
 

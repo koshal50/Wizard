@@ -32,3 +32,15 @@ prompt.md
 /playwright-report/
 
 !.env.example
+
+# Local logo and isolated Next.js verification output
+logo.jpg
+/.next-*/
+
+# Local credentials and diagnostics
+.secrets/
+.aws/
+*.key
+*.p12
+*.pfx
+*.log

@@ -66,9 +66,89 @@
     }
   };
 
+  var contextRequest;
+  async function sessionContext() {
+    if (contextRequest) return contextRequest;
+    contextRequest = (async function () {
+      var response = await fetch('/api/auth/context', {
+        credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000)
+      });
+      var context = await response.json();
+      if (!response.ok || !/^[a-f0-9]{64}$/.test(context.csrf) ||
+          typeof context.cli_pending !== 'boolean' ||
+          (context.account !== null && (!context.account || typeof context.account.id !== 'string' ||
+            typeof context.account.email !== 'string'))) throw new Error('Cannot verify your session. Reload and retry.');
+      return context;
+    })();
+    try { return await contextRequest; } finally { contextRequest = null; }
+  }
+
+  function alertMessage(message, success) {
+    var box = document.getElementById('form-alert');
+    if (!box) return;
+    box.textContent = message;
+    box.classList.toggle('error', !success);
+    box.classList.toggle('success', !!success);
+    box.classList.add('show');
+    if (!success) box.focus();
+  }
+
+  function showExistingSession(form, context) {
+    var old = form.parentNode.querySelector('[data-existing-session]');
+    if (old) old.remove();
+    var notice = document.createElement('aside');
+    notice.setAttribute('data-existing-session', '');
+    notice.setAttribute('aria-label', 'Current signed-in account');
+    notice.className = 'alert success show';
+    var message = document.createElement('p');
+    message.textContent = 'This browser is already signed in as ' + context.account.email + '.';
+    var actions = document.createElement('div');
+    actions.className = 'row';
+    var proceed = document.createElement('button');
+    proceed.type = 'button'; proceed.className = 'btn secondary';
+    proceed.textContent = 'Continue as ' + (context.account.full_name || context.account.email);
+    var signOut = document.createElement('button');
+    signOut.type = 'button'; signOut.className = 'btn secondary'; signOut.textContent = 'Sign out';
+    proceed.addEventListener('click', async function () {
+      proceed.disabled = true;
+      try {
+        var current = await sessionContext();
+        if (!current.account) { notice.remove(); throw new Error('Your session expired. Sign in again.'); }
+        if (current.account.id !== context.account.id) {
+          showExistingSession(form, current);
+          throw new Error('The signed-in account changed. Review the account before continuing.');
+        }
+        window.location.assign(current.cli_pending ? '/cli/connect' : '/');
+      } catch (error) { alertMessage(error.message || 'Session unavailable. Retry.'); proceed.disabled = false; }
+    });
+    signOut.addEventListener('click', async function () {
+      signOut.disabled = true;
+      try {
+        var current = await sessionContext();
+        if (current.account) {
+          var response = await fetch('/logout', {
+            method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': current.csrf },
+            body: '{}', signal: AbortSignal.timeout(8000)
+          });
+          var result = await response.json();
+          if (!response.ok || result.signed_out !== true) throw new Error('Sign out was not confirmed. Retry.');
+        }
+        if ((await sessionContext()).account) throw new Error('Sign out was not confirmed. Reload and retry.');
+        notice.remove();
+        form.querySelectorAll('input[type=password]').forEach(function (input) { input.value = ''; });
+        alertMessage('Signed out. You can now sign in or create an account.', true);
+      } catch (error) { alertMessage(error.message || 'Sign out was not confirmed. Retry.'); signOut.disabled = false; }
+    });
+    actions.append(proceed, signOut); notice.append(message, actions); form.before(notice);
+  }
+
   document.querySelectorAll('form[data-form]').forEach(function (form) {
     var btn = form.querySelector('button[type=submit]');
     var label = btn.textContent;
+    if (form.dataset.form !== 'forgot') {
+      sessionContext().then(function (context) { if (context.account) showExistingSession(form, context); }).catch(function () {});
+    }
 
     form.addEventListener('submit', async function (ev) {
       ev.preventDefault();
@@ -90,11 +170,11 @@
       btn.innerHTML = '<span class="spinner" aria-hidden="true"></span><span></span>';
       btn.lastChild.textContent = btn.dataset.loading || 'Working…';
       try {
-        var ctxResponse = await fetch('/api/auth/context', {
-          credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000)
-        });
-        var ctx = await ctxResponse.json();
-        if (!ctxResponse.ok || !/^[a-f0-9]{64}$/.test(ctx.csrf)) throw new Error('Cannot verify your session. Retry.');
+        var ctx = await sessionContext();
+        if (ctx.account && form.dataset.form !== 'forgot') {
+          showExistingSession(form, ctx);
+          throw new Error('This browser is already signed in. Continue with the account shown above, or sign out to use another account.');
+        }
         var fields = new URLSearchParams();
         new FormData(form).forEach(function (value, key) { fields.append(key, value); });
         fields.set('csrf', ctx.csrf);
@@ -117,14 +197,21 @@
           return;
         }
         var result = await response.json();
+        if (result.error === 'already_authenticated') {
+          var current = await sessionContext();
+          if (current.account) showExistingSession(form, current);
+        }
         var message = response.status === 429 ? 'Too many attempts. Wait at least ' + (response.headers.get('Retry-After') || '60') + ' seconds.'
           : result.error === 'password_reset_delivery_unconfigured' ? 'Password reset email delivery is not configured.'
           : response.status === 401 ? 'Email or password was not accepted.'
-          : response.status === 409 ? 'Registration or session unavailable. Try signing in, or reload this page.'
+          : result.error === 'already_authenticated' ? 'This browser is already signed in. Continue with the account shown above, or sign out.'
+          : result.error === 'session_changed' ? 'Your session changed in another tab. Reload and retry.'
+          : result.error === 'registration_unavailable' ? 'An account could not be created with these details. Try signing in or use a different email address.'
+          : response.status === 503 ? 'The sign-in service is unavailable. Retry when the local account service is running.'
           : 'Authentication was not confirmed. Check your details and retry.';
         throw new Error(message);
       } catch (error) {
-        if (box) { box.textContent = error.message || 'Connection failed. Retry.'; box.classList.add('show'); box.focus(); }
+        alertMessage(error.message || 'Connection failed. Retry.');
         form.querySelectorAll('input[type=password]').forEach(function (input) { input.value = ''; });
         btn.disabled = false;
         btn.removeAttribute('aria-busy');

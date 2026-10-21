@@ -49,6 +49,9 @@ class UsageStore:
         self.spool = self.root / "pending"
         self.spool.mkdir(exist_ok=True)
         self.lock = threading.RLock()
+        self.changed = threading.Condition(self.lock)
+        self.live = self.root / "runs"
+        self.live.mkdir(exist_ok=True)
         self.start_lock = threading.Lock()
         self.runs: dict[str, dict] = {}
         self.database = None
@@ -109,6 +112,8 @@ class UsageStore:
     def close(self):
         self.stop.set()
         self.wake.set()
+        with self.changed:
+            self.changed.notify_all()
         if self.thread:
             self.thread.join(timeout=5)
         if self.database:
@@ -153,6 +158,10 @@ class UsageStore:
             if account_id and not (session_id is None and session.startswith("account-session:")):
                 from hashlib import sha256
                 session = "account-session:" + sha256((profile + ":" + session).encode()).hexdigest()
+            existing = self.snapshot(inv.id, profile)
+            if existing is not None:
+                inv.usage_session_id = existing["session_id"]
+                return
             self.runs[inv.id] = {
                 "run_id": inv.id,
                 "session_id": session,
@@ -164,6 +173,8 @@ class UsageStore:
                 "revision": 0,
                 "pending_requests": 0,
                 "incomplete": False,
+                "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                "llm_calls": 0, "seen_events": [],
             }
             inv.usage_session_id = self.runs[inv.id]["session_id"]
             self._journal(inv.id)
@@ -190,6 +201,8 @@ class UsageStore:
                 self.spool / f"{run['revision']}_{uuid4().hex}.json",
                 {"run": dict(run), "events": list(events)},
             )
+            self._write(self._snapshot_path(run_id), run)
+            self.changed.notify_all()
             self.wake.set()
         except Exception:
             self.lost = True
@@ -230,6 +243,19 @@ class UsageStore:
                         events.append(UsageEvent.model_validate(event).model_dump(mode="json"))
                     except Exception:
                         self.runs[run_id]["incomplete"] = True
+                run = self.runs[run_id]
+                for event in events:
+                    identifiers = ["event:" + event["event_id"]]
+                    if event.get("provider_request_id"):
+                        identifiers.append("request:" + event["provider"] + ":" + event["provider_request_id"])
+                    if any(key in run["seen_events"] for key in identifiers):
+                        continue
+                    run["seen_events"].extend(identifiers)
+                    run["llm_calls"] += 1
+                    for key in ("input_tokens", "output_tokens", "total_tokens"):
+                        if event["usage_source"] == "provider-reported" and event[key] is not None:
+                            run[key] += event[key]
+                    run["incomplete"] |= event["accuracy"] != "exact" or event["usage_source"] != "provider-reported"
                 self._journal(run_id, events)
             except Exception:
                 self.runs[run_id]["incomplete"] = True
@@ -260,13 +286,40 @@ class UsageStore:
                 self.runs[run_id]["incomplete"] = True
                 self._journal(run_id)
 
+    def _snapshot_path(self, run_id):
+        from hashlib import sha256
+        return self.live / (sha256(run_id.encode()).hexdigest() + ".json")
+
+    def snapshot(self, run_id, profile):
+        with self.lock:
+            run = self.runs.get(run_id)
+            if run is None:
+                path = self._snapshot_path(run_id)
+                if path.exists():
+                    run = json.loads(path.read_text("utf-8"))
+                    self.runs[run_id] = run
+            if run is None or run["profile_id"] != profile:
+                return None
+            return {k: v for k, v in run.items() if k != "seen_events"}
+
+    def wait_for_revision(self, run_id, revision, timeout=15):
+        with self.changed:
+            self.changed.wait_for(
+                lambda: self.stop.is_set() or self.runs.get(run_id, {}).get("revision", revision) != revision,
+                timeout=timeout,
+            )
+
     def health(self, run_id=None):
-        pattern = f"*_{run_id}_*.json" if run_id else "*.json"
-        return {
-            "persistence_pending": any(self.spool.glob(pattern)),
-            "persistence_error": self.error,
-            "accounting_incomplete": self.lost,
-        }
+        pending = False
+        for path in self.spool.glob("*.json"):
+            try:
+                if run_id is None or json.loads(path.read_text("utf-8"))["run"]["run_id"] == run_id:
+                    pending = True
+                    break
+            except (OSError, ValueError, KeyError):
+                continue
+        return {"persistence_pending": pending, "persistence_error": self.error,
+                "accounting_incomplete": self.lost}
 
 
 @lru_cache(maxsize=1)

@@ -38,6 +38,7 @@ ClaimAdmitted        = "claim.admitted"       # carries type, key AND value — 
 GoalSatisfied        = "goal.satisfied"
 BudgetLow            = "budget.low"
 BudgetExhausted      = "budget.exhausted"
+ReportUpdated        = "report.updated"
 ReportGenerated      = "report.generated"
 InvestigationIncomplete = "investigation.incomplete"  # ended with goals still open
 AgentConsulted       = "agent.consulted"

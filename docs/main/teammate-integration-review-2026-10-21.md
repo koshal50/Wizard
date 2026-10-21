@@ -1,5 +1,11 @@
 # Teammate integration review — 2026-10-21
 
+## Subsequent runtime rollback
+
+The integration results below describe the earlier candidate, not proof of a live successful investigation. After `inv_47008cec973e` stopped on identical browser snapshots, the core runner, assertion evaluator, validator, tactical contracts and role prompts were restored from the working `8c3161f` baseline. The standalone website/account code was retained. Native side-chat transport, provider-gate deadlines and strict read-only explanation planning were preserved as small compatibility changes. Experimental repository refinement/reuse and architecture synthesis are no longer connected to the normal runner; their incoming feature-specific tests are not baseline acceptance coverage and require reconciliation before those features are reintroduced.
+
+The outgoing source files were preserved locally under `.wizard/recovery/pre-pull-runtime-restore`. A bounded unchanged-browser-read feedback path was added: identical consecutive page reads retain their observations but suppress further redundant snapshot/extract choices until the observed page changes. Explorer receives the reason and actual controls; no action or success is fabricated. The new regression exercises this recovery through real local browser actions with a deterministic test policy, without provider calls. A separate live model-driven run has not been performed.
+
 ## Recovery points and worktrees
 
 - Working CLI/kernel baseline: `8c3161f`, retained as `backup/working-wizard-2026-10-21`.

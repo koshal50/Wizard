@@ -284,11 +284,22 @@ def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
         branch below for why the second call is not optional.
         """
         nonlocal seq
+        changed_report = False
         url = f"{api}/{inv_id}/events?since_seq={seq}"
         with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=10) as response:
             for ev in json.loads(response.read().decode()):
                 seq = max(seq, ev["seq"])
-                yield ev
+                if ev.get("event_type") == "report.updated":
+                    changed_report = True
+                else:
+                    yield ev
+        if changed_report:
+            try:
+                with urllib.request.urlopen(f"{api}/{inv_id}/report", timeout=5) as response:
+                    report = json.loads(response.read().decode())
+                yield {"event_type": "report.updated", "investigation_id": inv_id, "payload": report}
+            except (urllib.error.URLError, ValueError):
+                pass  # A report is optional while discovery is still running.
 
     while True:
         if stopped():
@@ -378,6 +389,16 @@ def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
             pass
 
     report_markdown = report_data.get("report_markdown", "")
+    if report_data.get("runbook"):
+        try:
+            output = Path(request.repository.path).resolve() / "output"
+            output.mkdir(parents=True, exist_ok=True)
+            artifact = output / (inv_id + ".runbook.json")
+            artifact.write_text(json.dumps(report_data["runbook"], indent=2, ensure_ascii=False), encoding="utf-8")
+            with urllib.request.urlopen(f"{api}/{inv_id}/report/html", timeout=5) as response:
+                artifact.with_suffix(".html").write_bytes(response.read())
+        except (OSError, urllib.error.URLError):
+            pass  # Keep the Markdown report even if a companion export fails.
     final_usage = monitor.final() if monitor else {"incomplete": True}
     yield {"event_type": "usage.updated", "investigation_id": inv_id, "payload": final_usage}
     yield {
@@ -386,6 +407,7 @@ def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
         "request": payload,
         "investigation_id": inv_id,
         "report_markdown": report_markdown or "No report available.",
+        "runbook": report_data.get("runbook"),
         "report_path": _write_report(report_markdown, request),
         "stats": status_data,
         "usage": final_usage,

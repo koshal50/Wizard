@@ -26,11 +26,14 @@ def counter(usage, elapsed=None, *, compact=False):
             + (" | reconnecting" if usage and usage.get("transport_error") else "")
         )
     number = compact_tokens if compact else lambda value: f"{value:,}"
-    line = (
-        f"Tokens: {number(usage['total_tokens'])} "
-        f"(in {number(usage.get('input_tokens', 0))} / out {number(usage.get('output_tokens', 0))})"
-        f" | LLM calls: {usage.get('llm_calls', 0)}"
-    )
+    if compact:
+        line = (f"Tokens: {number(usage['total_tokens'])} "
+                f"(\u2191 {number(usage.get('input_tokens', 0))} / \u2193 {number(usage.get('output_tokens', 0))})"
+                f" | LLM calls: {usage.get('llm_calls', 0)}")
+    else:
+        line = (f"Tokens: {number(usage['total_tokens'])} "
+                f"(in {number(usage.get('input_tokens', 0))} / out {number(usage.get('output_tokens', 0))})"
+                f" | LLM calls: {usage.get('llm_calls', 0)}")
     line += suffix
     if usage.get("transport_error"):
         line += " | reconnecting"
@@ -38,13 +41,11 @@ def counter(usage, elapsed=None, *, compact=False):
         usage.get(k)
         for k in (
             "incomplete",
-            "persistence_pending",
-            "persistence_error",
             "accounting_incomplete",
         )
     ):
         line += " | incomplete"
-    if usage.get("pending_requests") and not compact:
+    if usage.get("pending_requests"):
         line += " | in progress"
     return line
 
@@ -70,8 +71,6 @@ def format_status(report):
             run.get(key)
             for key in (
                 "incomplete",
-                "persistence_pending",
-                "persistence_error",
                 "accounting_incomplete",
             )
         ):
@@ -84,6 +83,8 @@ def format_status(report):
             if report.get("current_run_pending")
             else "  No recorded runs"
         )
+    if report.get("history_scope") == "local_recorded_runs":
+        lines.append("  History: runs recorded on this machine")
     totals = report["totals"]
     lines += [
         "",
@@ -100,11 +101,13 @@ def format_status(report):
         lines.append(f"  {command + ':':<16}{totals.get('total_tokens', 0):,}")
     if report["totals"].get("incomplete") or any(
         report.get(k)
-        for k in ("persistence_pending", "persistence_error", "accounting_incomplete")
+        for k in ("accounting_incomplete",)
     ):
         lines.append(
-            "Usage is incomplete; some records are awaiting persistence or unavailable"
+            "Usage is incomplete; some requests lack confirmed provider counts"
         )
+    if report.get("persistence_pending") or report.get("persistence_error"):
+        lines.append("History sync is pending or unavailable; confirmed local totals remain available")
     if report.get("scope") == "account":
         lines.append(f"Scope: Wizard account {report.get('account_id') or report['profile_id']} (all sessions)")
     else:

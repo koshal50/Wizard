@@ -214,11 +214,12 @@ def test_remote_usage_access_is_denied_and_profile_is_server_owned(monkeypatch, 
     assert response.json()["profile_id"] == store.profile_id
 
 
-def test_unconfigured_database_returns_clear_503(monkeypatch, store):
+def test_unconfigured_database_returns_local_totals(monkeypatch, store):
     store.database = None
     monkeypatch.setattr("wizard_kernel.api.routes_usage.get_usage", lambda: store)
     response = test_client(create_app()).get("/v1/usage")
-    assert response.status_code == 503
+    assert response.status_code == 200
+    assert response.json()["totals"]["total_tokens"] == 0
 
 
 def test_usage_endpoint_retries_failed_storage_startup(monkeypatch, store):
@@ -291,7 +292,7 @@ def test_active_sse_publishes_changed_snapshots_then_reconciles(monkeypatch, sto
     async def no_delay(seconds):
         pass
 
-    monkeypatch.setattr(routes.asyncio, "sleep", no_delay)
+    monkeypatch.setattr(store, "wait_for_revision", lambda *args: None)
 
     class Request:
         async def is_disconnected(self):

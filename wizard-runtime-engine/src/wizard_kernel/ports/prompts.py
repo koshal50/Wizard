@@ -1,20 +1,6 @@
 """Small role instructions; executable schemas remain in contracts."""
 
 PLAN = """Create a small verification specification for the original user request.
-command_family=explain is always read-only, including explain runtime and security.
-Explain what repository source/configuration establishes; never plan process, HTTP
-or browser execution for explain. Cite source content rather than file existence.
-When those contents are not yet observed, leave assertions empty with a precise
-unresolved_reason and gather them through repository discovery before refinement.
-For explain, initial content targets are only the supplied discovery document paths
-or observation IDs. Do not attribute text from one document to a different file.
-Content contains/equals predicates use literal source substrings, not paraphrases.
-Preserve capitalization and whitespace. For natural-language terms where letter case
-does not matter, explicitly set case_sensitive=false; do not set true for a differently cased quote.
-Evidence is raw source, not rendered Markdown. Backticks, bold markers and other
-punctuation interrupt substrings: use separate short literal tokens instead of
-joining words across formatting. An identifier or a short source fragment is enough;
-do not paraphrase a document sentence into an expected string.
 For command-only verify runtime, propose exactly one execution smoke check:
 the documented application startup/readiness or documented terminating run/test.
 Repository discovery has already supplied files as evidence; do not add read-file
@@ -47,17 +33,6 @@ these distinct submissions. Service/repository/API checks use workflow=general.
 Registration's authenticated session alone is not a login test.
 For explain/investigate use repository discovery unless the original request explicitly
 asks to execute application behavior. Do not start processes merely to explain code.
-For investigate architecture, plan one repository discovery scope for the requested architecture.
-Runtime performs bounded layer and import coverage and then validates six architectural findings;
-do not repeat those six findings as separate tactical discovery loops.
-For architecture investigations, cover repository structure and major directories,
-entry points and startup flow, client/server boundaries when applicable, package/workspace
-organization, and important configuration and relationships. Ground predicates in actual
-repository contracts; missing required coverage stays unresolved. Do not reduce architecture
-to the presence of a few generic words in one document. Reuse discovery evidence.
-Repository assertion target is a repository file path or a supplied observation ID.
-Use case_sensitive=false only for natural-language term matching where case is irrelevant;
-exact identifiers, paths and semantic requirements retain exact matching.
 Each check needs a concrete measurable expected outcome supported by the user's
 request or actual repository contracts. Categories, source-file existence, clicks,
 or a live PID are not proof of application behavior. For API checks specify the
@@ -94,73 +69,12 @@ unresolved_reason must explain what discovery is needed. Check IDs must be uniqu
 depends_on references existing IDs and cannot contain cycles or self-dependencies.
 Return only the schema-constrained specification."""
 
-REPOSITORY_DECIDE = """Choose one schema-constrained action for current_check and the original request.
-Runtime executes tools and evaluates predicates; do not invent facts or observations.
-Use repository_evidence, repository_requests, discovery documents, knowledge and recent results.
-Repository reads are shared across checks. Targets are file paths or supplied observation IDs.
-Do not reread known files with identical parameters; cached reads provide no new information.
-A failed missing-file read is not recovered by changing max_bytes. Use observed tree paths.
-Choose another relevant file or strategy if required evidence is missing; blocked must explain
-the actual missing evidence. Use evaluate once explicit predicates are satisfied.
-For unspecified goals use refine with successful observation_ids and measurable content
-predicates from actual files. For explain requests include content proof; file existence alone cannot explain the source.
-Copy observation_ids exactly from refinement_observation_ids; never reconstruct an ID.
-Use repository_results for earlier tree/search results and repository_requests for their
-parameters. A successful listing remains usable after it leaves recent_observations.
-Refine only when cited contents support every proposed predicate; otherwise gather the
-missing source or report blocked. Read refinement_feedback and correct all rejected fields.
-Grounded predicates are immutable: gather their evidence rather than replacing them.
-For architecture requests cover directories, actual entry points, startup flow, component boundaries, packages/workspaces
-and configuration relationships. Quote exact source substrings, preserving whitespace and escapes.
-Use case_sensitive=false only for natural language terms where case is irrelevant.
-Return only the canonical decision schema."""
-
-ARCHITECTURE_SYNTHESIZE = """Return the ArchitectureReport schema using the supplied repository evidence.
-The findings list MUST contain exactly six entries, one for each area, in this order:
-structure, entry_points, startup, boundaries, packages, configuration.
-Include every area even if unresolved; in that case supply empty assertions and a blocker.
-Keep each finding focused on its cited implementation, usually two or three short content predicates.
-A short excerpt is partial evidence, not proof that the rest of the file is absent.
-If required evidence is missing, request up to four concrete files in evidence_requests,
-using only paths supplied in repository_paths. Request actual entry points or relevant
-implementation files before claiming their evidence is unavailable. Runtime can perform
-one bounded follow-up through its existing file reader. Otherwise return an empty list.
-Also populate components and connections for the user's application architecture.
-Use at most 12 meaningful semantic components and 16 connections: actual client/server subsystems,
-entry points, services, models, databases, or external dependencies supported by the files.
-Represent the supplied pages, routing, authentication, API clients, routes, services, data adapters,
-shared contracts and configuration where observed. Do not collapse their implementation into
-only package manifests. Literal module dependencies and file components are retained locally
-in addition to this semantic synthesis; prioritize supported cross-layer calls and integrations.
-These are application components, never investigation checks, tools, or agents.
-Each component needs a unique simple id, label, type, repository-relative path,
-description, and supporting observation_ids taken from repository_evidence.
-Each connection needs a unique id, source and target component ids, type, description,
-and supporting observation_ids. Never fabricate a relationship for a nicer picture.
-Do not include secrets, absolute local paths, or raw source files in descriptions.
-Explain each required architecture area with targeted content predicates quoting exact source
-text and stable observation IDs or paths. Each statement must follow from its cited evidence.
-Proof excerpts must be short single-line literal fragments without backslash escapes or
-JSON/array/object delimiters. For structured declarations cite separate keys and values.
-Do not reformat quoted JSON, infer startup from incidental healthchecks, or replace component
-boundaries with user-data isolation. Use empty assertions and an explicit blocker for missing
-evidence. Runtime evaluates all predicates and owns completion. Do not fabricate success."""
-
 DECIDE = """Choose exactly one useful action for CURRENT_CHECK. Runtime owns execution and
 verdicts. Use the original request, accepted predicates, actual resource/page/form
 state, bounded knowledge, recent results/rejections, and available tools.
-When architecture_synthesis=true, return the ArchitectureReport schema instead of
-a tactical decision: explain each required area using supplied repository contents,
-with targeted content assertions as proof, or an explicit missing-evidence blocker.
 Discovery is preparation, not proof. Unknown routes/fields/outcomes require discovery,
 not blocked, when relevant tools are available. Read repository contracts if needed;
 do not reread known files. Commands are discovered candidates, not the only commands.
-Repository observations are shared evidence across checks. An assertion target may identify
-an existing observation ID or its file path. Reuse repository_evidence and discovery documents;
-a cached duplicate is not new evidence. Stop with evaluate once predicates are satisfied;
-otherwise inspect another relevant source or explain the actual missing evidence.
-repository_requests includes failed reads and their paths: a missing file cannot be
-recovered by changing max_bytes. Use observed tree paths or existing evidence instead.
 For a startup check, start the documented process and establish actual readiness.
 For a UI workflow start all documented components needed to serve that UI; a
 backend listener alone is insufficient. Prefer an appropriate combined startup

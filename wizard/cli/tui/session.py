@@ -108,6 +108,7 @@ class TuiSession:
     _cancel_thread: threading.Thread | None = None
     status: str = "pending"       # pending|running|completed|failed|engine_unavailable
     report_markdown: str = ""
+    runbook: dict | None = None
     report_path: str = ""
     activity: list[LogLine] = field(default_factory=list)
     now: str = ""                 # the latest real step — what it is doing
@@ -194,11 +195,13 @@ class TuiSession:
         """
         with self._lock:
             return {
+                "investigation_id": self.investigation_id,
                 "running": self.running,
                 "finished": self.finished,
                 "cancelled": self.cancelled,
                 "status": self.status,
                 "report_markdown": self.report_markdown,
+                "runbook": self.runbook,
                 "report_path": self.report_path,
                 "now": self.now,
                 "nexts": list(self.nexts),
@@ -490,6 +493,17 @@ class TuiSession:
             self._settle("engine_unavailable")
             return
 
+        if ev_type == "report.updated":
+            if "report_markdown" not in payload:
+                return
+            if ev.get("investigation_id") != self.investigation_id:
+                return
+            with self._lock:
+                self.report_markdown = payload.get("report_markdown", "")
+                self.runbook = payload.get("runbook")
+            self.on_change()
+            return
+
         if ev_type == "usage.updated":
             with self._lock:
                 if self.cancelled or self.finished:
@@ -512,6 +526,7 @@ class TuiSession:
                 self.status = ev.get("status", "completed")
                 self.report_markdown = ev.get("report_markdown", "") or ""
                 self.report_path = ev.get("report_path") or ""
+                self.runbook = ev.get("runbook") or self.runbook
                 if ev.get("usage"):
                     self.usage = {**(self.usage or {}), **ev["usage"]}
             verdict = {

@@ -24,7 +24,9 @@ Set-ProtectedEnvironment 'WIZARD_ACCOUNT_DATABASE_URL' $configuration.Database
 Set-ProtectedEnvironment 'WIZARD_ACCOUNT_SECRET' $configuration.Secret
 $env:WIZARD_ACCOUNT_PUBLIC_ORIGIN = $PublicOrigin
 $env:WIZARD_ACCOUNT_LOCAL_DEV = '1'
-$python = Join-Path $root 'venv\Scripts\python.exe'
+$python = @('wizard-runtime-engine\.venv\Scripts\python.exe', 'venv\Scripts\python.exe', '.venv\Scripts\python.exe') |
+    ForEach-Object { Join-Path $root $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $python) { throw 'Wizard Python environment is missing. Install Wizard first.' }
 Push-Location $root
 try {
     & $python -m backend.db check

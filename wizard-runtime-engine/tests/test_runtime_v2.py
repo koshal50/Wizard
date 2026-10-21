@@ -187,7 +187,7 @@ def test_report_shows_matching_record_text_instead_of_only_page_header():
     inv = SimpleNamespace(id="inv_test", question="Create record", intent="verify", targets=["runtime"], state=LifecycleState.completed)
     state = {"checks": [check.model_dump()], "results": {"check": {"status": "passed", "assertions": result}}, "model_calls": 0}
     report = verification._render(inv, state)
-    observed = next(line for line in report.splitlines() if line.startswith("| Record appears")).split("|")[3]
+    observed = next(line for line in report.splitlines() if line.startswith("- Observed:"))
     assert title in observed
 
 
@@ -571,6 +571,31 @@ def test_real_browser_form_and_snapshot_through_runtime(tmp_path, monkeypatch):
     assert state["cleanup"] == "Completed"
     files = fs_store.inv_dir(inv.id).glob("observations/*.json")
     assert all("authorized-test-value" not in p.read_text(encoding="utf-8") for p in files)
+
+
+def test_unchanged_browser_reads_return_actionable_feedback_instead_of_stopping(tmp_path, monkeypatch):
+    monkeypatch.setenv('WIZARD_TEST_DATA_JSON', json.dumps({'value': 'authorized-test-value'}))
+    class RepeatedReadPolicy(RuntimePolicy):
+        repeats = 0
+        received_feedback = False
+        def request(self, role, context, model, **kwargs):
+            if role == 'explorer' and context.get('browser_state_feedback'):
+                self.received_feedback = True
+                assert 'browser_snapshot' not in context['available_tools']
+                assert 'browser_extract' not in context['available_tools']
+            elif role == 'explorer' and context['resource_state']['browser'] and not context['resource_state']['browser'].get('snapshot_required') and self.repeats == 0:
+                self.repeats += 1
+                return _response(model, {'kind': 'tool', 'action': {
+                    'tool': 'browser_snapshot', 'parameters': {}}, 'reason': 'Repeated page read'})
+            return super().request(role, context, model, **kwargs)
+    policy = RepeatedReadPolicy(browser=True)
+    inv, state = run_app(tmp_path, policy)
+    assert policy.received_feedback
+    assert inv.state.value == 'completed', state
+    assert state['browser_read_recoveries']
+    assert any(e['tool'] == 'browser_fill_form' and e['success'] for e in state['executions'])
+    assert any(e['tool'] == 'browser_click' and e['success'] for e in state['executions'])
+    assert state['cleanup'] == 'Completed'
 
 
 def test_model_failure_persists_a_report_and_executes_nothing(tmp_path):

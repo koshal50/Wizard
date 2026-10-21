@@ -92,7 +92,7 @@ def test_exact_format_and_integer_state(monkeypatch):
         monkeypatch.setattr("wizard.cli.tui.app.time.monotonic", lambda: 18)
         assert (
             app._render_usage()[0][1]
-            == "Tokens: 3.46k (in 2.91k / out 550) | LLM calls: 4 | Elapsed: 00:08"
+            == "Tokens: 3.46k (\u2191 2.91k / \u2193 550) | LLM calls: 4 | Elapsed: 00:08 | in progress"
         )
         app.scroll = 20
         assert "3.46k" in app._render_usage()[0][1]
@@ -283,3 +283,50 @@ def test_status_error_preserves_backend_503_reason(monkeypatch):
         assert ready.wait(2)
         assert "HTTP 503" in app._usage_report
         assert "not configured" in app._usage_report
+
+
+def test_live_report_updates_without_losing_usage_or_replaying_actions():
+    session = TuiSession("verify", "runtime")
+    session._accept_run("current")
+    session._consume({"event_type": "report.updated", "investigation_id": "current", "payload": {"revision": "notification"}})
+    assert session.report_markdown == ""
+    session._consume({"event_type": "report.updated", "investigation_id": "current", "payload": {
+        "report_markdown": "# Actual runbook", "runbook": {"steps": []}}})
+    assert session.snapshot()["report_markdown"] == "# Actual runbook"
+    assert session.snapshot()["investigation_id"] == "current"
+    session._consume({"event_type": "report.updated", "investigation_id": "foreign", "payload": {
+        "report_markdown": "wrong report"}})
+    assert session.report_markdown == "# Actual runbook"
+
+
+def test_live_report_view_renders_and_caches_without_model_calls():
+    with ui() as app:
+        app.state = WORKING
+        app.session = TuiSession("verify", "runtime")
+        app.session.report_markdown = "# Project runbook\n\nActual evidence"
+        app._report_action("view")
+        frame = app._render_body()
+        assert "Project runbook" in frame.value
+        assert app._render_body() is frame
+        app.session.report_markdown += "\n\nNew evidence"
+        assert "New evidence" in app._render_body().value
+
+
+def test_report_rerun_uses_normal_submission_and_open_is_local(monkeypatch, tmp_path):
+    from wizard.cli.tui.app import RESULT
+    with ui() as app:
+        app.state = RESULT
+        app.repo_path = str(tmp_path)
+        app.session = TuiSession("verify", "runtime")
+        app.session._accept_run("current")
+        app.raw_intent = "Verify discovered application"
+        calls = []
+        monkeypatch.setattr(app, "_begin_work", calls.append)
+        app._report_action("rerun")
+        assert calls == ["Verify discovered application"]
+        target = tmp_path / "output" / "current.runbook.html"
+        target.parent.mkdir()
+        target.write_text("<html>local report</html>")
+        monkeypatch.setattr("webbrowser.open", calls.append)
+        app._report_action("open")
+        assert calls[-1] == target.resolve().as_uri()

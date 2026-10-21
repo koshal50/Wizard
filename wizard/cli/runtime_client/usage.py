@@ -223,13 +223,13 @@ class UsageStream:
                 )
                 response.raise_for_status()
                 latest = response.json()
-                if latest.get("persistence_pending") or latest.get("pending_requests"):
+                if latest.get("pending_requests"):
                     latest["incomplete"] = True
                 return latest
         except (httpx.HTTPError, ValueError):
             return {
                 "incomplete": True,
-                "persistence_error": "Final usage is awaiting PostgreSQL persistence",
+                "persistence_error": "Final usage snapshot could not be retrieved",
             }
 
     def close(self):

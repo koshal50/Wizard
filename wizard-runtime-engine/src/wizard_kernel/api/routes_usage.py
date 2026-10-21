@@ -52,11 +52,12 @@ class OverallUsage(BaseModel):
     persistence_pending: bool = False
     persistence_error: str | None = None
     accounting_incomplete: bool = False
+    history_scope: str = "persisted_history"
 
 
 def local_usage(request: Request):
-    # This MVP has no authentication. Never equate a caller-supplied session or
-    # profile with ownership. Reports are local-only and use the runtime profile.
+    # The authenticated account (or local runtime profile) determines ownership;
+    # caller-supplied profile/session fields never grant access.
     try:
         local = request.client is not None and ipaddress.ip_address(request.client.host).is_loopback
     except ValueError:
@@ -71,21 +72,19 @@ def local_usage(request: Request):
         # Optional persistence may have failed during runtime startup. Retry in
         # the existing store instead of making that failure permanent until exit.
         store.start()
-    if store.database is None:
-        raise HTTPException(503, store.error or "PostgreSQL usage persistence is unavailable")
     return store
 
 
 def read_run(store, run_id, profile=None):
     profile = profile or store.profile_id
+    local = store.snapshot(run_id, profile)
+    if local is not None:
+        return {**local, **store.health(run_id)}
     try:
-        result = store.database.run(profile, run_id)
+        result = store.database.run(profile, run_id) if store.database else None
     except Exception:
         raise HTTPException(503, "PostgreSQL usage history is temporarily unavailable") from None
     if result is None:
-        # Creation is asynchronous; pending spool entries are never exact history.
-        if run_id in store.runs and store.runs[run_id].get("profile_id", store.profile_id) == profile:
-            raise HTTPException(503, "Run usage is awaiting PostgreSQL persistence")
         raise HTTPException(404, "Usage run not found in the local profile")
     return {**result, **store.health(run_id)}
 
@@ -102,7 +101,24 @@ def overall_usage(
 ):
     try:
         profile = account_profile(account_id) if isinstance(account_id, str) else store.profile_id
-        result = store.database.overall(profile, session_id)
+        result = None
+        if store.database:
+            try:
+                result = store.database.overall(profile, session_id)
+            except Exception:
+                store.error = "Historical usage persistence is temporarily unavailable"
+        if result is None:
+            records = []
+            for path in store.live.glob("*.json"):
+                saved = json.loads(path.read_text("utf-8"))
+                if saved["profile_id"] == profile and (not session_id or saved["session_id"] == session_id):
+                    records.append(saved)
+            def totals(rows):
+                return {**{key: sum(row.get(key, 0) for row in rows) for key in ("input_tokens", "output_tokens", "total_tokens", "llm_calls")}, "incomplete": any(row.get("incomplete") for row in rows)}
+            result = {"history_scope": "local_recorded_runs", "scope": "account" if profile.startswith("account:") else "local", "profile_id": profile,
+                      "session_id": session_id, "totals": totals(records),
+                      "by_command": {command: totals([r for r in records if r["command"] == command]) for command in {r["command"] for r in records}},
+                      "current_run": max(records, key=lambda r: r["started_at"], default=None)}
         if run_id:
             result["current_run"] = read_run(store, run_id, profile)
         if result.get("current_run"):
@@ -142,14 +158,13 @@ async def usage_stream(request, store, run_id, initial, profile=None):
         if (
             snapshot.get("finished_at")
             and not snapshot.get("pending_requests")
-            and not snapshot.get("persistence_pending")
         ):
             yield "event: complete\ndata: {}\n\n"
             return
         if time.monotonic() - heartbeat >= 15:
             yield ": heartbeat\n\n"
             heartbeat = time.monotonic()
-        await asyncio.sleep(0.5)
+        await asyncio.to_thread(store.wait_for_revision, run_id, snapshot["revision"], 15)
         try:
             snapshot = await asyncio.to_thread(read_run, store, run_id, profile)
         except HTTPException:

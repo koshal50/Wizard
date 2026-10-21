@@ -119,7 +119,7 @@ def create_investigation(
     t.start()
     from wizard_kernel.storage.usage import get_usage
     try:
-        usage_enabled = get_usage().database is not None
+        usage_enabled = get_usage() is not None
     except Exception:  # noqa: BLE001 -- optional telemetry cannot reject a running investigation
         usage_enabled = False
     return {"investigation_id": inv.id, "status": inv.state,
@@ -254,16 +254,7 @@ def get_report(
     inv_id: str,
     manager: InvestigationManager = Depends(get_manager),
 ):
-    """Return the verification report for an investigation.
-
-    The report is generated once, when the loop finishes, and is served directly
-    from disk — immutable after generation. Whether it exists is the question
-    this answers, so the guard is the file rather than the lifecycle state: the
-    loop writes the report *before* moving to a terminal state, and it writes one
-    for an `incomplete` run too. Gating on `completed` therefore hid a report
-    that was sitting on disk, telling the caller there was nothing where there
-    was something.
-    """
+    """Return the latest persisted runbook, including while execution is active."""
     inv = manager.get(inv_id)
     if not inv:
         raise HTTPException(404, detail=f"Investigation {inv_id!r} not found")
@@ -275,12 +266,24 @@ def get_report(
     return ReportResponse(
         investigation_id=inv.id,
         report_markdown=data,
+        runbook=fs_store.read(inv.id, "runbook.json"),
         # Absolute for the same reason the loop's report.generated event is: the
         # caller of this endpoint is a different process, and a relative path
         # resolves against this one's working directory. Named as written it was
         # a path the caller could not open.
         report_path=str(fs_store.inv_dir(inv.id) / "verification_report.md"),
     )
+
+
+@router.get("/{inv_id}/report/html")
+def report_html(inv_id: str, manager: InvestigationManager = Depends(get_manager)):
+    from fastapi.responses import HTMLResponse
+    if not manager.get(inv_id):
+        raise HTTPException(404, "Investigation not found")
+    content = fs_store.read_text(inv_id, "runbook.html")
+    if content is None:
+        raise HTTPException(409, "Runbook has not been generated yet")
+    return HTMLResponse(content, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
 
 
 @router.get("/{inv_id}/architecture")

@@ -121,6 +121,7 @@ class WizardTUI:
         # The text last typed into the box, kept because the history records
         # what the user asked for and the box is cleared before the run starts.
         self.raw_intent: str = ""
+        self.show_report = False
 
 
         # The directory the run investigates: the one named on the command line
@@ -244,6 +245,8 @@ class WizardTUI:
             [
                 self.top_window,
                 self.body,
+                ConditionalContainer(Window(content=FormattedTextControl(self._report_actions), height=1, always_hide_cursor=True),
+                    filter=Condition(lambda: self.session is not None and self.state in (WORKING, RESULT))),
                 ConditionalContainer(self.usage_window, filter=Condition(
                     lambda: self.session is not None and self.state in (WORKING, RESULT))),
                 self.input_frame,
@@ -405,12 +408,24 @@ class WizardTUI:
         else:
             content = menu_content("family", FAMILIES, self.selected, self.family)
 
+        if self.show_report and self.session and self.state in (WORKING, RESULT):
+            from rich.markdown import Markdown
+            report_text = self.session.snapshot().get("report_markdown") or "Report is waiting for discovery."
+            report_key = (report_text, width)
+            previous = getattr(self, "_runbook_frame", None)
+            if previous and previous[0] == report_key and not self.side_chat:
+                self._body_lines = previous[1].value.count("\n") + 1
+                return previous[1]
+            content = Markdown(report_text)
+
         if self.side_chat:
             from rich.console import Group
             from rich.text import Text
             content = Group(content, Text("\nReturn to your conversation: /btw return · Alt+B"))
         rendered = render_to_ansi(command_box(content), width)
-        if self.state == WORKING:
+        if self.show_report and self.session and self.state in (WORKING, RESULT) and not self.side_chat:
+            self._runbook_frame = (report_key, rendered)
+        if self.state == WORKING and not self.show_report:
             self._follow_tail()
         # Recorded here, not read off `render_info`, because this is the content
         # the renderer is about to ask for a cursor line *in*. `render_info` is
@@ -426,6 +441,51 @@ class WizardTUI:
                 )
             self._static_frames[key] = rendered
         return rendered
+
+    def _report_action(self, action):
+        if action == "view":
+            self.show_report = not self.show_report
+            self.show_page = False
+            self.scroll = 0
+        elif action == "open" and self.session:
+            from pathlib import Path
+            import webbrowser
+            run_id = self.session.snapshot().get("investigation_id")
+            if run_id:
+                path = Path(self.repo_path or ".") / "output" / (run_id + ".runbook.html")
+                if path.is_file():
+                    webbrowser.open(path.resolve().as_uri())
+        elif action == "copy" and self.session:
+            from wizard.cli.tui.clipboard import ClipboardError, write_text
+            steps = (self.session.snapshot().get("runbook") or {}).get("steps", [])
+            commands = [str((step.get("parameters") or {}).get("command", "")) for step in steps
+                        if step.get("tool") in {"start_process", "execute_command"}]
+            try:
+                if commands:
+                    write_text("\n".join(commands))
+                    self._input_notice = "Copied recorded commands. Review working directories and redacted values before running."
+                else:
+                    self._input_notice = "No startup command has been recorded."
+            except ClipboardError as exc:
+                self._input_notice = str(exc)
+        elif action == "rerun" and self.state == RESULT:
+            # Normal submission: fresh run, validation, sessions, and provider budget.
+            self._begin_work(self.raw_intent)
+        self.app.invalidate()
+
+    def _report_actions(self):
+        from prompt_toolkit.mouse_events import MouseEventType
+        def handler(action):
+            def click(event):
+                if event.event_type == MouseEventType.MOUSE_UP:
+                    self._report_action(action)
+            return click
+        items = [("class:usage", " [F3 Live report] ", handler("view")),
+                 ("class:usage", " [F6 Copy commands] ", handler("copy"))]
+        if self.state == RESULT:
+            items += [("class:usage", " [F4 Open report/map] ", handler("open")),
+                      ("class:usage", " [F5 Rerun (uses credits)] ", handler("rerun"))]
+        return items
 
     def _render_usage(self):
         """Pinned outside the scrollable flow, including page/status views."""
@@ -715,6 +775,7 @@ class WizardTUI:
     def _begin_work(self, raw_intent: str) -> None:
         """Start the run, handing the typed text to the command that parses it."""
         self.raw_intent = raw_intent
+        self.show_report = False
         self._diagram = None
         self._session_account_id = self._account_id
         self._status_request = None
@@ -1311,6 +1372,22 @@ class WizardTUI:
         # The wheel is not bound here: prompt_toolkit delivers a scroll to the
         # Window under the pointer and scrolls it itself, which is why the
         # offset above is read back off the Window rather than owned by us.
+
+        @kb.add("f3", filter=Condition(lambda: self.state in (WORKING, RESULT)))
+        def _(event):
+            self._report_action("view")
+
+        @kb.add("f6", filter=Condition(lambda: self.state in (WORKING, RESULT)))
+        def _(event):
+            self._report_action("copy")
+
+        @kb.add("f4", filter=Condition(lambda: self.state == RESULT))
+        def _(event):
+            self._report_action("open")
+
+        @kb.add("f5", filter=Condition(lambda: self.state == RESULT))
+        def _(event):
+            self._report_action("rerun")
 
         # r is the explicit "do it again" on the result screen.
         @kb.add("r", filter=Condition(lambda: not self.show_btw and self.state == RESULT and not self.app.layout.has_focus(self.input)))

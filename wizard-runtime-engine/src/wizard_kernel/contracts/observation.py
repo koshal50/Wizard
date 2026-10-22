@@ -6,7 +6,7 @@ from wizard_kernel.contracts.evidence import EvidenceCategory
 ObsType = Literal[
     "filesystem", "file_content", "command_result",
     "search_hits", "port_check", "path_check",
-    "page_content", "browser_action", "http_response", "agent_failure",
+    "page_content", "browser_action", "http_response", "agent_failure", "artifact",
 ]
 
 

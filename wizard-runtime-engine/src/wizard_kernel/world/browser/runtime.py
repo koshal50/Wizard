@@ -132,6 +132,12 @@ class BrowserRuntime:
         state = self._eval(r"""(() => ({url:location.href,title:document.title,
             links:Array.from(document.querySelectorAll('a[href]')).map(a=>({text:a.innerText,href:a.href})),
             text:(document.body?.innerText || '').slice(0,8000),
+            text_truncated:(document.body?.innerText || '').length>8000,
+            control_states:Array.from(document.querySelectorAll('input,textarea,select,button,a[href],[role]')).map(e=>({
+              role:e.getAttribute('role') || (e.tagName==='BUTTON' || ['submit','button'].includes(e.type) ? 'button' : e.tagName==='A' ? 'link' : e.tagName==='SELECT' ? 'combobox' : e.type==='checkbox' ? 'checkbox' : e.type==='radio' ? 'radio' : e.type==='number' ? 'spinbutton' : e.type==='search' ? 'searchbox' : 'textbox'),
+              name:e.getAttribute('aria-label') || (e.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>document.getElementById(id)?.textContent||'').join(' ').trim() || Array.from(e.labels||[]).map(l=>l.textContent.trim()).join(' ') || e.getAttribute('placeholder') || e.innerText?.trim() || '',
+              visible:Boolean(e.getClientRects().length) && getComputedStyle(e).visibility!=='hidden' && getComputedStyle(e).display!=='none',
+              enabled:!e.matches(':disabled') && e.getAttribute('aria-disabled')!=='true'})),
             inputs:Array.from(document.querySelectorAll('input,textarea')).filter(e=>!e.disabled && e.type!=='hidden').map(e=>({
               name:e.getAttribute('aria-label') || (e.getAttribute('aria-labelledby')||'').split(/\s+/).map(id=>document.getElementById(id)?.textContent||'').join(' ').trim() || Array.from(e.labels||[]).map(l=>l.textContent.trim()).join(' ') || e.getAttribute('placeholder') || '',
               filled:Boolean(e.value),required:e.required})),
@@ -139,6 +145,10 @@ class BrowserRuntime:
         controls = [{"selector": ref, "role": item.get("role", ""), "name": item.get("name", "")}
                     for ref, item in self._refs.items()]
         for control in controls:
+            matches = [item for item in state.get("control_states", [])
+                       if item["role"] == control["role"] and item["name"] == control["name"]]
+            if len(matches) == 1:
+                control.update(visible=matches[0]["visible"], enabled=matches[0]["enabled"])
             control["submits_form"] = control["role"] == "button" and control["name"] in state.get("submit_names", [])
             if control["role"] in {"textbox", "searchbox", "spinbutton"}:
                 matches = [item for item in state.get("inputs", []) if item["name"] == control["name"]]
@@ -146,8 +156,10 @@ class BrowserRuntime:
                     control.update(filled=matches[0]["filled"], required=matches[0]["required"])
         state.pop("submit_names", None)
         state.pop("inputs", None)
+        state.pop("control_states", None)
         result = {**state, "snapshot": data.get("snapshot", ""), "controls": controls,
-                  "node_count": len(controls)}
+                  "node_count": len(controls), "controls_complete": not bool(data.get("truncated")),
+                  "snapshot_truncated": bool(data.get("truncated"))}
         self._last_snapshot = result
         return result
 

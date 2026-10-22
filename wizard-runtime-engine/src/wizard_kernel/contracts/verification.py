@@ -28,18 +28,23 @@ class TextPredicate(StrictModel):
 _ASSERTION_FIELDS = {
     "content": "repository", "exists": "repository", "exit_code": "command",
     "is_running": "process", "active": "process", "status_code": "http",
-    "body_preview": "http", "url": "browser", "title": "browser", "snapshot": "browser", "text": "browser",
+    "body_preview": "http", "json_value": "http", "url": "browser", "title": "browser", "snapshot": "browser", "text": "browser",
+    "visible": "browser", "enabled": "browser", "count": "browser",
 }
 _predicates = []
 for _field, _source in _ASSERTION_FIELDS.items():
     _members = {"source": (Literal[_source], ...), "field": (Literal[_field], ...)}
+    if _field in {"visible", "enabled", "count"}:
+        _members.update(role=(str, ...), name=(str, ...))
+    if _field == "json_value":
+        _members["json_pointer"] = (str, Field(pattern=r"^(?:/(?:[^~]|~[01])*)*$"))
     if _source != "browser":
         _members["after_submission"] = (Literal[False], False)
-    if _field in {"exists", "is_running", "active"}:
+    if _field in {"exists", "is_running", "active", "visible", "enabled"}:
         _members.update(operator=(Literal["equals"], "equals"), expected=(Literal["true", "false"], ...))
-    elif _field in {"exit_code", "status_code"}:
+    elif _field in {"exit_code", "status_code", "count"}:
         _members.update(operator=(Literal["equals"], "equals"),
-                        expected=(int, Field(ge=100, le=599) if _field == "status_code" else ...))
+                        expected=(int, Field(ge=100, le=599) if _field == "status_code" else Field(ge=0) if _field == "count" else ...))
     _predicates.append(create_model(_field + "_predicate", __base__=TextPredicate, **_members))
 
 
@@ -57,6 +62,13 @@ class Assertion(RootModel[Annotated[Union[tuple(_predicates)], Field(discriminat
     def target(self): return self.root.target
     @property
     def after_submission(self): return self.root.after_submission
+
+    @property
+    def role(self): return getattr(self.root, "role", "")
+    @property
+    def name(self): return getattr(self.root, "name", "")
+    @property
+    def json_pointer(self): return getattr(self.root, "json_pointer", "")
 
 
 class CheckSpec(StrictModel):
@@ -92,6 +104,17 @@ class VerificationSpec(StrictModel):
         for check in self.checks:
             visit(check.id, set())
         return self
+
+
+class RecoveryTask(StrictModel):
+    goal_id: str
+    check: CheckSpec
+
+
+class RecoveryPlan(StrictModel):
+    reason: str = Field(min_length=1, max_length=1000)
+    observation_ids: list[str] = Field(max_length=8)
+    tasks: list[RecoveryTask] = Field(max_length=3)
 
 
 def planning_model(commands: list[str], *, read_only: bool = False):
@@ -137,7 +160,7 @@ _PARAMETERS = {
     "browser_navigate": {"url": (str, ...)},
     "browser_assertion": {"field": (Literal["url", "title", "snapshot", "text"], ...),
                           "operator": (Literal["equals", "contains", "not_contains"], ...), "expected": (str, ...)},
-    "browser_snapshot": {}, "browser_extract": {}, "browser_back": {},
+    "browser_snapshot": {}, "browser_extract": {}, "browser_back": {}, "browser_screenshot": {},
     "browser_click": {"selector": (str, ...)},
     "browser_type": {"selector": (str, ...), "value_ref": (str, ...)},
     "browser_fill_form": {"fields": (list[FormField], ...)},

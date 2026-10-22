@@ -25,6 +25,9 @@ class InvestigationOptions(BaseModel):
     max_model_calls: int = Field(default=24, ge=1, le=100)
     max_elapsed_seconds: int = Field(default=600, ge=1, le=3600)
     max_input_chars: int = Field(default=60000, ge=4000, le=200000)
+    enable_recovery: bool = False
+    screenshots: Literal["off", "on_failure", "checkpoints"] = "off"
+    max_screenshots: int = Field(default=4, ge=0, le=10)
 
 
 class InvestigationRequest(BaseModel):

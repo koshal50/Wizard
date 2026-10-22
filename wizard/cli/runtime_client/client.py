@@ -397,6 +397,19 @@ def _stream_events(request: InvestigationRequest, monitors) -> Iterator[dict]:
             artifact.write_text(json.dumps(report_data["runbook"], indent=2, ensure_ascii=False), encoding="utf-8")
             with urllib.request.urlopen(f"{api}/{inv_id}/report/html", timeout=5) as response:
                 artifact.with_suffix(".html").write_bytes(response.read())
+            import hashlib
+            import re
+            for capture in report_data["runbook"].get("artifacts", []):
+                name = capture.get("path", "")
+                if not re.fullmatch(r"screenshot_[a-f0-9]+\.png", name):
+                    continue
+                with urllib.request.urlopen(f"{api}/{inv_id}/report/artifacts/{inv_id}/{name}", timeout=5) as response:
+                    image = response.read(10 * 1024 * 1024 + 1)
+                if len(image) > 10 * 1024 * 1024 or hashlib.sha256(image).hexdigest() != capture.get("sha256"):
+                    continue
+                destination = output / "artifacts" / inv_id
+                destination.mkdir(parents=True, exist_ok=True)
+                (destination / name).write_bytes(image)
         except (OSError, urllib.error.URLError):
             pass  # Keep the Markdown report even if a companion export fails.
     final_usage = monitor.final() if monitor else {"incomplete": True}

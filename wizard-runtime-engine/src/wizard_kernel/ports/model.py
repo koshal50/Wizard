@@ -19,6 +19,18 @@ class ModelFailure(RuntimeError):
         self.kind, self.status, self.request_id = kind, status, request_id
 
 
+def prepare_context(role, context, response_model, max_input_chars):
+    from wizard_kernel.context.selection import select
+    from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY, RECOVER
+    system = {"planner": RECOVER if context.get("recovery_request") else PLAN,
+              "explorer": DECIDE, "verifier": VERIFY,
+              "btw": "You are Wizard's side-conversation assistant. Answer the user using only the supplied conversation. You have no execution tools and must not claim to inspect files or run investigations. Put the complete answer in the text field."}[role]
+    selected, audit = select(context, system, strict_schema(response_model), max_input_chars)
+    if audit["after_chars"] > max_input_chars:
+        raise ModelFailure("context_budget", f"Protected request size {audit['after_chars']} exceeds {max_input_chars} characters")
+    return selected, audit, system
+
+
 def strict_schema(model):
     schema = model.model_json_schema()
     def close(value, schema_node=True):
@@ -60,7 +72,7 @@ def _safe_response_shape(content):
     if isinstance(refinement, dict) and isinstance(refinement.get("assertions"), list):
         result["assertion_shapes"] = [{
             "source": a.get("source") if a.get("source") in {"repository", "command", "process", "http", "browser"} else "unrecognized",
-            "field": a.get("field") if a.get("field") in {"content", "exists", "exit_code", "is_running", "active", "status_code", "body_preview", "url", "title", "snapshot"} else "unrecognized",
+            "field": a.get("field") if a.get("field") in {"content", "exists", "exit_code", "is_running", "active", "status_code", "body_preview", "json_value", "url", "title", "snapshot", "text", "visible", "enabled", "count"} else "unrecognized",
             "expected_type": type(a.get("expected")).__name__}
             for a in refinement["assertions"][:4] if isinstance(a, dict)]
     return result
@@ -79,10 +91,9 @@ class ModelPolicy:
         self.last_metadata = {}
 
     def request(self, role, context, response_model, *, max_input_chars=60000, cancel_check=None, deadline=None, on_progress=None):
-        from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY
         schema = strict_schema(response_model)
-        messages = [{"role": "system", "content": {"planner": PLAN, "explorer": DECIDE, "verifier": VERIFY,
-            "btw": "You are Wizard's side-conversation assistant. Answer the user using only the supplied conversation. You have no execution tools and must not claim to inspect files or run investigations. Put the complete answer in the text field."}[role]},
+        context, selection, system = prepare_context(role, context, response_model, max_input_chars)
+        messages = [{"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
         size = len(json.dumps(messages)) + len(json.dumps(schema))
         if size > max_input_chars:
@@ -121,7 +132,8 @@ class ModelPolicy:
         from wizard_kernel.storage.usage import observe
         observe("provider_response", response, role, self.model)
         self.last_metadata = {"provider_status": response.status_code, "request_id": request_id,
-                              "model": self.model, "input_chars": size, "schema": response_model.__name__}
+                              "model": self.model, "input_chars": size, "schema": response_model.__name__,
+                              "context_selection": selection}
         progress("response", status=response.status_code, elapsed_seconds=round(time.monotonic()-started, 1), request_id=request_id)
         if response.status_code == 429 and self.gate:
             self.gate.defer(retry_after_seconds(response.headers))

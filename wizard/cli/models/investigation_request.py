@@ -79,6 +79,8 @@ class RequestOptions:
     browser_cdp_url: str | None = None
     allowed_domains: tuple[str, ...] | None = None
     max_context_tokens: int | None = None
+    enable_recovery: bool | None = None
+    screenshots: str | None = None
 
     def to_dict(self) -> dict:
         """Serialize to a plain dictionary.
@@ -103,6 +105,8 @@ class RequestOptions:
             ("browser_headless", self.browser_headless),
             ("browser_cdp_url", self.browser_cdp_url),
             ("max_context_tokens", self.max_context_tokens),
+            ("enable_recovery", self.enable_recovery),
+            ("screenshots", self.screenshots),
         )
         for key, value in optional:
             if value is not None:
@@ -173,6 +177,8 @@ class RequestOptions:
             WIZARD_ALLOWED_DOMAINS -> allowed_domains  (comma-separated)
             WIZARD_MAX_CONTEXT_TOKENS -> max_context_tokens
             WIZARD_BUDGET          -> budget
+            WIZARD_RECOVERY        -> enable_recovery (one bounded round; default off)
+            WIZARD_SCREENSHOTS     -> screenshots (off|on_failure|checkpoints)
 
         A malformed value raises ValueError rather than being ignored: silently
         dropping a typo'd budget would run the investigation under a limit the
@@ -219,6 +225,8 @@ class RequestOptions:
                 else None
             ),
             max_context_tokens=integer("WIZARD_MAX_CONTEXT_TOKENS"),
+            enable_recovery=flag("WIZARD_RECOVERY"),
+            screenshots=text("WIZARD_SCREENSHOTS"),
         )
 
 

@@ -52,7 +52,7 @@ _URL_TOOLS = frozenset({"browser_navigate", "http_request"})
 BROWSER_TOOLS = frozenset({
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_fill_form", "browser_back", "browser_extract",
-    "browser_assertion",
+    "browser_assertion", "browser_screenshot",
 })
 
 # The full set of tools the Runtime accepts from agents
@@ -80,6 +80,8 @@ class ToolRequestValidator:
         self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
+        self._recheck_permits: dict[str, frozenset[str]] = {}
+        self._authorized_rechecks: set[str] = set()
         self._rejected_fingerprints: set[str] = set()
         # Fail-closed egress allowlist for browser_navigate. Empty → block all navigation.
         self._allowed_domains = tuple(allowed_domains or ())
@@ -88,6 +90,7 @@ class ToolRequestValidator:
         self._endpoint_owners: dict[tuple[str, int], str] = {}
         self._process_handles: set[str] = set()
         self._browser_navigated = False
+        self._browser_navigation_attempted = False
         self._enforce_discovered_routes = navigation_targets is not None
         self._discovered_urls = {self._navigation_key(url) for url in (navigation_targets or []) if url.startswith(("http://", "https://"))}
 
@@ -132,6 +135,8 @@ class ToolRequestValidator:
                     self._reachable_local_endpoints.discard(endpoint)
                     self._endpoint_owners.pop(endpoint, None)
         elif tool == "browser_navigate":
+            self._browser_navigation_attempted = True
+            self._rejected_fingerprints.discard(self._fingerprint("browser_screenshot", {}))
             self._browser_navigated = bool(payload.get("ok"))
             if self._browser_navigated:
                 self._rejected_fingerprints.clear()
@@ -146,11 +151,25 @@ class ToolRequestValidator:
                 # change clears this through the branches above.
                 self._rejected_fingerprints.add(self._fingerprint(tool, params))
 
+    def authorize_recheck(self, request: ToolRequest, proof_ids: set[str]) -> bool:
+        """Runtime-only, single-use recheck after observed recovery prerequisites.
+
+        This never bypasses tool, command, path, capability or budget checks.
+        Agents cannot supply permits through ToolRequest parameters.
+        """
+        fingerprint = self._fingerprint(request.tool, request.parameters)
+        if request.tool != "execute_command" or not proof_ids or fingerprint in self._authorized_rechecks:
+            return False
+        self._authorized_rechecks.add(fingerprint)
+        self._recheck_permits[fingerprint] = frozenset(proof_ids)
+        return True
+
     def validate(self, request: ToolRequest, budget_remaining: int) -> ValidationResult:
         """Run all checks. Returns a ValidationResult with valid=True on pass."""
 
         raw_fingerprint = self._fingerprint(request.tool, request.parameters)
-        if raw_fingerprint in self._rejected_fingerprints:
+        recheck = self._recheck_permits.pop(raw_fingerprint, None)
+        if raw_fingerprint in self._rejected_fingerprints and not recheck:
             return ValidationResult(valid=False, reason="Duplicate rejected ToolRequest; choose a different action.")
 
         def reject(reason: str) -> ValidationResult:
@@ -231,7 +250,8 @@ class ToolRequestValidator:
                         "discover its endpoint and verify it with check_port before navigation or HTTP."
                     )
 
-        if request.tool in BROWSER_TOOLS - {"browser_navigate"} and not self._browser_navigated:
+        diagnostic_capture = request.tool == "browser_screenshot" and self._browser_navigation_attempted
+        if request.tool in BROWSER_TOOLS - {"browser_navigate"} and not self._browser_navigated and not diagnostic_capture:
             return reject("BROWSER_NOT_READY: a successful browser navigation is required before page actions.")
 
         # 4. Structural validation — required parameters present
@@ -251,7 +271,7 @@ class ToolRequestValidator:
         )
         if not repeatable_observation:
             fingerprint = self._fingerprint(request.tool, params)
-            if fingerprint in self._seen_fingerprints:
+            if fingerprint in self._seen_fingerprints and not recheck:
                 return reject(
                     (
                         f"Duplicate request: {request.tool!r} with identical parameters has already "

@@ -20,7 +20,7 @@ from wizard_kernel.world import scanner
 from wizard_kernel.control.loop import _probe_started_process, _TOOL_TO_OBS_TYPE, _emit_browser_narration, _current_page
 from wizard_kernel.control.tool_validator import ToolRequestValidator
 from wizard_kernel.context.packager import _discover_runnable_commands
-from wizard_kernel.ports.model import ModelPolicy
+from wizard_kernel.ports.model import ModelPolicy, prepare_context
 from wizard_kernel.reality.observations import ObservationStore
 from wizard_kernel.session import events
 from wizard_kernel.storage import fs_store
@@ -54,6 +54,7 @@ def _resources(observations):
             handle = data.get("handle_id") or (obs.payload.get("meta") or {}).get("handle_id")
             if handle:
                 processes[handle] = {k: data.get(k) for k in ("handle_id", "pid", "command", "cwd", "is_running", "exit_code")}
+                processes[handle]["observation_id"] = obs.id
                 processes[handle]["output"] = str(data.get("stdout_so_far") or data.get("stderr_so_far") or "")[-1500:]
                 if data.get("is_running") is False:
                     endpoints = {k: v for k, v in endpoints.items() if v.get("handle_id") != handle}
@@ -87,11 +88,23 @@ def _resources(observations):
             elif obs.success:
                 observed = data.get("page_observation") or data
                 if "snapshot" in observed or "controls" in observed:
-                    page = {k: v for k, v in observed.items() if k in {"url", "title", "snapshot", "text", "controls", "links"}}
+                    page = {k: v for k, v in observed.items() if k in {"url", "title", "snapshot", "text", "controls", "links", "controls_complete", "text_truncated", "snapshot_truncated"}}
+                    page["observation_id"] = obs.id
                 elif obs.source_tool in {"browser_navigate", "browser_back"}:
                     page = {"url": observed.get("url"), "snapshot_required": True}
     return {"processes": list(processes.values()), "reachable_endpoints": list(endpoints.values()), "browser": page,
             "form_state": form}
+
+
+def _state_identity(value):
+    """Evidence references change on repeated reads; resource facts may not."""
+    def facts(item):
+        if isinstance(item, dict):
+            return {k: facts(v) for k, v in item.items() if k not in {"observation_id", "created_at"}}
+        if isinstance(item, list):
+            return [facts(v) for v in item]
+        return item
+    return hashlib.sha256(json.dumps(facts(value), sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _form_submission_rejection(check, page, selector):
@@ -165,10 +178,15 @@ def _context(inv, check, results, observations, available, discovery, authorized
     resource_state = _resources(observations)
     page = resource_state.get("browser")
     if page:
+        page["links_omitted"] = max(0, len(page.get("links", [])) - 20)
         page["links"] = page.get("links", [])[:20]
         snapshot = str(page.get("snapshot") or "")
+        page["snapshot_excerpt"] = len(snapshot) > 3500
         page["snapshot"] = snapshot if len(snapshot) <= 3500 else snapshot[:2200] + "\n[bounded: middle omitted]\n" + snapshot[-1300:]
+        page["text_truncated"] = bool(page.get("text_truncated") or len(str(page.get("text") or "")) > 2000)
         page["text"] = str(page.get("text") or "")[:2000]
+        page["controls_omitted"] = max(0, len(page.get("controls", [])) - 30)
+        page["controls_complete"] = bool(page.get("controls_complete") and not page["controls_omitted"])
         page["controls"] = [{k: v for k, v in c.items() if k != "value"} for c in page.get("controls", [])[:30]]
     auth_progress = None
     if check.workflow in {"registration", "login", "form_submission"}:
@@ -199,6 +217,9 @@ def _context(inv, check, results, observations, available, discovery, authorized
     packet = {"original_request": flow_trace.safe_text(_redact(_effective_request(inv), authorized), limit=8000), "command_family": inv.intent,
             "targets": [flow_trace.safe_text(t, limit=1600) for t in inv.targets],
             "current_check": check.model_dump(), "assertion_results": results,
+            "required_evidence": [a.model_dump() for a in check.assertions],
+            "completed_evidence": [r["assertion"] for r in results if r["verdict"] == "passed"],
+            "missing_evidence": [r["assertion"] for r in results if r["verdict"] != "passed"],
             "check_scope": "Complete this check only; dependent UI checks run after its readiness requirements pass",
             "refinement_policy": "For authentication, process readiness is preparation, not an authentication result. Navigate and inspect the actual page first; refine only browser post-submission result criteria using this check's browser observations.",
             "discovery_required": bool(not check.assertions and not resource_state["browser"] and "browser_navigate" in available),
@@ -520,6 +541,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
         guard()
         if state["model_calls"] >= max_calls:
             raise InterruptedError("Model decision budget exhausted")
+        context, selection, _ = prepare_context(role, context, model, max_input)
+        state.setdefault("context_selection", []).append({"agent": role, **selection})
         raw = json.dumps(context, sort_keys=True, default=str)
         identity = hashlib.sha256((role + raw).encode()).hexdigest()
         if identity in state["decisions"]:
@@ -544,7 +567,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
         # Persist a successfully validated response even if cancellation arrived
         # during HTTP. Cancellation still prevents any downstream execution.
         if role == "planner":
-            fs_store.write(inv.id, "plan.json", _redact(result.model_dump(), authorized, public_refs))
+            fs_store.write(inv.id, "recovery_plan.json" if context.get("recovery_request") else "plan.json", _redact(result.model_dump(), authorized, public_refs))
         flow_trace.record(inv.id, role + ".response", response_model=model.__name__)
         if role == "explorer":
             state.setdefault("decision_results", []).append({"context_hash": identity,
@@ -575,9 +598,11 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             payload.setdefault("meta", {})["target_url"] = flow_trace.safe_parameters({"url": params["url"]})["url"]
         validator.record_execution(tool, params, payload)
         obs = store.append(node_id=execution["id"], goal_id=check_id, source_tool=tool,
-                           obs_type=_TOOL_TO_OBS_TYPE.get(tool, "command_result"), payload=payload,
+                           obs_type="artifact" if tool == "browser_screenshot" else _TOOL_TO_OBS_TYPE.get(tool, "command_result"), payload=payload,
                            tool_request_id=execution["id"], execution_id=execution["id"])
         execution.update(state="observed", observation_id=obs.id, success=obs.success, finished_at=time.time())
+        if tool == "browser_screenshot" and obs.success:
+            state.setdefault("artifacts", []).append({**payload["data"], "observation_id": obs.id, "goal_id": check_id, "execution_id": execution["id"]})
         execution["result_fingerprint"] = hashlib.sha256(json.dumps([tool, payload], sort_keys=True, default=str).encode()).hexdigest()
         inv.budget_remaining -= 1
         inv.nodes_completed += 1
@@ -589,10 +614,23 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             _probe_started_process(tools, store, node, check_id, payload, validator=validator,
                                    timeout_seconds=max(0, min(20, deadline-time.monotonic())), cancel_check=guard,
                                    sanitize=lambda p: _redact(p, authorized, public_refs))
-        if tool.startswith("browser_") and payload.get("ok"):
+        if tool.startswith("browser_") and tool != "browser_screenshot" and payload.get("ok"):
             _emit_browser_narration(bus, tool, payload.get("data") or {}, page=_current_page(tools))
         save()
+        if tool.startswith("browser_") and tool != "browser_screenshot" and not obs.success:
+            capture_screenshot(check_id, failure=True)
         return obs
+
+    def capture_screenshot(check_id, *, failure=False):
+        mode = inv.options.get("screenshots", "off")
+        if mode == "off" or (not failure and mode != "checkpoints") or not browser or not browser.started:
+            return
+        if state.get("screenshot_attempts", 0) >= inv.options.get("max_screenshots", 4) or inv.budget_remaining <= 0:
+            return
+        checked = validator.validate(ToolRequest(tool="browser_screenshot", parameters={}), inv.budget_remaining)
+        if checked.valid:
+            state["screenshot_attempts"] = state.get("screenshot_attempts", 0) + 1
+            execute("browser_screenshot", {}, checked.sanitised_params, check_id, purpose="artifact")
 
     def refresh_processes(check):
         for process in sandbox.list_processes():
@@ -690,7 +728,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 browser = (browser_factory or browsers.get_browser)(inv.options)
                 browsers.register_runtime(inv.id, browser)
                 validator._browser_enabled = True
-            tools = ToolExecutor(sandbox, inv.repository_path, browser=browser)
+            tools = ToolExecutor(sandbox, inv.repository_path, browser=browser, investigation_id=inv.id,
+                                 private_capture=state.get("test_input_source") == "configured" and bool(authorized))
             save(state=LifecycleState.investigation_loop)
             bus.emit(events.InvestigationStarted, {"repository_path": inv.repository_path})
             ordered, remaining = [], list(spec.checks)
@@ -698,27 +737,29 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 ready = next(c for c in remaining if all(d in {x.id for x in ordered} for d in c.depends_on))
                 ordered.append(ready)
                 remaining.remove(ready)
-            for check in ordered:
+            def run_check(check):
                 guard()
                 if not can_execute and (set(check.capabilities) - {"repository"} or any(a.source != "repository" for a in check.assertions)):
                     state["results"][check.id] = {"status": "unverified", "reason": "Execution capability disabled for this request"}
                     save()
-                    continue
+                    return
                 if not can_browser and ("browser" in check.capabilities or any(a.source == "browser" for a in check.assertions)):
                     state["results"][check.id] = {"status": "unverified", "reason": "Browser capability explicitly disabled"}
                     save()
-                    continue
+                    return
                 if any(state["results"].get(dep, {}).get("status") != "passed" for dep in check.depends_on):
                     state["results"][check.id] = {"status": "unverified", "reason": "Required check dependency did not pass"}
                     save()
-                    continue
-                rejected = {}
+                    return
+                rejected = state.setdefault("rejected_actions", {}).setdefault(check.id, {})
                 stalled_page = None
                 def resource_identity():
                     current = _resources(store.all())
+                    current["dependency_results"] = {dep: state["results"].get(dep, {}).get("status")
+                                                     for dep in check.depends_on}
                     for endpoint in current["reachable_endpoints"]:
                         endpoint.pop("observation_id", None)
-                    return hashlib.sha256(json.dumps(current, sort_keys=True, default=str).encode()).hexdigest()
+                    return _state_identity(current)
                 while inv.budget_remaining > 0:
                     guard()
                     # Inspect known handles deterministically before each model
@@ -729,10 +770,14 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         state["results"][check.id] = {"status": "passed", "assertions": results}
                         save()
                         bus.emit(events.GoalSatisfied, {"goal_id": check.id, "goal_name": check.description})
+                        if "browser" in check.capabilities or any(a.source == "browser" for a in check.assertions):
+                            capture_screenshot(check.id)
                         break
                     available = _available(check, _resources(store.all()), can_browser, bool(authorized), inv.targets)
+                    if inv.options.get("screenshots", "off") != "off" and _resources(store.all())["browser"] and state.get("screenshot_attempts", 0) < inv.options.get("max_screenshots", 4):
+                        available = sorted(set(available) | {"browser_screenshot"})
                     current_page = _resources(store.all())['browser']
-                    page_identity = hashlib.sha256(json.dumps(current_page, sort_keys=True, default=str).encode()).hexdigest()
+                    page_identity = _state_identity(current_page)
                     browser_read_stalled = stalled_page is not None and stalled_page == page_identity
                     if browser_read_stalled:
                         available = [t for t in available if t not in {'browser_snapshot', 'browser_extract'}]
@@ -740,6 +785,9 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     browser_grounded = any(o.goal_id == check.id and o.success and o.source_tool.startswith("browser_")
                                            for o in store.all())
                     context = _context(inv, check, results, store.all(), available, discovery, authorized, public_refs)
+                    if state.get("recovery_round"):
+                        context["recovery"] = {"round": 1, "reason": state["recovery_round"]["reason"],
+                                               "new_dependencies": state["recovery_round"]["dependencies"].get(check.id, [])}
                     if browser_read_stalled:
                         context['browser_state_feedback'] = 'Repeated browser reads returned the same page. The requested URL is not proof the requested form is displayed. Use the actual observed controls or clarify an expected state with browser_assertion; another identical snapshot provides no new evidence.'
                     relevant_ids = {o.id for o in store.all() if o.goal_id == check.id or o.source_tool == "read_file"}
@@ -788,6 +836,11 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                                              and o.source_tool in {"start_process", "read_process"}}
                         process_grounded = all(a.source != "process" or not a.target or a.target in observed_commands
                                                for a in refinement.assertions)
+                        observed_controls = {(c.get("role"), c.get("name")) for o in store.all()
+                            if o.success and o.goal_id == check.id and o.id in refinement.observation_ids
+                            for c in ((o.payload.get("data") or {}).get("page_observation") or o.payload.get("data") or {}).get("controls", [])}
+                        controls_grounded = all(a.field not in {"visible", "enabled", "count"}
+                                                or (a.role, a.name) in observed_controls for a in refinement.assertions)
                         if check.unresolved_reason.startswith("Discover the actual process command and listener"):
                             process_grounded = process_grounded and {"is_running", "active"} <= {
                                 a.field for a in refinement.assertions if a.source == "process"
@@ -795,7 +848,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         if auth_check:
                             known = {o.id for o in store.all() if o.success and o.goal_id == check.id
                                      and o.source_tool.startswith("browser_")}
-                        if (check.assertions or decision.action is not None or refinement is None or not process_grounded
+                        if (check.assertions or decision.action is not None or refinement is None or not process_grounded or not controls_grounded
                                 or not set(refinement.observation_ids) <= known
                                 or any(a.source == "browser" and a.target and a.target not in observed_urls for a in refinement.assertions)):
                             reason = "Refinement rejected: use actual observation IDs to resolve unspecified expectations; grounded requirements cannot be weakened"
@@ -862,6 +915,11 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                                                 and o.success and (o.payload.get("data") or {}).get("submitted_form") for o in store.all())
                                 if assertion.after_submission and not submitted:
                                     continue
+                                if assertion.field in {"visible", "enabled", "count"}:
+                                    checked = validator.validate(ToolRequest(tool="browser_snapshot", parameters={}), inv.budget_remaining)
+                                    if checked.valid:
+                                        execute("browser_snapshot", {}, checked.sanitised_params, check.id, purpose="assertion")
+                                    continue
                                 params = {k: getattr(assertion, k) for k in ("field", "operator", "expected")}
                                 validated = validator.validate(ToolRequest(tool="browser_assertion", parameters=params), inv.budget_remaining)
                                 if validated.valid:
@@ -873,6 +931,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         save()
                         if status == "passed":
                             bus.emit(events.GoalSatisfied, {"goal_id": check.id, "goal_name": check.description})
+                        if "browser" in check.capabilities or any(a.source == "browser" for a in check.assertions):
+                            capture_screenshot(check.id)
                         break
                     if decision.action is None:
                         raise ValueError("Tool decision has no action")
@@ -910,7 +970,17 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                             bus.emit(events.ToolRejected, {"tool": tool, "node_id": check.id, "reason": reason})
                             save(last_event=reason)
                             continue
-                    validation = validator.validate(ToolRequest(tool=tool, parameters=params), inv.budget_remaining)
+                    request_action = ToolRequest(tool=tool, parameters=params)
+                    dependencies = (state.get("recovery_round") or {}).get("dependencies", {}).get(check.id, [])
+                    if tool == "execute_command" and dependencies and all(state["results"].get(dep, {}).get("status") == "passed" for dep in dependencies):
+                        previous_failure = any(e["check_id"] == check.id and e["tool"] == tool and e.get("success") is False
+                                               and e["parameters"] == flow_trace.safe_parameters(proposed) for e in state["executions"])
+                        proof_ids = {r["observation_id"] for dep in dependencies for r in state["results"][dep].get("assertions", [])
+                                     if r.get("verdict") == "passed" and r.get("observation_id") and store.get(r["observation_id"]) is not None
+                                     and store.get(r["observation_id"]).success}
+                        if previous_failure and validator.authorize_recheck(request_action, proof_ids):
+                            state.setdefault("recovery_rechecks", []).append({"check_id": check.id, "tool": tool, "proof_ids": sorted(proof_ids)})
+                    validation = validator.validate(request_action, inv.budget_remaining)
                     if not validation.valid:
                         rejected[action_id] = resource_identity()
                         store.append(node_id=check.id, goal_id=check.id, source_tool="explorer", obs_type="agent_failure",
@@ -918,6 +988,10 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         bus.emit(events.ToolRejected, {"tool": tool, "node_id": check.id, "reason": validation.reason})
                         save(last_event=validation.reason)
                         continue
+                    if tool == "browser_screenshot":
+                        if state.get("screenshot_attempts", 0) >= inv.options.get("max_screenshots", 4):
+                            raise InterruptedError("Screenshot artifact budget exhausted")
+                        state["screenshot_attempts"] = state.get("screenshot_attempts", 0) + 1
                     obs = execute(tool, proposed, validation.sanitised_params, check.id)
                     if not obs.success:
                         rejected[action_id] = resource_identity()
@@ -927,11 +1001,14 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         state["results"][check.id]["status"] = "passed"
                         save()
                         bus.emit(events.GoalSatisfied, {"goal_id": check.id, "goal_name": check.description})
+                        if "browser" in check.capabilities or any(a.source == "browser" for a in check.assertions):
+                            capture_screenshot(check.id)
                         break
                     save()
-                    if len(state["executions"]) > 1 and state["executions"][-2].get("result_fingerprint") == state["executions"][-1]["result_fingerprint"]:
+                    agent_executions = [e for e in state["executions"] if e.get("purpose") == "agent"]
+                    if len(agent_executions) > 1 and agent_executions[-2].get("result_fingerprint") == agent_executions[-1]["result_fingerprint"]:
                         if obs.success and tool in {'browser_snapshot', 'browser_extract'}:
-                            stalled_page = hashlib.sha256(json.dumps(_resources(store.all())['browser'], sort_keys=True, default=str).encode()).hexdigest()
+                            stalled_page = _state_identity(_resources(store.all())['browser'])
                             reason = 'BROWSER_READ_UNCHANGED: repeated reads returned the same page; choose a different action from the observed state'
                             store.append(node_id=check.id, goal_id=check.id, source_tool='explorer', obs_type='agent_failure',
                                          payload={'ok': False, 'tool': tool, 'reason': reason})
@@ -942,38 +1019,112 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         raise InterruptedError("No progress: repeated execution produced no new result")
                 else:
                     raise InterruptedError("Tool execution budget exhausted")
-            # One review after meaningful work, never after every file read.
-            # Review cannot manufacture evidence or overwrite goal predicates.
-            if inv.intent == "verify" and getattr(policy, "requires_verifier", False) and any(
-                    o.success and o.source_tool not in {"read_file", "list_tree", "path_exists", "search_files", "explorer"}
-                    for o in store.all()):
-                from wizard_kernel.contracts.agent import VerifierAssessment
-                save(state=LifecycleState.reporting, last_event="Reviewing execution evidence")
-                proof_ids = {a.get("observation_id") for result in state["results"].values() for a in result.get("assertions", [])}
-                proof_ids.update(o.id for o in store.all() if o.source_tool == "browser_click" and o.success
-                                 and (o.payload.get("data") or {}).get("submitted_form"))
-                review_evidence = []
-                for o in store.all():
-                    if o.id not in proof_ids:
-                        continue
-                    data = o.payload.get("data") or {}
-                    page = data.get("page_observation") or data
-                    detail = {key: page[key] for key in ("url", "title", "text", "is_running", "active", "status_code", "body_preview", "exit_code") if key in page}
-                    if not detail:
-                        detail = {key: o.payload[key] for key in ("exit_code", "stdout", "error") if key in o.payload}
-                    review_evidence.append({"id": o.id, "goal_id": o.goal_id, "tool": o.source_tool, "success": o.success,
-                        "submitted_form": bool(data.get("submitted_form")),
-                        "result": flow_trace.safe_text(json.dumps(_redact(detail, authorized, public_refs), default=str), limit=1800)})
-                assessment = request("verifier", {"investigation_id": inv.id, "request": _effective_request(inv),
+            required_ids = {c.id for c in spec.checks}
+            state["required_check_ids"] = sorted(required_ids)
+            pending = list(ordered)
+            while True:
+                while pending:
+                    from wizard_kernel.control.recovery import next_ready
+                    check = next_ready(pending, state["results"]) or pending[0]
+                    pending.remove(check)
+                    try:
+                        run_check(check)
+                    except InterruptedError as exc:
+                        if not inv.options.get("enable_recovery") or not str(exc).startswith("No progress:"):
+                            raise
+                        state["results"][check.id] = {"status": "unverified", "reason": flow_trace.safe_text(str(exc))}
+                        save()
+                # One review after meaningful work, never after every file read.
+                # Review cannot manufacture evidence or overwrite goal predicates.
+                if inv.intent == "verify" and getattr(policy, "requires_verifier", False) and any(
+                        o.success and o.source_tool not in {"read_file", "list_tree", "path_exists", "search_files", "explorer"}
+                        for o in store.all()):
+                    from wizard_kernel.contracts.agent import VerifierAssessment
+                    save(state=LifecycleState.reporting, last_event="Reviewing execution evidence")
+                    proof_ids = {a.get("observation_id") for result in state["results"].values() for a in result.get("assertions", [])}
+                    proof_ids.update(o.id for o in store.all() if o.source_tool == "browser_click" and o.success
+                                     and (o.payload.get("data") or {}).get("submitted_form"))
+                    review_evidence = []
+                    for o in store.all():
+                        if o.id not in proof_ids:
+                            continue
+                        data = o.payload.get("data") or {}
+                        page = data.get("page_observation") or data
+                        detail = {key: page[key] for key in ("url", "title", "text", "is_running", "active", "status_code", "body_preview", "exit_code") if key in page}
+                        if not detail:
+                            detail = {key: o.payload[key] for key in ("exit_code", "stdout", "error") if key in o.payload}
+                        review_evidence.append({"id": o.id, "goal_id": o.goal_id, "tool": o.source_tool, "success": o.success,
+                            "submitted_form": bool(data.get("submitted_form")),
+                            "result": flow_trace.safe_text(json.dumps(_redact(detail, authorized, public_refs), default=str), limit=1800)})
+                    review_identity = hashlib.sha256(json.dumps({"results": {k: v for k, v in state["results"].items() if k in required_ids},
+                        "evidence": [e for e in review_evidence if e["tool"] not in {"read_file", "path_exists", "browser_screenshot"}]}, sort_keys=True).encode()).hexdigest()
+                    if state.get("review_fingerprint") != review_identity:
+                        state["review_fingerprint"] = review_identity
+                        assessment = request("verifier", {"investigation_id": inv.id, "request": _effective_request(inv),
+                            "checks": state["checks"], "results": state["results"],
+                            "evidence": review_evidence[-16:]}, VerifierAssessment)
+                        if assessment.investigation_id != inv.id:
+                            raise ValueError("Verifier assessment belongs to another investigation")
+                        state["verifier"] = assessment.model_dump()
+                        if assessment.assessment != "needs_more_work":
+                            state["stop_reason"] = ""
+                        if assessment.assessment == "needs_more_work":
+                            details = assessment.recommended_additional_investigations or assessment.weak_claims
+                            state["stop_reason"] = flow_trace.safe_text("Verifier review needs more evidence: " + "; ".join(details), limit=1800)
+                    save()
+                missing = [c.id for c in spec.checks if c.id in required_ids and state["results"].get(c.id, {}).get("status") != "passed"]
+                review_missing = state.get("verifier", {}).get("assessment") == "needs_more_work"
+                eligible = {c.id for c in spec.checks if c.id in (missing or required_ids)
+                            and (can_browser or "browser" not in set(c.capabilities) | {a.source for a in c.assertions})
+                            and (can_execute or not (set(c.capabilities) | {a.source for a in c.assertions}) - {"repository"})}
+                if (not inv.options.get("enable_recovery") or state.get("recovery_attempted") or
+                        not (missing or review_missing) or not eligible or not store.count() or len(spec.checks) >= 8 or inv.budget_remaining < 2 or
+                        state["model_calls"] >= max_calls - 1):
+                    break
+                guard()
+                from wizard_kernel.contracts.verification import RecoveryPlan
+                from wizard_kernel.control.recovery import admit
+                state["recovery_attempted"] = True
+                save(last_event="Planning one bounded recovery round")
+                capabilities = {"repository"} | ({"process", "command", "http"} if can_execute else set()) | ({"browser"} if can_browser else set())
+                plan = request("planner", {"recovery_request": True, "original_request": flow_trace.safe_text(_redact(_effective_request(inv), authorized, public_refs)),
                     "checks": state["checks"], "results": state["results"],
-                    "evidence": review_evidence[-16:]}, VerifierAssessment)
-                if assessment.investigation_id != inv.id:
-                    raise ValueError("Verifier assessment belongs to another investigation")
-                state["verifier"] = assessment.model_dump()
-                if assessment.assessment == "needs_more_work":
-                    details = assessment.recommended_additional_investigations or assessment.weak_claims
-                    state["stop_reason"] = flow_trace.safe_text("Verifier review needs more evidence: " + "; ".join(details), limit=1800)
-                save()
+                    "missing_check_ids": sorted(eligible),
+                    "available_capabilities": sorted(capabilities), "helper_slots": min(3, 8-len(spec.checks)),
+                    "review": state.get("verifier"), "discovery": _redact(discovery, authorized, public_refs),
+                    "recent_observations": [{"id": o.id, "goal_id": o.goal_id, "tool": o.source_tool,
+                        "success": o.success, "result": flow_trace.safe_text(json.dumps(_redact(o.payload, authorized, public_refs)), limit=1800)}
+                        for o in store.all()[-4:]], "remaining_tool_budget": inv.budget_remaining}, RecoveryPlan)
+                try:
+                    spec, helpers, dependencies = admit(spec, plan, state["results"], store.all(), capabilities=capabilities, eligible_ids=eligible)
+                except ValueError as exc:
+                    state["recovery_rejected"] = flow_trace.safe_text(str(exc))
+                    state["stop_reason"] = "Recovery delta rejected: " + state["recovery_rejected"]
+                    save(last_event="Recovery delta rejected")
+                    break
+                if not helpers:
+                    state["recovery_declined"] = plan.reason
+                    state["stop_reason"] = state["stop_reason"] or "No safe recovery: " + flow_trace.safe_text(plan.reason)
+                    save()
+                    break
+                state["recovery_round"] = {"reason": plan.reason, "dependencies": dependencies,
+                                           "observation_ids": plan.observation_ids, "helper_ids": [c.id for c in helpers]}
+                state["checks"] = spec.model_dump()["checks"]
+                for c in spec.checks:
+                    old = graph.get("check_" + c.id)
+                    if old:
+                        graph.add(old.model_copy(update={"depends_on": ["check_" + d for d in c.depends_on]}))
+                    else:
+                        graph.add(InvestigationNode(id="check_" + c.id, type="checkpoint", goal_id=c.id,
+                            parent_id="check_" + next(goal for goal, children in dependencies.items() if c.id in children),
+                            depends_on=["check_" + d for d in c.depends_on], action={"description": c.description},
+                            hypothesis=Hypothesis(kind=HypothesisKind.manual_escalate)))
+                for goal_id in dependencies:
+                    state.setdefault("result_history", {}).setdefault(goal_id, []).append(state["results"].pop(goal_id, {}))
+                pending = helpers + [c for c in spec.checks if c.id in dependencies or c.id in missing]
+                # A second review is allowed only after new proof, under the same budgets.
+                save(state=LifecycleState.investigation_loop, last_event="Recovery work admitted")
+
     except Exception as exc:
         state["provider_requests"] = getattr(policy, "provider_requests", 0)
         state["provider_metadata"] = getattr(policy, "last_metadata", {})
@@ -999,7 +1150,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             result = state["results"].setdefault(check["id"], {})
             if result.get("status") not in {"passed", "failed"}:
                 result.update(status="unverified", reason=state["stop_reason"] or result.get("reason") or "Not evaluated")
-        statuses = [r.get("status") for r in state["results"].values()]
+        required_ids = set(state.get("required_check_ids", state["results"]))
+        statuses = [state["results"].get(key, {}).get("status") for key in required_ids]
         final = LifecycleState.completed if statuses and all(s == "passed" for s in statuses) else LifecycleState.incomplete
         if state.get("verifier_failure") or state.get("verifier", {}).get("assessment") == "needs_more_work":
             final = LifecycleState.incomplete

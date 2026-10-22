@@ -122,6 +122,7 @@ claims, plans, verdicts, metadata, hidden reasoning or JSON fences. Keep reason 
 # Condensed from the installed agent-browser core workflow. Do not send its
 # entire command manual on every tactical request; only actual tool contracts.
 BROWSER_COMMANDS = {
+    "browser_screenshot": "Capture the current page as an investigation artifact; pixels are not proof of an assertion",
     "browser_navigate": "agent-browser open <discovered-url>",
     "browser_snapshot": "agent-browser snapshot --json; yields fresh @e refs and accessibility text",
     "browser_click": "agent-browser click <observed-@ref>; then capture fresh state",
@@ -130,6 +131,17 @@ BROWSER_COMMANDS = {
     "browser_back": "agent-browser back; then capture fresh state",
     "browser_extract": "Read current actual page text, links and refs; no guessed HTML",
 }
+
+
+RECOVER = """Propose one small recovery delta for the original requested outcomes.
+Use only the supplied missing requirements, actual observations and discovered
+contracts. Add at most three helper checks to unblock the listed existing checks.
+Never replace, weaken or delete original requirements. Do not repeat unchanged
+work, invent credentials, install dependencies or propose unrelated mutations.
+Helpers must use available capabilities and acyclic dependencies on helpers or
+already-passed checks. Cite actual observation IDs. If there is no safe useful
+recovery, return an empty tasks list with a concrete reason. Runtime owns admission,
+execution and final verdicts. Keep the response small and schema-constrained."""
 
 
 VERIFY = """Review the supplied verification checks against actual observations and

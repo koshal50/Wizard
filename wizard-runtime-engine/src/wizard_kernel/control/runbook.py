@@ -7,6 +7,7 @@ from wizard_kernel.control import flow_trace
 
 def project(inv, state):
     checks = []
+    required = set(state.get("required_check_ids", [c["id"] for c in state.get("checks", [])]))
     for check in state.get("checks", []):
         result = state.get("results", {}).get(check["id"], {})
         proofs = []
@@ -20,14 +21,20 @@ def project(inv, state):
             proofs.append({"observed": flow_trace.safe_text(actual[start:start + max(180, len(expected) + 40)]),
                            "observation_id": assertion.get("observation_id"), "verdict": assertion.get("verdict")})
         checks.append({"id": check["id"], "description": flow_trace.safe_text(check["description"]),
+                       "purpose": "goal" if check["id"] in required else "recovery_helper",
                        "status": {"passed": "VERIFIED", "failed": "FAILED"}.get(result.get("status"), "UNVERIFIED"),
                        "requirements": flow_trace.safe_parameters({"assertions": check.get("assertions", [])})["assertions"], "evidence": proofs,
+                       "missing_evidence": [{"reason": flow_trace.safe_text(str(a.get("reason") or "Predicate not satisfied")),
+                                             "superseded_by": a.get("superseded_by")}
+                                            for a in result.get("assertions", []) if a.get("verdict") != "passed"],
                        "blocker": flow_trace.safe_text(str(result.get("reason") or ""))})
     steps = [{key: execution.get(key) for key in ("id", "check_id", "tool", "parameters", "state", "success", "observation_id")}
              for execution in state.get("executions", [])]
     return {"schema_version": 1, "investigation_id": inv.id, "state": inv.state.value,
             "request": flow_trace.safe_text(inv.question or " ".join([inv.intent, *inv.targets]), limit=8000),
-            "checks": checks, "steps": [{**step, "parameters": flow_trace.safe_parameters(step["parameters"] or {})} for step in steps], "cleanup": flow_trace.safe_text(str(state.get("cleanup", "Pending"))),
+            "checks": checks, "artifacts": state.get("artifacts", []),
+            "recovery": state.get("recovery_round"), "required_check_ids": state.get("required_check_ids", [c["id"] for c in checks]),
+            "steps": [{**step, "parameters": flow_trace.safe_parameters(step["parameters"] or {})} for step in steps], "cleanup": flow_trace.safe_text(str(state.get("cleanup", "Pending"))),
             "stop_reason": flow_trace.safe_text(str(state.get("stop_reason") or "")),
             "model_calls": state.get("model_calls", 0), "provider_requests": state.get("provider_requests", 0)}
 
@@ -36,18 +43,21 @@ def markdown(data):
     def text(value):
         return str(value).replace("\n", " ").replace("`", "'")
     checks = data["checks"]
+    goals = [c for c in checks if c.get("purpose", "goal") == "goal"]
     lines = ["# Wizard project runbook", "", text(data["request"]), "",
              f"Investigation: `{data['investigation_id']}`", f"State: {data['state']}", "",
              "## Verification summary", "",
-             f"{sum(c['status'] == 'VERIFIED' for c in checks)} verified / {sum(c['status'] == 'FAILED' for c in checks)} failed / {sum(c['status'] == 'UNVERIFIED' for c in checks)} unverified", ""]
+             f"{sum(c['status'] == 'VERIFIED' for c in goals)} verified / {sum(c['status'] == 'FAILED' for c in goals)} failed / {sum(c['status'] == 'UNVERIFIED' for c in goals)} unverified", ""]
     for check in checks:
-        lines += ["### " + text(check["description"]), "", "**" + check["status"] + "**", ""]
+        lines += ["### " + ("Recovery helper: " if check.get("purpose") == "recovery_helper" else "") + text(check["description"]), "", "**" + check["status"] + "**", ""]
         for requirement in check["requirements"]:
             lines += ["- Required: " + text(requirement.get("source", "")) + " / " + text(requirement.get("field", "")) + " " + text(requirement.get("operator", "")) + " " + text(requirement.get("expected", ""))]
         for proof in check["evidence"]:
             lines += ["- Observed: " + text(proof["observed"]), "  Evidence: `" + text(proof["observation_id"] or "not recorded") + "`"]
         if check["blocker"]:
             lines += ["- Missing / blocker: " + text(check["blocker"])]
+        for missing in check.get("missing_evidence", []):
+            lines += ["- Missing evidence: " + text(missing["reason"])]
         if not check["evidence"]:
             lines += ["- No compatible execution evidence recorded."]
         lines += [""]
@@ -82,6 +92,13 @@ def markdown(data):
               "Cleanup: " + text(data["cleanup"]), "", "Local process execution is not container isolation."]
     if data["stop_reason"]:
         lines += ["", "Stopped: " + text(data["stop_reason"])]
+    if data.get("recovery"):
+        lines += ["", "## Recovery work", "", text(data["recovery"]["reason"]),
+                  "Original verification requirements were retained. Helper results are diagnostic prerequisites, not substitute goal proofs."]
+    if data.get("artifacts"):
+        lines += ["", "## Captured screenshots", "", "Captured artifacts are supporting records, not automatic visual verification."]
+        for artifact in data["artifacts"]:
+            lines += ["- " + text(artifact["path"]) + " — observation `" + text(artifact["observation_id"]) + "`"]
     return "\n".join(lines) + "\n"
 
 
@@ -112,7 +129,7 @@ def html_report(data):
     cards = []
     for check in data["checks"]:
         proofs = "".join("<li>" + esc(p["observed"]) + "<br><code>" + esc(p["observation_id"] or "not recorded") + "</code></li>" for p in check["evidence"])
-        cards.append('<article><h3>' + esc(check["description"]) + '</h3><strong>' + esc(check["status"]) + '</strong><ul>' + proofs + '</ul><p>' + esc(check["blocker"]) + '</p></article>')
+        cards.append('<article><h3>' + ('Recovery helper: ' if check.get('purpose') == 'recovery_helper' else '') + esc(check["description"]) + '</h3><strong>' + esc(check["status"]) + '</strong><ul>' + proofs + '</ul><p>' + esc(check["blocker"]) + '</p></article>')
     commands = []
     for step in data["steps"]:
         if step["tool"] in {"start_process", "execute_command"}:
@@ -132,6 +149,7 @@ def html_report(data):
                 svg.append(f'<path d="M{x + 285} {y + 28}h25l-7 -5m7 5l-7 5" stroke="#555" fill="none"/>')
     svg.append('</svg>')
     timeline = "".join('<li><code>' + esc(s["tool"]) + '</code> - ' + esc("success" if s["success"] else "failed" if s["success"] is False else s["state"]) + ' - evidence <code>' + esc(s["observation_id"] or "not recorded") + '</code></li>' for s in data["steps"])
+    captures = ''.join('<figure><img loading="lazy" style="max-width:100%" src="artifacts/' + esc(data["investigation_id"]) + '/' + esc(a["path"]) + '" alt="Captured browser state"><figcaption>Observation <code>' + esc(a["observation_id"]) + '</code></figcaption></figure>' for a in data.get("artifacts", []))
     architecture = data.get("application_map") or {}
     components = architecture.get("nodes", [])
     source_map = ''
@@ -149,7 +167,7 @@ def html_report(data):
             '<nav><a href="#results">Results</a><a href="#start">How to run</a><a href="#map">Execution map</a><a href="#steps">Recorded workflow</a></nav>'
             '<h2 id="results">Verification results</h2>' + ''.join(cards) + '<h2 id="start">How this project was run</h2><p>Recorded history, not a promise that services are still running. Review working directories and redacted values before reproducing.</p>' + (''.join(commands) or '<p>No startup command was executed.</p>') +
             '<h2 id="map">Execution map</h2><p>Actual recorded check-to-tool-to-observation links. This does not infer unobserved application connections.</p><div class="map">' + ''.join(svg) + '</div>' +
-            source_map + '<h2 id="steps">Recorded workflow</h2><ol>' + timeline + '</ol><h2>Cleanup and blockers</h2><p>' + esc(data["cleanup"]) + '</p><p>' + esc(data["stop_reason"]) + '</p><p>Local process execution is not container isolation. Rerunning uses a fresh investigation and fresh browser state.</p></html>')
+            source_map + '<h2 id="steps">Recorded workflow</h2><ol>' + timeline + '</ol>' + captures + '<h2>Cleanup and blockers</h2><p>' + esc(data["cleanup"]) + '</p><p>' + esc(data["stop_reason"]) + '</p><p>Local process execution is not container isolation. Rerunning uses a fresh investigation and fresh browser state.</p></html>')
 
 
 def persist(inv, state):

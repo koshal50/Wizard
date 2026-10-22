@@ -283,7 +283,20 @@ def report_html(inv_id: str, manager: InvestigationManager = Depends(get_manager
     content = fs_store.read_text(inv_id, "runbook.html")
     if content is None:
         raise HTTPException(409, "Runbook has not been generated yet")
-    return HTMLResponse(content, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+    return HTMLResponse(content, headers={"Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'"})
+
+
+@router.get("/{inv_id}/report/artifacts/{owner}/{name}")
+def report_artifact(inv_id: str, owner: str, name: str, manager: InvestigationManager = Depends(get_manager)):
+    from fastapi.responses import FileResponse
+    if owner != inv_id or not manager.get(inv_id) or Path(name).name != name:
+        raise HTTPException(404, "Artifact not found")
+    runbook = fs_store.read(inv_id, "runbook.json") or {}
+    allowed = {a["path"] for a in runbook.get("artifacts", [])}
+    path = fs_store.inv_dir(inv_id) / name
+    if name not in allowed or not path.is_file() or path.resolve().parent != fs_store.inv_dir(inv_id).resolve():
+        raise HTTPException(404, "Artifact not found")
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @router.get("/{inv_id}/architecture")

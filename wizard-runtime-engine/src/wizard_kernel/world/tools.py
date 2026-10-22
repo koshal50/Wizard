@@ -1,6 +1,7 @@
 """Tool executor — dispatches action dicts to sandbox operations.
 No technology-specific knowledge here. All tools return {ok, data, error, meta}."""
 import fnmatch
+import hashlib
 import json
 import socket
 import re
@@ -24,10 +25,12 @@ _REGISTERED_TOOLS = frozenset({
 
 
 class ToolExecutor:
-    def __init__(self, sandbox: SandboxRuntime, repo_path: str, browser=None) -> None:
+    def __init__(self, sandbox: SandboxRuntime, repo_path: str, browser=None, *, investigation_id=None, private_capture=False) -> None:
         self._sandbox = sandbox
         self._repo = Path(repo_path).resolve()
         self._browser = browser  # BrowserRuntime | None — set only when browser_enabled
+        self._investigation_id = investigation_id
+        self._private_capture = private_capture
 
     @property
     def browser(self):
@@ -152,10 +155,10 @@ class ToolExecutor:
         try:
             response = build_opener(_NoRedirect).open(request, timeout=timeout)
             status = response.status
-            raw = response.read(8192)
+            raw = response.read(8193)
         except HTTPError as exc:
             status = exc.code
-            raw = exc.read(8192)
+            raw = exc.read(8193)
         except OSError as exc:
             return {
                 "ok": False,
@@ -163,11 +166,22 @@ class ToolExecutor:
                 "error": str(exc)[:500],
                 "meta": {"url": safe_url, "method": method.upper()},
             }
-        text = raw.decode("utf-8", errors="replace")
+        complete = len(raw) <= 8192
+        text = raw[:8192].decode("utf-8", errors="replace")
+        structured = None
+        json_valid = False
+        if complete:
+            try:
+                from wizard_kernel.control.flow_trace import safe_parameters
+                structured = safe_parameters({"response": json.loads(text)})["response"]
+                json_valid = True
+            except (ValueError, TypeError):
+                pass
         text = re.sub(r"(?i)(authorization|api[_ -]?key|token|secret|password)(\s*[:=]\s*)[^\s,;]+",
-                      r"\1\2[REDACTED]", text)[:2000]
+                      r"\1\2[REDACTED]", text)
         return {"ok": True, "data": {"url": safe_url, "method": method.upper(),
-                "status_code": status, "body_preview": text, "timeout_sec": timeout}, "error": None,
+                "status_code": status, "body_preview": text[:2000], "body_preview_truncated": not complete or len(text) > 2000, "json_body": structured,
+                "body_complete": complete, "json_valid": json_valid, "timeout_sec": timeout}, "error": None,
                 "meta": {"url": safe_url, "method": method.upper(), "status_code": status}}
 
     # ── Background process tools ───────────────────────────────────────────────
@@ -338,10 +352,25 @@ class ToolExecutor:
     def _tool_browser_screenshot(self) -> dict:
         if (err := self._browser_ready()) is not None:
             return err
+        if self._private_capture:
+            return {'ok': False, 'data': None, 'meta': {},
+                    'error': 'Screenshot withheld because configured private inputs may be visible'}
         import uuid
         from wizard_kernel.storage import fs_store
-        path = fs_store.ensure(self.control.inv.id) / f'screenshot_{uuid.uuid4().hex[:8]}.png'
+        inv_id = self._investigation_id or getattr(getattr(getattr(self, 'control', None), 'inv', None), 'id', None)
+        if not inv_id:
+            raise RuntimeError('Screenshot capture requires an investigation owner')
+        path = fs_store.ensure(inv_id) / f'screenshot_{uuid.uuid4().hex}.png'
         self._browser.screenshot(str(path))
         if not path.is_file() or not path.stat().st_size:
             raise RuntimeError('Browser did not capture a screenshot')
-        return {'ok': True, 'data': {'path': str(path), 'bytes': path.stat().st_size}, 'meta': {}, 'error': None}
+        if path.stat().st_size > 10 * 1024 * 1024:
+            path.unlink()
+            raise RuntimeError('Screenshot exceeded the 10 MB artifact limit')
+        image = path.read_bytes()
+        if not image.startswith(b'\x89PNG\r\n\x1a\n'):
+            path.unlink()
+            raise RuntimeError('Browser capture is not a PNG artifact')
+        return {'ok': True, 'data': {'path': path.name, 'bytes': len(image),
+                'sha256': hashlib.sha256(image).hexdigest(),
+                'url': (self._browser.page_view() or {}).get('url')}, 'meta': {}, 'error': None}

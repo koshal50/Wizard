@@ -11,11 +11,42 @@ _SOURCES = {
 }
 
 
+def _structured_value(data, assertion):
+    if assertion.field == "json_value":
+        if not data.get("body_complete") or not data.get("json_valid") or "json_body" not in data:
+            return False, None
+        value = data["json_body"]
+        try:
+            for part in assertion.json_pointer.split("/")[1:]:
+                key = part.replace("~1", "/").replace("~0", "~")
+                if isinstance(value, list):
+                    if not key.isascii() or not key.isdigit() or len(key) > 1 and key.startswith("0"):
+                        return False, None
+                    value = value[int(key)]
+                else:
+                    value = value[key]
+        except (KeyError, IndexError, TypeError, ValueError):
+            return False, None
+        if isinstance(value, (dict, list)) or isinstance(value, str) and any(marker in value for marker in ("[REDACTED]", "[EMAIL]", "…")):
+            return False, None
+        return True, value
+    if assertion.field in {"visible", "enabled", "count"}:
+        if not data.get("controls_complete"):
+            return False, None
+        matches = [c for c in data.get("controls", [])
+                   if c.get("role") == assertion.role and c.get("name") == assertion.name]
+        if assertion.field == "count":
+            return True, len(matches)
+        if len(matches) == 1 and assertion.field in matches[0]:
+            return True, matches[0][assertion.field]
+    return False, None
+
+
 def evaluate(check: CheckSpec, observations: list) -> list[dict]:
     scoped = [o for o in observations if o.goal_id == check.id]
     results = []
     process_commands = {}
-    for obs in scoped:
+    for obs in observations:
         data = obs.payload.get("data") or {}
         handle = data.get("handle_id") or (obs.payload.get("meta") or {}).get("handle_id")
         if handle and data.get("command"):
@@ -23,9 +54,37 @@ def evaluate(check: CheckSpec, observations: list) -> list[dict]:
     for assertion in check.assertions:
         submitted = False
         candidate = None
-        for obs in scoped:
+        superseded_by = None
+        for obs in observations:
             payload = obs.payload
             data = payload.get("data") or {}
+            # Current-state evidence is invalidated by later mutations, including
+            # mutations owned by another check. Historical verdicts are retained
+            # by Runtime; evaluating a check again asks about its current state.
+            if assertion.source == "browser" and obs.source_tool in {
+                    "browser_navigate", "browser_back", "browser_click", "browser_type", "browser_fill_form"}:
+                if candidate:
+                    superseded_by = obs.id
+                candidate = None
+                submitted = False
+            if (candidate and assertion.source == "browser" and obs.goal_id != check.id
+                    and obs.source_tool in {"browser_snapshot", "browser_extract", "browser_assertion"}):
+                superseded_by = obs.id
+                candidate = None
+            if candidate and assertion.source == "process" and obs.source_tool in {"read_process", "kill_process"}:
+                old_data = candidate[0].payload.get("data") or {}
+                old_handle = old_data.get("handle_id") or (candidate[0].payload.get("meta") or {}).get("handle_id")
+                new_handle = data.get("handle_id") or data.get("killed") or (payload.get("meta") or {}).get("handle_id")
+                if old_handle and old_handle == new_handle and (not obs.success or data.get("is_running") is False or obs.source_tool == "kill_process"):
+                    superseded_by = obs.id
+                    candidate = None
+            if candidate and assertion.source == "http" and obs.source_tool == "http_request" and data.get("status_code") is None:
+                old_url = (candidate[0].payload.get("data") or {}).get("url")
+                if old_url and old_url == data.get("url"):
+                    superseded_by = obs.id
+                    candidate = None
+            if obs.goal_id != check.id:
+                continue
             if obs.source_tool == "browser_click" and payload.get("ok") and data.get("submitted_form"):
                 submitted = True
             if obs.source_tool not in _SOURCES[assertion.source]:
@@ -56,17 +115,32 @@ def evaluate(check: CheckSpec, observations: list) -> list[dict]:
                 expected_target = expected_target.replace("\\", "/")
             if expected_target and target != expected_target:
                 continue
-            if assertion.field in actual_data:
+            found, structured = _structured_value(actual_data, assertion)
+            if found:
+                candidate = (obs, structured)
+                superseded_by = None
+            elif assertion.field in {"visible", "enabled", "count", "json_value"}:
+                if candidate:
+                    superseded_by = obs.id
+                candidate = None
+            elif assertion.field in actual_data and assertion.field not in {"visible", "enabled", "count", "json_value"}:
                 candidate = (obs, actual_data[assertion.field])
             elif assertion.field in payload:
                 candidate = (obs, payload[assertion.field])
         expectation = assertion.model_dump()
         if candidate is None:
             results.append({"assertion": expectation, "verdict": "unverified", "actual": None,
-                            "observation_id": None, "reason": "No compatible observation"})
+                            "observation_id": None, "superseded_by": superseded_by,
+                            "reason": "Evidence superseded by " + superseded_by if superseded_by else "No compatible observation"})
             continue
         obs, actual = candidate
-        text = str(actual).lower() if isinstance(actual, bool) else str(actual)
+        data = obs.payload.get("data") or {}
+        data = data.get("page_observation") or data
+        if assertion.operator == "not_contains" and data.get(assertion.field + "_truncated"):
+            results.append({"assertion": expectation, "verdict": "unverified", "actual": None,
+                            "observation_id": obs.id, "reason": "Truncated evidence cannot prove absence"})
+            continue
+        text = "null" if actual is None and assertion.field == "json_value" else str(actual).lower() if isinstance(actual, bool) else str(actual)
         expected = assertion.expected
         passed = {"equals": text == expected, "contains": expected in text,
                   "not_contains": expected not in text}[assertion.operator]

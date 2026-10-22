@@ -2,7 +2,9 @@
 # Local manual-test launcher. Configuration is encrypted for the current Windows user.
 param(
     [ValidateSet('http://localhost:8090', 'http://localhost:3000')]
-    [string]$PublicOrigin = 'http://localhost:3000'
+    [string]$PublicOrigin = 'http://localhost:3000',
+    [ValidateRange(1, 65535)]
+    [int]$Port = 8090
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
@@ -31,7 +33,7 @@ Push-Location $root
 try {
     & $python -m backend.db check
     if ($LASTEXITCODE -ne 0) { throw 'Account database preflight failed; backend was not started.' }
-    & $python -m uvicorn backend.app:app --host 127.0.0.1 --port 8090 --no-access-log
+    & $python -m uvicorn backend.app:app --host 127.0.0.1 --port $Port --no-access-log
 }
 finally {
     Remove-Item Env:WIZARD_ACCOUNT_DATABASE_URL -ErrorAction SilentlyContinue

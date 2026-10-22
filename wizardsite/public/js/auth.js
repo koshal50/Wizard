@@ -66,6 +66,13 @@
     }
   };
 
+  async function accountJSON(response) {
+    try { return await response.json(); }
+    catch (_) {
+      throw new Error('The account service returned an invalid response (HTTP ' + response.status + '). Check that the Wizard account backend is running and the website points to its port.');
+    }
+  }
+
   var contextRequest;
   async function sessionContext() {
     if (contextRequest) return contextRequest;
@@ -73,7 +80,7 @@
       var response = await fetch('/api/auth/context', {
         credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000)
       });
-      var context = await response.json();
+      var context = await accountJSON(response);
       if (!response.ok || !/^[a-f0-9]{64}$/.test(context.csrf) ||
           typeof context.cli_pending !== 'boolean' ||
           (context.account !== null && (!context.account || typeof context.account.id !== 'string' ||
@@ -131,7 +138,7 @@
             headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': current.csrf },
             body: '{}', signal: AbortSignal.timeout(8000)
           });
-          var result = await response.json();
+          var result = await accountJSON(response);
           if (!response.ok || result.signed_out !== true) throw new Error('Sign out was not confirmed. Retry.');
         }
         if ((await sessionContext()).account) throw new Error('Sign out was not confirmed. Reload and retry.');
@@ -188,7 +195,7 @@
           var verifiedResponse = await fetch('/api/auth/context', {
             credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(8000)
           });
-          var verified = await verifiedResponse.json();
+          var verified = await accountJSON(verifiedResponse);
           if (!verifiedResponse.ok || !verified.account || typeof verified.account.id !== 'string' ||
               typeof verified.cli_pending !== 'boolean') {
             throw new Error('Authentication was not verified. Reload and try signing in.');
@@ -196,7 +203,7 @@
           window.location.assign(verified.cli_pending ? '/cli/connect' : '/');
           return;
         }
-        var result = await response.json();
+        var result = await accountJSON(response);
         if (result.error === 'already_authenticated') {
           var current = await sessionContext();
           if (current.account) showExistingSession(form, current);

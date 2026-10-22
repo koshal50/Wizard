@@ -312,21 +312,72 @@ def _spawn(spec: ServiceSpec, log_dir: Path) -> "subprocess.Popen | None":
         raise RuntimeError(f"could not start {spec.key}: {exc} (log: {spec_log})") from exc
 
 
-def ensure_service(spec: ServiceSpec, log_dir: Path) -> ServiceState:
+def _retire_idle_runtime(spec: ServiceSpec) -> tuple[bool, str]:
+    """Replace only a verified, idle Runtime from this Python environment.
+
+    Never kill a process merely because it occupies the configured port.
+    """
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{spec.port}/v1/investigations", timeout=3) as response:
+            investigations = json.load(response)
+        from wizard_kernel.contracts.status import is_terminal
+        if not isinstance(investigations, list) or any(not is_terminal(item.get("status", "")) for item in investigations):
+            return False, "Runtime is finishing an investigation; keep it running and reconnect after it finishes"
+        if os.name != "nt" or not spec.argv:
+            return False, "Stop the previous Runtime before loading this update"
+        shell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        # Fixed script: arguments are data via environment, never interpolated shell code.
+        script = r"""
+$ErrorActionPreference = 'Stop'
+$listeners = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:WIZARD_REPLACE_PORT))
+$owners = @($listeners.OwningProcess | Select-Object -Unique)
+if ($owners.Count -ne 1) { exit 2 }
+$target = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $owners[0])
+$launcher = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $target.ParentProcessId)
+$owned = $target.ExecutablePath -ieq $env:WIZARD_REPLACE_PYTHON
+if (-not $owned -and $launcher) {
+    $owned = $launcher.ExecutablePath -ieq $env:WIZARD_REPLACE_PYTHON -and
+        $launcher.CommandLine -match 'uvicorn\s+wizard_kernel\.main:app' -and
+        $launcher.CreationDate -le $target.CreationDate
+}
+if (-not $owned -or
+    $target.CommandLine -notmatch 'uvicorn\s+wizard_kernel\.main:app' -or
+    $target.CommandLine -notmatch ('--port\s+' + $env:WIZARD_REPLACE_PORT + '(\s|$)')) { exit 3 }
+Stop-Process -Id $target.ProcessId -ErrorAction Stop
+"""
+        result = subprocess.run([str(shell), "-NoProfile", "-NonInteractive", "-Command", script],
+            env={**os.environ, "WIZARD_REPLACE_PORT": str(spec.port), "WIZARD_REPLACE_PYTHON": str(Path(spec.argv[0]).resolve())},
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW)
+        if result.returncode:
+            return False, "Could not confirm ownership of the older Runtime; it was left untouched"
+        deadline = time.monotonic() + 5
+        while port_open(spec.port) and time.monotonic() < deadline:
+            time.sleep(.1)
+        return not port_open(spec.port), "Previous Runtime did not release its port"
+    except (OSError, ValueError, urllib.error.URLError, subprocess.TimeoutExpired):
+        return False, "Could not safely inspect the older Runtime; it was left untouched"
+
+
+def ensure_service(spec: ServiceSpec, log_dir: Path, *, cancel_event=None) -> ServiceState:
     """Adopt the service if it is up, start it if it is not, else report why not.
 
     The order matters: probe BEFORE spawning, because spawning a second kernel
     on a busy port fails at bind time with a confusing error, and because an
     already-running service may hold live investigations we must not disturb.
     """
+    if cancel_event is not None and cancel_event.is_set():
+        return ServiceState(spec=spec, status="unavailable", detail="startup cancelled")
     if healthy(spec):
         expected_build = (spec.env or {}).get("WIZARD_BUILD_ID")
         if expected_build and service_build_id(spec) != expected_build:
+            replaced, reason = _retire_idle_runtime(spec) if spec.key == "kernel" else (False, "Restart this service to load the update")
+            if replaced:
+                return ensure_service(spec, log_dir, cancel_event=cancel_event)
             return ServiceState(
                 spec=spec,
                 status="unavailable",
-                detail=(f"an older Wizard {spec.label} is already running on :{spec.port}; "
-                        "stop that Wizard process and run wizard again to load the current code"),
+                detail=reason,
             )
         # An adopted Runtime is somebody else's process and may be an older
         # build than this CLI. Adopting it is still right — killing it would
@@ -361,6 +412,8 @@ def ensure_service(spec: ServiceSpec, log_dir: Path) -> ServiceState:
             detail=f"port {spec.port} is held by something that does not answer {spec.health_path}",
         )
 
+    if cancel_event is not None and cancel_event.is_set():
+        return ServiceState(spec=spec, status="unavailable", detail="startup cancelled")
     try:
         process = _spawn(spec, log_dir)
     except RuntimeError as exc:
@@ -368,6 +421,8 @@ def ensure_service(spec: ServiceSpec, log_dir: Path) -> ServiceState:
 
     deadline = time.monotonic() + START_TIMEOUT_S
     while time.monotonic() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            return ServiceState(spec=spec, status="unavailable", detail="startup cancelled", process=process)
         if healthy(spec):
             return ServiceState(
                 spec=spec, status="started",
@@ -382,7 +437,10 @@ def ensure_service(spec: ServiceSpec, log_dir: Path) -> ServiceState:
                 spec=spec, status="unavailable",
                 detail=f"exited with code {process.returncode}{tail}",
             )
-        time.sleep(HEALTH_INTERVAL_S)
+        if cancel_event is None:
+            time.sleep(HEALTH_INTERVAL_S)
+        else:
+            cancel_event.wait(HEALTH_INTERVAL_S)
 
     _terminate(process)
     return ServiceState(
@@ -521,13 +579,18 @@ class ServiceSupervisor:
         self.log_dir = log_dir or (Path(os.getcwd()) / ".wizard" / "logs")
         self.report: ServiceReport | None = None
 
-    def ensure_all(self, specs: list[ServiceSpec] | None = None) -> ServiceReport:
+    def ensure_all(self, specs: list[ServiceSpec] | None = None, *, cancel_event=None) -> ServiceReport:
         """Bring up every service, and record what happened to each."""
         specs = specs if specs is not None else build_specs()
         report = ServiceReport()
         self.report = report
         for spec in specs:
-            report.states.append(ensure_service(spec, self.log_dir))
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            if cancel_event is None:
+                report.states.append(ensure_service(spec, self.log_dir))
+            else:
+                report.states.append(ensure_service(spec, self.log_dir, cancel_event=cancel_event))
         self.report = report
         return report
 
@@ -570,7 +633,7 @@ class ServiceSupervisor:
         os.environ.update(env)
         return env
 
-    def stop(self) -> list[str]:
+    def stop(self, *, announce: bool = True) -> list[str]:
         """Stop the children we started. Returns the labels stopped.
 
         Adopted services are skipped by construction — `process` is None for
@@ -599,7 +662,13 @@ class ServiceSupervisor:
             worker.join(timeout=max(0, deadline - time.monotonic()))
         failures.extend(state.spec.label for state in owned if state.process.poll() is None)
         if failures:
-            print("Could not stop owned services: " + ", ".join(failures), flush=True)
+            message = "Could not stop owned services: " + ", ".join(failures)
+            if announce:
+                print(message, flush=True)
+            else:
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                with (self.log_dir / "cleanup.log").open("a", encoding="utf-8") as stream:
+                    stream.write(message + "\n")
         return [label for label in stopped if label not in failures]
 
 

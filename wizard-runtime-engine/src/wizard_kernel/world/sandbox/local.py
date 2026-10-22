@@ -11,6 +11,8 @@ import sys
 import threading
 import time
 import uuid
+import codecs
+import logging
 from pathlib import Path
 from wizard_kernel.contracts.tool import CommandResult
 from wizard_kernel.contracts.process import BackgroundProcess
@@ -95,11 +97,12 @@ def _terminate_process(proc):
 class _BackgroundHandle:
     """Internal state for one background process."""
     def __init__(self, handle_id: str, proc: subprocess.Popen,
-                 command: str, cwd: str) -> None:
+                 command: str, cwd: str, output_callback=None) -> None:
         self.handle_id = handle_id
         self.proc = proc
         self.command = command
         self.cwd = cwd
+        self._output_callback = output_callback
         self._stdout_buf: list[str] = []
         self._stderr_buf: list[str] = []
         self._lock = threading.Lock()
@@ -110,14 +113,30 @@ class _BackgroundHandle:
         self._t_err.start()
 
     def _read_stdout(self) -> None:
-        for line in iter(self.proc.stdout.readline, ""):
-            with self._lock:
-                self._stdout_buf.append(line)
+        self._read_stream(self.proc.stdout, self._stdout_buf, "stdout")
 
     def _read_stderr(self) -> None:
-        for line in iter(self.proc.stderr.readline, ""):
+        self._read_stream(self.proc.stderr, self._stderr_buf, "stderr")
+
+    def _read_stream(self, pipe, buffer, stream):
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        while True:
+            chunk = os.read(pipe.fileno(), 4096)
+            text = decoder.decode(chunk, final=not chunk)
             with self._lock:
-                self._stderr_buf.append(line)
+                buffer.append(text)
+            if self._output_callback and (text or not chunk):
+                try:
+                    self._output_callback({"handle_id": self.handle_id, "pid": self.proc.pid,
+                        "stream": stream, "text": text, "eof": not chunk})
+                except Exception:
+                    logging.getLogger(__name__).warning("Process output delivery failed")
+            if not chunk:
+                break
+
+    def finish_reading(self):
+        self._t_out.join(timeout=1)
+        self._t_err.join(timeout=1)
 
     def snapshot(self) -> BackgroundProcess:
         with self._lock:
@@ -147,6 +166,7 @@ class LocalProcessRuntime:
         self._closed = False
         self.deadline_at = None
         self._foreground: dict[int, subprocess.Popen] = {}
+        self.output_callback = None
 
     def start(self, workspace_path: str) -> None:
         self._workspace = Path(workspace_path).resolve()
@@ -229,11 +249,19 @@ class LocalProcessRuntime:
                     proc.kill()
                     raise RuntimeError('Investigation stopped before command execution')
                 self._foreground[proc.pid] = proc
+            streaming = _BackgroundHandle(f"cmd_{uuid.uuid4().hex[:8]}", proc, command, str(work_cwd), self.output_callback) if self.output_callback else None
+            def collect(timeout):
+                if streaming is None:
+                    return proc.communicate(timeout=timeout)
+                proc.wait(timeout=timeout)
+                streaming.finish_reading()
+                snapshot = streaming.snapshot()
+                return snapshot.stdout_so_far, snapshot.stderr_so_far
             try:
-                stdout, stderr = proc.communicate(timeout=timeout_sec)
+                stdout, stderr = collect(timeout_sec)
             except subprocess.TimeoutExpired:
                 _terminate_process(proc)
-                stdout, stderr = proc.communicate(timeout=1)
+                stdout, stderr = collect(1)
                 return CommandResult(ok=False, exit_code=-1, stdout=stdout[:65536],
                                      stderr=f"timeout after {timeout_sec}s; {stderr[-4000:]}",
                                      duration_ms=timeout_sec * 1000.0)
@@ -289,7 +317,7 @@ class LocalProcessRuntime:
             encoding="utf-8", errors="replace", bufsize=1, **kwargs
         )
         handle_id = f"proc_{uuid.uuid4().hex[:8]}"
-        handle = _BackgroundHandle(handle_id, proc, command, str(work_cwd))
+        handle = _BackgroundHandle(handle_id, proc, command, str(work_cwd), self.output_callback)
         with self._resource_lock:
             if self._closed:
                 handle.kill()

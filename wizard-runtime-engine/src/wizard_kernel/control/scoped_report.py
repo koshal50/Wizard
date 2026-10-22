@@ -704,7 +704,7 @@ def executive_findings(ctx):
     return findings[:6]
 
 
-def render(inv, graph, observations, kg=None, goals=None):
+def render(inv, graph, observations, kg=None, goals=None, *, failure=None):
     from wizard_kernel.storage import fs_store
 
     ctx = ReportContext.extract(inv, graph, observations, kg, goals)
@@ -720,7 +720,7 @@ def render(inv, graph, observations, kg=None, goals=None):
         ", ".join("API" if t == "api" else "CI" if t == "ci" else t.title() for t in targets)
         or "Existing investigation state"
     )
-    reason = inv.error or inv.last_event or "No final reason recorded"
+    reason = failure or inv.error or inv.last_event or "No final reason recorded"
     missing = [
         (g, goals.evidence_status(g.id, ctx.observations)["missing"])
         for g in ctx.goals

@@ -159,6 +159,17 @@ def _start_declared_servers(tools, obs_store, repo_path, bus, probed) -> None:
                 pass
 
 
+def _emit_tool_observed(bus, observation):
+    if bus is not None:
+        bus.emit(event_bus.ToolObserved, {
+            "observation_id": observation.id,
+            "node_id": observation.node_id,
+            "tool": observation.source_tool,
+            "ok": bool(observation.payload.get("ok", True)),
+            "result": flow_trace.execution_preview(observation.payload),
+        })
+
+
 def _probe_started_process(
     tools: "ToolExecutor",
     obs_store: ObservationStore,
@@ -173,6 +184,7 @@ def _probe_started_process(
     delay: float | None = None,
     cancel_check=None,
     sanitize=None,
+    bus=None,
 ) -> "str | None":
     """Runtime-owned readiness + endpoint discovery after a server is started.
 
@@ -218,20 +230,21 @@ def _probe_started_process(
             rp = sanitize(rp)
         reads += 1
         data = rp.get("data") or {}
-        output = " ".join(str(data.get(k) or "") for k in
+        output = " ".join(str(data.get(k) or rp.get(k) or "") for k in
                            ("stdout_so_far", "stderr_so_far", "stdout", "stderr"))
         text = " ".join((output, str(data.get("command") or ""),
                          str(data.get("cwd") or "")))
         running = data.get("is_running", rp.get("is_running"))
         signature = (running, data.get("exit_code"), text)
         if signature != last_process_signature:
-            obs_store.append(
+            process_observation = obs_store.append(
                 node_id=node.id, source_tool="read_process",
                 obs_type=_TOOL_TO_OBS_TYPE.get("read_process", "command_result"),
                 payload=rp, goal_id=active_goal_id, tool_request_id=None,
                 execution_id=uuid.uuid4().hex,
                 evidence_categories=evidence_categories_for_tool("read_process", rp),
             )
+            _emit_tool_observed(bus, process_observation)
             last_process_signature = signature
         for url, port in _extract_endpoints(output):
             endpoints.setdefault(port, url)
@@ -252,13 +265,14 @@ def _probe_started_process(
                 validator.record_execution(
                     "check_port", {"host": "localhost", "port": port}, cp)
             last_probe_at[port] = now
-            obs_store.append(
+            port_observation = obs_store.append(
                 node_id=node.id, source_tool="check_port",
                 obs_type=_TOOL_TO_OBS_TYPE.get("check_port", "command_result"),
                 payload=cp, goal_id=active_goal_id, tool_request_id=None,
                 execution_id=uuid.uuid4().hex,
                 evidence_categories=evidence_categories_for_tool("check_port", cp),
             )
+            _emit_tool_observed(bus, port_observation)
             if (cp.get("data") or {}).get("active"):
                 ready_url = ready_url or url
         if ready_url:
@@ -771,6 +785,7 @@ def _run_loop(
             execution_id=execution_id,
             evidence_categories=evidence_categories_for_tool(tool_name, payload),
         )
+        _emit_tool_observed(bus, obs)
         flow_trace.record(inv.id, "runtime.execution.finished", node_id=node.id,
                           goal_id=active_goal_id, observation_id=obs.id,
                           tool_request_id=tool_action.get("tool_request_id"), tool=tool_name,
@@ -796,7 +811,7 @@ def _run_loop(
             _probed_handles.add(node.id)
             ready_endpoint = _probe_started_process(
                 tools, obs_store, node, active_goal_id, payload,
-                validator=validator)
+                validator=validator, bus=bus)
             flow_trace.record(
                 inv.id, "runtime.process_readiness", node_id=node.id,
                 goal_id=active_goal_id,

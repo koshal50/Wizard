@@ -34,6 +34,7 @@ StateTransitioned    = "investigation.state_changed"
 NodeStarted          = "node.started"        # the step is BEGINNING — see note
 NodeCompleted        = "node.completed"
 NodeFailed           = "node.failed"
+ToolObserved         = "tool.observed"       # bounded, sanitized actual execution output
 ClaimAdmitted        = "claim.admitted"       # carries type, key AND value — see note
 GoalSatisfied        = "goal.satisfied"
 BudgetLow            = "budget.low"

@@ -12,6 +12,20 @@ is a choice rather than a way past a title card.
 
 from __future__ import annotations
 
-from wizard.cli.tui.app import run_tui
+def run_tui(repo_path=None):
+    """Choose a terminal owner before importing either UI framework."""
+    import os
+    if os.environ.get("WIZARD_UI", "textual") == "textual":
+        try:
+            from wizard.cli.tui.textual_app import run_native
+        except ModuleNotFoundError as exc:
+            if exc.name != "textual":
+                raise
+            print('Wizard needs its updated UI dependencies: pip install -e ".[tui]"')
+            return
+        run_native(project=repo_path)
+    else:
+        from wizard.cli.tui.app import run_tui as legacy
+        legacy(repo_path)
 
 __all__ = ["run_tui"]

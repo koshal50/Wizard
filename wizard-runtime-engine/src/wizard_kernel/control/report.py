@@ -654,7 +654,7 @@ def _duration(start: datetime, end: datetime) -> str:
 
 
 
-def generate(inv, graph, observations, kg=None, goals=None):
+def generate(inv, graph, observations, kg=None, goals=None, *, failure=None):
     """Normal template-shaped report; diagnostic rendering remains opt-in."""
     from wizard_kernel.control.scoped_report import render
-    return render(inv, graph, observations, kg, goals)
+    return render(inv, graph, observations, kg, goals, failure=failure)

@@ -277,6 +277,9 @@ class Packager:
                 "completed_evidence": evidence["completed"],
                 "missing_evidence": evidence["missing"],
             })
+        process_observations = [
+            o for o in observations if o.source_tool in {"start_process", "read_process", "kill_process", "list_processes"}
+        ]
         port_observations = [
             o for o in observations
             if o.source_tool == "check_port" and (o.payload or {}).get("data", {}).get("active")

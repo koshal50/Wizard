@@ -198,6 +198,51 @@ def test_provider_failure_is_not_a_recovery_trigger(tmp_path):
     assert saved["provider_status"] == 429 and not saved.get("recovery_attempted")
 
 
+def test_observed_submission_contract_requires_result_assessment_not_missing_tools():
+    from wizard_kernel.contracts.verification import decision_model
+    model = decision_model(["read_file"], allow_evaluate=False, allow_blocked=False,
+        allow_refine=True, browser_refinement=True, require_submission=True,
+        browser_targets=["http://localhost/result"])
+    with pytest.raises(ValidationError):
+        model.model_validate({"decision": {"kind": "blocked", "reason": "No interaction tools"}})
+    response = model.model_validate({"decision": {"kind": "refine", "reason": "Assess actual submitted result",
+        "refinement": {"observation_ids": ["result_snapshot"], "assertions": [{
+            "source": "browser", "field": "snapshot", "operator": "contains",
+            "expected": "Observed signed-in content", "after_submission": True,
+            "target": "http://localhost/result"}]}}})
+    assert response.decision.kind == "refine"
+
+
+def test_unchanged_process_is_freshly_observed_for_dependent_check(tmp_path):
+    (tmp_path / "service.py").write_text("import time\ntime.sleep(30)\n")
+    first = check(field="is_running", source="process", expected="true")
+    second = first.model_copy(update={"id": "dependent", "depends_on": ["goal"]})
+
+    class Policy:
+        explorer_calls = 0
+
+        def request(self, role, context, model, **kwargs):
+            if role == "planner":
+                return model.model_validate({"checks": [first.model_dump(), second.model_dump()]})
+            if role == "verifier":
+                raise ModelFailure("http", "Advisory unavailable", status=422)
+            self.explorer_calls += 1
+            assert context["current_check"]["id"] == "goal"
+            return model.model_validate({"decision": {"kind": "tool", "reason": "Start fixture process",
+                "action": {"tool": "start_process", "parameters": {
+                    "command": command(sys.executable, "service.py"), "cwd": "."}}}})
+
+    policy = Policy()
+    manager = InvestigationManager()
+    inv = manager.create(InvestigationRequest(repository_path=str(tmp_path), intent="verify",
+        question="Check the running process twice", options={"budget": 5}))
+    verification.run(inv, manager, policy)
+    saved = fs_store.read(inv.id, "verification.json")
+    assert saved["results"]["goal"]["status"] == "passed", saved
+    assert saved["results"]["dependent"]["status"] == "passed", saved
+    assert policy.explorer_calls == 1
+
+
 def test_screenshot_has_owner_artifact_and_private_capture_is_withheld(tmp_path):
     class Browser:
         started = True
@@ -353,3 +398,4 @@ def test_recovery_cannot_repeat_after_its_single_round(tmp_path):
     assert inv.state.value == "incomplete"
     assert saved["results"]["goal"]["status"] != "passed"
     assert len(saved["recovery_rechecks"]) == 1
+

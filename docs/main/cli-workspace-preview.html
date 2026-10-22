@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wizard — post-login design</title><style>
+*{box-sizing:border-box}body{margin:0;background:#08080a;color:#f3f1ec;font:14px Consolas,monospace}
+header{padding:24px 28px 12px}h1{font-size:18px;font-weight:500;margin:0 0 10px}p{color:#9d99a5;line-height:1.7;margin:0}
+nav{display:flex;gap:8px;flex-wrap:wrap;padding:12px 28px}button{font:inherit;background:none;color:#aaa4b4;border:0;padding:10px 14px;cursor:pointer;border-bottom:1px solid transparent}
+button[aria-pressed=true]{color:#f3f1ec;border-color:#9b7ede}button:focus-visible{outline:1px solid #9b7ede}
+main{max-width:1600px;margin:auto}img{width:100%;display:block}footer{color:#9d99a5;padding:20px 28px;line-height:1.8}
+</style><header><h1>Wizard / after login</h1><p>Choose a screen. This is a local design preview with sample data — not a running investigation.</p></header>
+<nav aria-label="Design screens"><button type="button" data-view="home" aria-pressed="false">After login</button><button type="button" data-view="live" aria-pressed="true">Live check</button><button type="button" data-view="details" aria-pressed="false">Inspect a step</button><button type="button" data-view="browser" aria-pressed="false">Browser proof</button><button type="button" data-view="results" aria-pressed="false">Final report</button><button type="button" data-view="help" aria-pressed="false">Needs your help</button> <a href="cli-live-preview.html" style="color:#b8a0e4;padding:10px">Open the compact motion preview</a></nav><main><img id="screen" src="cli-workspace-live.svg" alt="Live check design"></main>
+<footer>Activity grows as real events arrive. Details open on demand. Page captures stay dated. The reaper never covers the input.<br>
+The first three onboarding screens remain in cli-storyboard.svg. This study expands the fourth screen and what follows.</footer>
+<script>document.querySelectorAll('button[data-view]').forEach(button=>button.addEventListener('click',()=>{
+document.querySelectorAll('button[data-view]').forEach(item=>item.setAttribute('aria-pressed',String(item===button)));
+const image=document.getElementById('screen');image.src='cli-workspace-'+button.dataset.view+'.svg';image.alt=button.textContent+' design';}));</script></html>

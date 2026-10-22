@@ -9,5 +9,8 @@
       "path": "../wizar-web"
     }
   ],
-  "settings": {}
+  "settings": {
+    "terminal.integrated.enableImages": true,
+    "terminal.integrated.gpuAcceleration": "on"
+  }
 }

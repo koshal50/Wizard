@@ -110,6 +110,7 @@ class WizardTUI:
     """Owns all mutable UI state and wires prompt_toolkit together."""
 
     def __init__(self, repo_path: str | None = None) -> None:
+        self.modern_ui = os.environ.get("WIZARD_UI") == "modern"
         self.state = MENU
         self._start = time.monotonic()
 
@@ -189,6 +190,11 @@ class WizardTUI:
             focus_on_click=True,
         )
         self.input_frame = Frame(self.input, title="Intent / command", style="class:inputbox")
+        self.composer = (HSplit([
+            Window(height=1, char="─", style="class:composer-line"),
+            self.input,
+            Window(height=1, char="─", style="class:composer-line"),
+        ]) if self.modern_ui else self.input_frame)
         self.slash_menu = SlashMenu(self.input.buffer, self.input.completer,
             focused=lambda: hasattr(self, "app") and self.app.layout.has_focus(self.input),
             size=self._geometry)
@@ -202,7 +208,7 @@ class WizardTUI:
         # terminal gets the smaller, denser one.
         self.top_window = Window(
             content=_FixedControl(self._render_top),
-            height=lambda: top_panel_height(self._geometry()[1], self._geometry()[0]),
+            height=lambda: 3 if self.modern_ui else top_panel_height(self._geometry()[1], self._geometry()[0]),
             wrap_lines=False,
             always_hide_cursor=True,
         )
@@ -249,7 +255,7 @@ class WizardTUI:
                     filter=Condition(lambda: self.session is not None and self.state in (WORKING, RESULT))),
                 ConditionalContainer(self.usage_window, filter=Condition(
                     lambda: self.session is not None and self.state in (WORKING, RESULT))),
-                self.input_frame,
+                self.composer,
                 ConditionalContainer(
                     Window(content=FormattedTextControl(lambda: [("class:usage", self._input_notice)]),
                            height=self._notice_height, wrap_lines=True, always_hide_cursor=True),
@@ -262,16 +268,28 @@ class WizardTUI:
             Float(content=self.slash_menu.container, left=1, right=1, ycursor=True,
                   attach_to_window=self.input.window),
         ])
+        if self.modern_ui:
+            def render_companion():
+                from wizard.cli.tui.modern import companion
+                return render_to_ansi(companion(), 40)
+            self.composer_overlay.floats.append(Float(right=2, bottom=4, width=40, height=27,
+                content=ConditionalContainer(Window(content=FormattedTextControl(render_companion),
+                    always_hide_cursor=True), filter=Condition(lambda:
+                        self.state == MENU and not self.show_btw and not self._usage_report
+                        and not self._input_notice and self._geometry()[0] >= 100
+                        and self._geometry()[1] >= 40))))
         self.app: Application = Application(
-            layout=Layout(self.composer_overlay, focused_element=self.right_window),
+            layout=Layout(self.composer_overlay, focused_element=self.input if self.modern_ui else self.right_window),
             key_bindings=self._bindings(),
             style=Style.from_dict(
                 {
+                    "": "bg:#08080A #F3F1EC" if self.modern_ui else "",
+                    "composer-line": "#9B7EDE",
                     "inputbox": "#c084fc",           # visible violet frame border
                     "inputbox frame.border": "#c084fc",
-                    "usage": "#b8b1c5",
+                    "usage": "#7E7C88" if self.modern_ui else "#b8b1c5",
                     "slash-menu": "bg:#211a2e #b8b1c5",
-                    "slash-menu.selected": "bg:#5b2d7a #ffffff bold",
+                    "slash-menu.selected": "bg:#24202F #F3F1EC bold" if self.modern_ui else "bg:#5b2d7a #ffffff bold",
                 }
             ),
             full_screen=True,
@@ -287,7 +305,7 @@ class WizardTUI:
             # control labels) is still scrubbed by sanitize_terminal(); this
             # setting governs the live INPUT the terminal sends back.
             mouse_support=True,
-            refresh_interval=0.08,  # drives the ember animation
+            refresh_interval=None if self.modern_ui else 0.08,
         )
 
     # ------------------------------------------------------------------
@@ -313,12 +331,23 @@ class WizardTUI:
         identity = (width, rows, self._account_name)
         cached = self._static_frames.get("top")
         if cached is None or self._static_frames.get("top_identity") != identity:
+            if self.modern_ui:
+                from wizard.cli.tui.modern import header
+                content = header(self.repo_path, self._account_name)
+            else:
+                content = top_panel(self.repo_path, rows, width, self._account_name)
             cached = render_to_ansi(
-                top_panel(self.repo_path, rows, width, self._account_name), width
+                content, width
             )
             self._static_frames["top"] = cached
             self._static_frames["top_identity"] = identity
         return cached
+
+    def _surface(self, content):
+        if self.modern_ui:
+            from wizard.cli.tui.modern import surface
+            return surface(content)
+        return command_box(content)
 
     def _render_body(self):
         """The command box — the whole current screen, inside one border."""
@@ -340,12 +369,12 @@ class WizardTUI:
             content.append("\nNavigate to main chat: /btw main · Alt+B\n"
                            "Copy answer: /btw copy · Copy transcript: /btw copy all\n"
                            "New conversation: /btw new · /exit quits Wizard")
-            rendered = render_to_ansi(command_box(content), width)
+            rendered = render_to_ansi(self._surface(content), width)
             self._body_lines = rendered.value.count("\n") + 1
             return rendered
         if self._usage_report is not None:
             from rich.text import Text
-            rendered = render_to_ansi(command_box(Text(self._usage_report)), width)
+            rendered = render_to_ansi(self._surface(Text(self._usage_report)), width)
             self._body_lines = rendered.value.count("\n") + 1
             return rendered
 
@@ -370,11 +399,19 @@ class WizardTUI:
 
         if self.state == MENU:
             options = self._current_options()
-            content = menu_content(self.menu_level, options, self.selected, self.family)
+            if self.modern_ui:
+                from wizard.cli.tui.modern import welcome
+                content = welcome(self.menu_level, options, self.selected, self.family, self.repo_path)
+            else:
+                content = menu_content(self.menu_level, options, self.selected, self.family)
 
         elif self.state == INTENT:
-            content = intent_content(self.family, self.target, self.repo_path,
-                                     self.frontend_hint, self.frontend is not None)
+            if self.modern_ui:
+                from wizard.cli.tui.modern import intent
+                content = intent(self.family, self.target, self.repo_path)
+            else:
+                content = intent_content(self.family, self.target, self.repo_path,
+                                         self.frontend_hint, self.frontend is not None)
 
         elif self.state == WORKING:
             s = self.session
@@ -422,7 +459,7 @@ class WizardTUI:
             from rich.console import Group
             from rich.text import Text
             content = Group(content, Text("\nReturn to your conversation: /btw return · Alt+B"))
-        rendered = render_to_ansi(command_box(content), width)
+        rendered = render_to_ansi(self._surface(content), width)
         if self.show_report and self.session and self.state in (WORKING, RESULT) and not self.side_chat:
             self._runbook_frame = (report_key, rendered)
         if self.state == WORKING and not self.show_report:
@@ -436,9 +473,7 @@ class WizardTUI:
         if static:
             if len(self._static_frames) > 64:   # a resize storm must not grow it
                 self._static_frames.clear()
-                self._static_frames["top"] = render_to_ansi(
-                    top_panel(self.repo_path, self._geometry()[1], width, self._account_name), width
-                )
+                self._render_top()
             self._static_frames[key] = rendered
         return rendered
 
@@ -1156,6 +1191,11 @@ class WizardTUI:
             self._input_notice = "Draft retained. Esc returns to the command menu."
             return True
         elif self.state == MENU:
+            if self.modern_ui and command:
+                self.family, self.target = "verify", "runtime"
+                self._enter_intent()
+                self._input_notice = "Ready to check this goal. Submit again to start, or edit it first."
+                return True
             self._status_input = True
             self._input_notice = "Choose a command from the menu; draft retained."
             return True
@@ -1483,6 +1523,17 @@ def run_tui(repo_path: str | None = None) -> None:
     a run without them still works, and `seams.resolved` says so in the flow,
     which is what keeps an unwired run from looking like a wired one.
     """
+    if os.environ.get("WIZARD_UI", "textual") == "textual":
+        try:
+            from wizard.cli.tui.textual_app import run_native
+        except ModuleNotFoundError as exc:
+            if exc.name != "textual":
+                raise
+            print('Wizard needs its updated UI dependencies. In your Wizard environment run: pip install -e ".[tui]"')
+            return
+        run_native(project=repo_path)
+        return
+
     if repo_path:
         target = os.path.abspath(os.path.expanduser(repo_path))
         if not os.path.isdir(target):

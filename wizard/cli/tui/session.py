@@ -111,6 +111,9 @@ class TuiSession:
     runbook: dict | None = None
     report_path: str = ""
     activity: list[LogLine] = field(default_factory=list)
+    _streamed_executions: set[str] = field(default_factory=set)
+    _streamed_handles: set[str] = field(default_factory=set)
+    _live_stream_key: tuple | None = None
     now: str = ""                 # the latest real step — what it is doing
     nexts: list[str] = field(default_factory=list)  # the Runtime's own next steps
     started_at: float = field(default_factory=time.monotonic)
@@ -162,6 +165,7 @@ class TuiSession:
     # reader wants pointed at. See `_absorb_browser`.
     last_act: dict | None = None
     usage: dict | None = None
+    execution_outputs: list[dict] = field(default_factory=list)
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _thread: "threading.Thread | None" = field(default=None, repr=False)
@@ -210,6 +214,7 @@ class TuiSession:
                 "page": self.page,
                 "last_act": self.last_act,
                 "usage": self.usage,
+                "execution_outputs": list(self.execution_outputs),
             }
 
     # ------------------------------------------------------------------
@@ -323,7 +328,7 @@ class TuiSession:
             from wizard.cli.tui.services import ensure_chromium
             parsed = parse_intent(self.intent_text, self.family, menu_target=self.target or None)
             if parsed.urls or options.browser_enabled is True:
-                ensure_chromium(announce=False)
+                ensure_chromium()
 
         # The browser window is the point: a reader who watches the agent work
         # wants to see the page it is driving, not only the pane this view draws
@@ -421,7 +426,7 @@ class TuiSession:
         `cancelled` is checked again between the two halves so a held step never
         becomes a held-up quit.
         """
-        if self.pace <= 0:
+        if self.pace <= 0 or ev.get("event_type") == "process.output":
             return
         if self._lines_shown() <= shown_before:
             return
@@ -501,6 +506,43 @@ class TuiSession:
             with self._lock:
                 self.report_markdown = payload.get("report_markdown", "")
                 self.runbook = payload.get("runbook")
+            self.on_change()
+            return
+
+        if ev_type == "process.output":
+            delta = sanitize_terminal(str(payload.get("text") or ""))
+            if not delta:
+                return
+            key = (payload.get("handle_id"), payload.get("stream"))
+            with self._lock:
+                self._streamed_executions.add(str(payload.get("execution_id") or ""))
+                self._streamed_handles.add(str(payload.get("handle_id") or ""))
+                if self._live_stream_key == key and self.activity and self.activity[-1].kind == "output":
+                    previous = self.activity[-1]
+                    self.activity[-1] = LogLine((previous.text + delta)[-32768:], previous.style, "output")
+                else:
+                    self.activity.append(LogLine(str(key[0]) + " " + str(key[1]) + "\n" + delta, "wiz.dim", "output"))
+                self._live_stream_key = key
+            self.on_change()
+            return
+
+        if ev_type == "tool.observed":
+            result = payload.get("result")
+            if not isinstance(result, dict) or not result:
+                return
+            observation_id = payload.get("observation_id")
+            with self._lock:
+                if observation_id and any(item.get("observation_id") == observation_id for item in self.execution_outputs):
+                    return
+                self.execution_outputs = [*self.execution_outputs[-19:], {
+                    "observation_id": observation_id, "tool": str(payload.get("tool") or "tool"),
+                    "ok": payload.get("ok"), "result": dict(result),
+                }]
+                self.activity.append(LogLine("  " + str(payload.get("tool") or "tool") + " output", "wiz.dim", "output"))
+                for key, value in result.items():
+                    if (payload.get("node_id") in self._streamed_executions or result.get("handle_id") in self._streamed_handles) and key in {"stdout", "stderr", "stdout_so_far", "stderr_so_far"}:
+                        continue
+                    self.activity.append(LogLine("  " + sanitize_terminal(str(key) + ": " + str(value))[:4000], "wiz.dim", "output"))
             self.on_change()
             return
 
@@ -585,6 +627,15 @@ class TuiSession:
                 return
             self._log(line, style, _KIND.get(ev_type, "step"),
                       _role(ev_type, payload))
+            if ev_type.startswith("browser.") and isinstance(payload.get("page"), dict):
+                page = payload["page"]
+                controls = page.get("controls") or []
+                with self._lock:
+                    self.activity.append(LogLine("  " + sanitize_terminal(str(page.get("title") or page.get("url") or "Page observed")), "wiz.dim", "output"))
+                    for control in controls[:8]:
+                        if isinstance(control, dict):
+                            self.activity.append(LogLine("  " + sanitize_terminal(str(control.get("role") or "control") + " · " + str(control.get("name") or control.get("label") or "")), "wiz.dim", "output"))
+                self.on_change()
             if ev_type == "agent.decided":
                 with self._lock:
                     self._last_decision = line
@@ -915,17 +966,17 @@ def _narrate(ev_type: str, payload: dict) -> tuple[str, str]:
         who = str(payload.get("agent") or "agent")
         stage = payload.get("stage")
         if stage == "waiting":
-            return f"? {who}: waiting {payload.get('wait_seconds')}s for shared provider capacity", "wiz.flow"
+            return f"{who}: waiting {payload.get('wait_seconds')}s for shared provider capacity", "wiz.flow"
         if stage == "request":
-            return f"? {who}: provider request sent (timeout {payload.get('timeout_seconds')}s)", "wiz.flow"
+            return f"{who}: provider request sent (timeout {payload.get('timeout_seconds')}s)", "wiz.flow"
         if stage == "response":
-            return f"? {who}: provider HTTP {payload.get('status')} after {payload.get('elapsed_seconds')}s", "wiz.flow"
+            return f"{who}: provider HTTP {payload.get('status')} after {payload.get('elapsed_seconds')}s", "wiz.flow"
         if stage == "validated":
-            return f"? {who}: structured response validated", "wiz.flow"
-        return f"? {who}: provider {stage}", "wiz.flow"
+            return f"{who}: structured response validated", "wiz.flow"
+        return f"{who}: provider {stage}", "wiz.flow"
 
     if ev_type == "agent.completed":
-        return f"? {payload.get('agent_type', 'agent')} decision completed", "wiz.flow"
+        return f"{payload.get('agent_type', 'agent')} decision completed", "wiz.flow"
 
     if ev_type == "agent.consulted":
         agent = str(payload.get("agent_type") or "agent").lower()

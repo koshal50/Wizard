@@ -7,6 +7,7 @@ import re
 import json
 import time
 import uuid
+import threading
 from urllib.parse import urlsplit
 from dataclasses import replace
 from pathlib import Path
@@ -17,7 +18,7 @@ from wizard_kernel.contracts.status import LifecycleState, is_terminal
 from wizard_kernel.contracts.verification import TOOL_ACTIONS, VerificationSpec, decision_model, planning_model
 from wizard_kernel.control import checks, flow_trace
 from wizard_kernel.world import scanner
-from wizard_kernel.control.loop import _probe_started_process, _TOOL_TO_OBS_TYPE, _emit_browser_narration, _current_page
+from wizard_kernel.control.loop import _probe_started_process, _TOOL_TO_OBS_TYPE, _emit_browser_narration, _current_page, _emit_tool_observed
 from wizard_kernel.control.tool_validator import ToolRequestValidator
 from wizard_kernel.context.packager import _discover_runnable_commands
 from wizard_kernel.ports.model import ModelPolicy, prepare_context
@@ -30,6 +31,25 @@ from wizard_kernel.belief.knowledge_graph import KnowledgeGraph
 from wizard_kernel.belief.evidence import EvidenceEngine
 from wizard_kernel.belief import extractors, trust
 from wizard_kernel.control.investigation_graph import InvestigationGraph, register_graph
+
+
+def _process_output_sink(bus, execution_id, goal_id, sanitize, secret_window=0):
+    """Stream real pipe deltas; final tool observations remain the proof boundary."""
+    pending = {}
+    lock = threading.Lock()
+
+    def output(packet):
+        key = (packet["handle_id"], packet["stream"])
+        with lock:
+            text = sanitize(pending.get(key, "") + packet["text"])
+            count = len(text) if packet.get("eof") else max(0, len(text) - secret_window)
+            pending[key] = text[count:]
+            delta = text[:count]
+            if delta:
+                bus.emit("process.output", {"execution_id": execution_id, "goal_id": goal_id,
+                    "handle_id": packet["handle_id"], "pid": packet["pid"],
+                    "stream": packet["stream"], "text": delta})
+    return output
 
 
 def _redact(value, authorized, public_refs=()):
@@ -593,6 +613,10 @@ def run(inv, manager, policy=None, *, browser_factory=None):
         bus.emit(events.NodeStarted, {"node_id": execution["id"], "type": "browser" if tool.startswith("browser_") else "execute",
                                       "tool": tool, "params": flow_trace.safe_parameters(proposed), "goal_id": check_id})
         guard()
+        if tool in {"start_process", "execute_command"} and hasattr(sandbox, "output_callback"):
+            sandbox.output_callback = _process_output_sink(bus, execution["id"], check_id,
+                lambda text: _redact(text, authorized, public_refs),
+                max((len(v) for k, v in authorized.items() if k not in public_refs), default=0))
         payload = _redact(tools.execute({"tool": tool, "params": params}), authorized, public_refs)
         if "url" in params:
             payload.setdefault("meta", {})["target_url"] = flow_trace.safe_parameters({"url": params["url"]})["url"]
@@ -608,12 +632,13 @@ def run(inv, manager, policy=None, *, browser_factory=None):
         inv.nodes_completed += 1
         bus.emit(events.NodeCompleted if obs.success else events.NodeFailed,
                  {"node_id": execution["id"], "tool": tool, "ok": obs.success, "observation_id": obs.id})
+        _emit_tool_observed(bus, obs)
         if tool == "start_process" and payload.get("ok"):
             node = InvestigationNode(id=execution["id"], type="execute", action={},
                                      hypothesis=Hypothesis(kind=HypothesisKind.always_success))
             _probe_started_process(tools, store, node, check_id, payload, validator=validator,
                                    timeout_seconds=max(0, min(20, deadline-time.monotonic())), cancel_check=guard,
-                                   sanitize=lambda p: _redact(p, authorized, public_refs))
+                                   sanitize=lambda p: _redact(p, authorized, public_refs), bus=bus)
         if tool.startswith("browser_") and tool != "browser_screenshot" and payload.get("ok"):
             _emit_browser_narration(bus, tool, payload.get("data") or {}, page=_current_page(tools))
         save()
@@ -640,11 +665,13 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 continue
             current = _redact(tools.execute({"tool": "read_process", "params": params}), authorized, public_refs)
             validator.record_execution("read_process", params, current)
-            previous = next((o for o in reversed(store.all()) if o.source_tool == "read_process"
+            goal_id = check.id if any(a.source == "process" for a in check.assertions) else None
+            previous = next((o for o in reversed(store.all()) if o.source_tool == "read_process" and o.goal_id == goal_id
                              and (o.payload.get("meta") or {}).get("handle_id") == process.handle_id), None)
             if previous is None or previous.payload != current:
-                store.append(node_id="resource_state", goal_id=check.id if any(a.source == "process" for a in check.assertions) else None,
+                observed = store.append(node_id="resource_state", goal_id=goal_id,
                              source_tool="read_process", obs_type="command_result", payload=current, execution_id=uuid.uuid4().hex)
+                _emit_tool_observed(bus, observed)
 
     try:
         guard()
@@ -814,10 +841,17 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         progress["next_objective"] = "The fresh post-submission result is already observed. Resolve the requested outcome using refine and the result_observation_ids, or inspect relevant repository contracts if its meaning is unknown. Do not repeat snapshots or claim success merely because the page changed."
                     process_only = set(check.capabilities) == {"process"}
                     process_commands = [p["command"] for p in context["resource_state"]["processes"] if p.get("command")]
-                    model = decision_model(available, allow_evaluate=bool(check.assertions), value_refs=list(authorized),
+                    outcome_review = bool(not check.assertions and browser_grounded and progress.get("result_observation_ids"))
+                    if outcome_review:
+                        context["decision_contract"] = {
+                            "phase": "assess_observed_submission_result",
+                            "instruction": "The form was already filled and submitted successfully as an operation, not yet verified as an outcome. Interaction tools are temporarily withheld to prevent duplicate submission; they are NOT unavailable capabilities. Return kind=refine with browser assertions for the requested result grounded in the current observed page and result_observation_ids. Use after_submission=true. If the result is unclear, inspect repository contracts with the available read tools. Do not request another submission or report missing interaction capability.",
+                            "observation_ids": progress["result_observation_ids"],
+                        }
+                    model = decision_model(available, allow_evaluate=bool(check.assertions) and checks.verdict(results) != "unverified", value_refs=list(authorized),
                                            allow_refine=not check.assertions and (not auth_check or browser_grounded) and (not process_only or bool(process_commands)),
                                            browser_refinement="browser" in check.capabilities or any(a.source == "browser" for a in check.assertions),
-                                           allow_blocked=not (not check.assertions and not _resources(store.all())["browser"]
+                                           allow_blocked=not outcome_review and not (not check.assertions and not _resources(store.all())["browser"]
                                                               and "browser_navigate" in available),
                                            browser_targets=[(_resources(store.all())["browser"] or {}).get("url", "")],
                                            require_submission=auth_check,
@@ -1044,13 +1078,18 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     proof_ids = {a.get("observation_id") for result in state["results"].values() for a in result.get("assertions", [])}
                     proof_ids.update(o.id for o in store.all() if o.source_tool == "browser_click" and o.success
                                      and (o.payload.get("data") or {}).get("submitted_form"))
+                    proof_ids.update(o.id for o in store.all() if o.success and o.source_tool in {
+                        "browser_fill_form", "browser_type", "browser_snapshot", "browser_extract"})
                     review_evidence = []
                     for o in store.all():
                         if o.id not in proof_ids:
                             continue
                         data = o.payload.get("data") or {}
                         page = data.get("page_observation") or data
-                        detail = {key: page[key] for key in ("url", "title", "text", "is_running", "active", "status_code", "body_preview", "exit_code") if key in page}
+                        detail = {key: page[key] for key in ("url", "title", "text", "snapshot", "is_running", "active", "status_code", "body_preview", "exit_code") if key in page}
+                        if o.source_tool == "browser_fill_form":
+                            detail = {"all_filled": data.get("all_filled"), "fields": [
+                                {"selector": f.get("selector"), "typed": f.get("typed")} for f in data.get("fields", [])]}
                         if not detail:
                             detail = {key: o.payload[key] for key in ("exit_code", "stdout", "error") if key in o.payload}
                         review_evidence.append({"id": o.id, "goal_id": o.goal_id, "tool": o.source_tool, "success": o.success,

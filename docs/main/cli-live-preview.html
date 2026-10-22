@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wizard — compact live UI study</title>
+<style>
+:root{color-scheme:dark;--bg:#08080a;--fg:#f3f1ec;--dim:#8d8998;--accent:#9b7ede;--line:#28242f;--good:#a1b9a8;--bad:#df9a89}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 "JetBrains Mono","Cascadia Code",Consolas,monospace}
+button,input{font:inherit}button{color:var(--dim);background:none;border:0;padding:3px 8px;cursor:pointer;text-align:left}
+button:hover,button[aria-pressed=true]{color:var(--fg);background:#1c1725}button:focus-visible,input:focus-visible{outline:1px solid var(--accent);outline-offset:3px}
+.study{min-height:32px;padding:5px 20px;color:var(--dim);font-size:11px;border-bottom:1px solid #17141c;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}.study button{padding:0;color:#bda7e6}
+.app{height:calc(100dvh - 33px);min-height:530px;max-width:1440px;margin:auto;display:flex;flex-direction:column;padding:0 22px}
+header{height:48px;flex:none;display:flex;align-items:center;gap:12px}header strong{font-weight:600}header span{color:var(--dim)}header small{margin-left:auto;color:var(--dim)}
+.work{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:16px}
+.main{min-width:0;overflow:auto;scrollbar-color:#3c334e transparent;padding:10px 0 12px}
+.quiet{color:var(--dim)}h1{font-size:16px;font-weight:500;margin:0 0 14px}p{margin:5px 0}.commands{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:4px;margin-bottom:14px}
+.command{padding:9px 10px;border-bottom:1px solid transparent}.command[aria-pressed=true]{border-color:var(--accent)}.command strong{display:block;color:var(--fg);font-weight:500}.command small{display:block;font-size:11px;margin-top:2px}
+.targets{display:flex;gap:4px;flex-wrap:wrap;max-width:660px;margin:8px 0 14px}.targets button{font-size:13px;padding:4px 9px}.targets button[aria-pressed=true]{color:#c7afea}
+.context{font-size:12px;color:var(--dim)}.recent{margin-top:25px;font-size:12px;color:var(--dim)}
+.runhead{display:flex;gap:10px;align-items:center;margin-bottom:13px;font-size:13px}.runhead .timer{margin-left:auto;color:var(--dim);font-size:12px}
+.entry{margin:0 0 5px}.entry details{border:0}.entry summary{display:flex;gap:12px;cursor:pointer;list-style:none;padding:3px 0}.entry summary::-webkit-details-marker{display:none}.state{width:54px;flex:none;font-size:11px;color:var(--dim)}.entry.done .state{color:var(--good)}.entry.failed .state{color:var(--bad)}.entry.active .state{color:#c4a8f0}.entry.active .title{color:var(--fg)}
+.entry .detail{margin:0 0 8px 66px;color:var(--dim);font-size:12px}.entry pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:6px 0;font:inherit;color:#bcb7c6;line-height:1.6}.entry .call{color:#bba4de}.entry .out{padding-left:12px;border-left:1px solid #302737}
+.entry.new{animation:arrive .16s ease-out}.active-line{height:2px;width:65px;margin:7px 0;background:linear-gradient(90deg,transparent,#9b7ede,#d2bdf0,transparent);background-size:200% 100%;animation:travel 1.5s linear infinite}
+.follow{position:sticky;bottom:0;float:right;background:#17121e;color:#ceb6f0;font-size:11px;margin-top:6px}
+.companion{align-self:end;display:flex;flex-direction:column;align-items:flex-end;padding:0 0 40px;pointer-events:none}.bubble{align-self:stretch;color:#ddd5e8;min-height:55px;border:1px solid #463751;border-radius:6px;padding:8px 10px;font-size:12px;line-height:1.5;position:relative;margin-bottom:9px}.bubble:after{content:"";position:absolute;width:9px;height:9px;bottom:-6px;right:58px;background:var(--bg);border-right:1px solid #463751;border-bottom:1px solid #463751;transform:rotate(45deg)}
+.sprite{width:108px;height:132px;image-rendering:pixelated;transform-origin:50% 90%}.busy .sprite{animation:breathe 2.6s ease-in-out infinite}.bubble.typing:before{content:"";position:absolute;left:-1px;top:8px;width:2px;height:15px;background:var(--accent);animation:pulse .8s ease-in-out infinite}
+.composer{margin-right:236px;flex:none;padding-bottom:12px}.choice{display:flex;gap:8px;font-size:11px;color:var(--dim);min-height:23px;align-items:center}.choice .ack{margin-left:auto;color:#bda6e4}
+form{display:flex;align-items:center;border-top:1px solid var(--accent);border-bottom:1px solid var(--accent);padding:8px 0;gap:12px}form label{color:var(--accent);padding-left:4px}input{min-width:0;flex:1;color:var(--fg);background:none;border:0;outline:none!important;padding:0;caret-color:#bfa1ec}input::placeholder{color:#716c7b}form button{color:#c8b2ea}
+.actions{display:flex;align-items:center;gap:8px;font-size:11px;margin-top:5px;min-height:22px}.actions span{color:var(--dim);margin-left:auto}#results{font-size:12px;margin:10px 0 0 66px;line-height:1.8}#results strong{font-weight:400;color:var(--good)}
+[hidden]{display:none!important}@keyframes arrive{from{opacity:.3;transform:translateY(3px)}to{opacity:1;transform:translateY(0)}}@keyframes breathe{0%,100%{transform:translateY(0)}50%{transform:translateY(-2px)}}@keyframes travel{to{background-position:-200% 0}}@keyframes pulse{50%{opacity:.3}}
+body.still *{animation:none!important;transition:none!important}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media(max-width:800px){.app{padding:0 14px}.work{grid-template-columns:minmax(0,1fr)}.companion{display:none}.composer{margin-right:0}.commands{grid-template-columns:repeat(2,1fr)}}
+/* Layout pass: terminal-sized, no forced desktop height or oversized empty lane. */
+html,body{height:100%;overflow:hidden}body{display:flex;flex-direction:column}
+.study{flex:none;min-height:27px;padding:4px 16px;line-height:18px;gap:4px 12px;font-size:10px}
+.app{flex:1;height:auto;min-height:0;max-width:none;width:100%;padding:0 16px}
+header{height:39px;gap:10px;font-size:13px}header small{font-size:11px}
+.work{grid-template-columns:minmax(0,1fr) 180px;gap:12px}
+.main{padding:5px 0 8px;overflow-x:hidden;overflow-y:auto;scrollbar-gutter:stable}
+h1{font-size:14px;margin:0 0 8px}.commands{gap:3px;margin-bottom:8px;grid-template-columns:repeat(4,minmax(80px,1fr))}
+.command{padding:5px 7px;min-width:0}.command small{font-size:10px;line-height:1.4}
+.targets{gap:2px;max-width:none;margin:5px 0 8px}.targets button{padding:3px 7px;font-size:12px}
+.context{font-size:11px}.recent{margin-top:16px;font-size:11px}.runhead{margin-bottom:8px;font-size:12px;align-items:flex-start}.runhead>span:first-child{overflow-wrap:anywhere;min-width:0}.runhead .timer{flex:none;font-size:11px}
+.entry{margin-bottom:3px}.entry summary{gap:10px;padding:2px 0;align-items:baseline}.title{min-width:0;overflow-wrap:anywhere}.state{width:51px}.entry .detail{margin:0 0 6px 61px;font-size:12px}.entry pre{margin:4px 0;line-height:1.45}.entry .out{padding-left:9px}.active-line{margin:5px 0}
+.companion{display:flex;padding:0 0 8px;min-width:0}.bubble{min-height:0;padding:7px 9px;font-size:11px;line-height:1.45;overflow-wrap:anywhere;margin-bottom:6px}.bubble:after{right:39px}.sprite{width:90px;height:110px}
+.composer{margin-right:192px;padding-bottom:7px;min-width:0}.choice{min-height:20px;font-size:10px;gap:4px 12px;flex-wrap:wrap}.choice .ack{margin-left:0;overflow-wrap:anywhere}
+form{padding:7px 0;gap:9px}input{font-size:13px}form button{font-size:12px;flex:none}.actions{margin-top:3px;gap:6px;flex-wrap:wrap;font-size:10px}.actions button{padding:2px 5px}.actions span{font-size:10px}#results{margin-left:61px;font-size:11px}
+@media(max-width:760px){.commands{grid-template-columns:repeat(2,minmax(80px,1fr))}.command small{display:none}}
+@media(max-width:620px){.work{grid-template-columns:minmax(0,1fr)}.composer{margin-right:0}.companion{display:none}header small{display:none}.app{padding:0 10px}.actions span{margin-left:0;flex-basis:100%}}
+@media(max-height:560px){.recent{display:none}.sprite{width:65px;height:80px}.bubble{font-size:10px;padding:5px 7px}header{height:32px}.composer{padding-bottom:4px}}
+</style>
+<div class="study"><span>Interactive design preview · sample playback only · nothing runs</span><div><button id="motion">Reduce motion</button> · <button id="reset">Reset preview</button></div></div>
+<div class="app">
+<header><strong>wizard</strong><span>· my-project</span><small>Account connected</small></header>
+<div class="work">
+<main class="main" id="main">
+<section id="menu"><h1>Choose a command</h1><div class="commands" id="commands"></div><div class="targets" id="targets"></div><p class="context" id="context">Choose a command, then add details below.</p><div class="recent">Recent checks<br><span class="quiet">Your saved checks appear here.</span></div></section>
+<section id="running" hidden><div class="runhead"><span id="goal">Sample runtime check</span><span class="timer" id="timer">0:00</span></div><div id="entries"></div><div id="results" hidden></div></section>
+<button id="follow" class="follow" hidden>New output · follow</button>
+</main>
+<aside class="companion" aria-label="Wizard guide"><div class="bubble" id="bubble">Choose a command.<br>Then tell me what to check.</div><img class="sprite" src="cli-reaper-pose.svg" alt="Original pixel-art reaper"></aside>
+</div>
+<div class="composer"><div class="choice"><span id="selection">No command selected</span><span class="ack" id="ack"></span></div>
+<form id="composer"><label for="intent">&gt;</label><input id="intent" autocomplete="off" placeholder="Add an intent, or type / for commands"><button id="submit" type="submit">Preview</button></form>
+<div class="actions"><button id="back" hidden>Commands</button><button id="stop" hidden>Stop playback</button><button id="proof" hidden>Expand output</button><span id="footer">Local design only · no AI calls</span></div></div>
+</div>
+<script>
+// Isolated design fixture. No fetch, sockets, login, execution or Runtime mutations.
+const commands={investigate:['architecture','runtime','deployment','authentication','api','security','build'],verify:['runtime','dependencies','containers','ci','security','deployment','api'],report:[],explain:['runtime','architecture','dependencies','deployment','security']};
+const descriptions={investigate:'Explore the project',verify:'Check that it works',report:'View saved results',explain:'Understand a part'};
+const $=id=>document.getElementById(id),reduced=()=>document.body.classList.contains('still')||matchMedia('(prefers-reduced-motion: reduce)').matches;
+let family='',target='',playing=false,epoch=0,started=0,clock=null,follow=true,ending=false;
+function button(label,click){const b=document.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',click);return b}
+function selectFamily(name){family=name;target='';$('targets').replaceChildren();document.querySelectorAll('.command').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.name===name)));for(const value of commands[name]){const b=button(value,()=>{target=value;[...$('targets').children].forEach(x=>x.setAttribute('aria-pressed',String(x===b)));selection();$('intent').focus()});b.setAttribute('aria-pressed','false');$('targets').append(b)}selection();$('context').textContent=commands[name].length?'Choose what to check. Add an intent below if you want.':'The report command opens saved results. This preview only shows the interaction design.';say('Pick what you want to '+(name==='report'?'view.':'check.'));}
+function selection(){$('selection').textContent=[family,target].filter(Boolean).join(' ')||'No command selected'}
+for(const name of Object.keys(commands)){const b=button('',()=>selectFamily(name));b.className='command';b.dataset.name=name;b.setAttribute('aria-pressed','false');const strong=document.createElement('strong');strong.textContent=name;const small=document.createElement('small');small.textContent=descriptions[name];b.append(strong,small);$('commands').append(b)}
+let speech=0;
+async function say(message){const token=++speech;const bubble=$('bubble');bubble.textContent='';bubble.classList.add('typing');if(reduced()){bubble.textContent=message;bubble.classList.remove('typing');return}for(const char of message){if(token!==speech)return;bubble.textContent+=char;await delay(14)}if(token===speech)bubble.classList.remove('typing')}
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+function scroll(){if(follow)$('main').scrollTop=$('main').scrollHeight;else $('follow').hidden=false}
+$('main').addEventListener('scroll',()=>{follow=$('main').scrollHeight-$('main').scrollTop-$('main').clientHeight<40});
+$('follow').onclick=()=>{follow=true;$('follow').hidden=true;scroll()};
+function stop(){epoch++;playing=false;ending=true;clearInterval(clock);document.body.classList.remove('busy');$('stop').hidden=true;$('back').hidden=false;$('submit').textContent='Preview';document.querySelectorAll('.entry.active').forEach(row=>{row.classList.remove('active');row.querySelector('.state').textContent='Stopped';row.querySelector('.active-line')?.remove()});$('footer').textContent='Playback stopped · no real check was run';say('Preview stopped. Nothing was executed.')}
+function reset(){stop();ending=false;$('menu').hidden=false;$('running').hidden=true;$('back').hidden=true;$('proof').hidden=true;$('follow').hidden=true;$('entries').replaceChildren();$('results').hidden=true;$('ack').textContent='';$('footer').textContent='Local design only · no AI calls';$('intent').value='';say('Choose a command. Then tell me what to check.');$('intent').focus()}
+$('reset').onclick=reset;$('back').onclick=reset;$('stop').onclick=stop;
+$('motion').onclick=()=>{document.body.classList.toggle('still');$('motion').textContent=reduced()?'Full motion':'Reduce motion'};
+$('proof').onclick=()=>{const expanded=$('proof').textContent==='Hide output';document.querySelectorAll('.entry details').forEach(d=>d.open=!expanded);$('proof').textContent=expanded?'Expand output':'Hide output'};
+function createStep(title,operation){const row=document.createElement('article');row.className='entry active new';const details=document.createElement('details');details.open=true;const summary=document.createElement('summary');const state=document.createElement('span');state.className='state';state.textContent='Running';const label=document.createElement('span');label.className='title';label.textContent=title;summary.append(state,label);const content=document.createElement('div');content.className='detail';const call=document.createElement('div');call.className='call';call.textContent=operation;const line=document.createElement('div');line.className='active-line';const out=document.createElement('pre');out.className='out';content.append(call,line,out);details.append(summary,content);row.append(details);$('entries').append(row);scroll();return{row,details,state,out,line}}
+// These sample chunks illustrate incoming output. Production must render actual
+// received chunks immediately; it must not add these artificial playback delays.
+async function start(){if(playing)return;if(!family){$('ack').textContent='Choose a command first.';return}if(commands[family].length&&!target){$('ack').textContent='Choose a subcommand first.';return}if(family==='report'){$('ack').textContent='Report view is shown in the full-size report study.';return}
+playing=true;ending=false;const run=++epoch;started=Date.now();$('menu').hidden=true;$('running').hidden=false;$('entries').replaceChildren();$('results').hidden=true;$('back').hidden=true;$('stop').hidden=false;$('proof').hidden=false;$('ack').textContent='';$('goal').textContent=[$('selection').textContent,$('intent').value].filter(Boolean).join(' · ');$('intent').value='';$('intent').placeholder='Add guidance for the next step';$('submit').textContent='Send';$('footer').textContent='Sample runtime playback · no commands run';document.body.classList.add('busy');
+clock=setInterval(()=>{const n=Math.floor((Date.now()-started)/1000);$('timer').textContent=Math.floor(n/60)+':'+String(n%60).padStart(2,'0')},1000);
+const steps=target==='runtime'||target==='authentication'?[
+['Read project files','read discovered project configuration',['Found startup configuration.','Found the application entry point.'],'I’m reading the project.'],
+['Start the app','execute the discovered start command',['Process started.','Startup output received.','Discovered address accepted a connection.'],'The app started. Checking it is ready.'],
+['Open the page','navigate to the discovered address',['Page loaded.','Saved the current page state.'],'The page opened. I’m checking its controls.'],
+['Fill the form','fill fields from the observed page labels',['Email field: action completed. Value hidden.','Password field: action completed. Value hidden.'],'I’m filling the fields shown on the page.'],
+['Check the result','observe the page after the action',['Saved updated page state.','Form submission has not been proven by filling fields.'],'The fields are filled. Submission still needs checking.']
+]:[['Read project files','read relevant discovered files',['Relevant configuration received.','Selected check: '+target],'I’m reading the relevant files.'],['Review the result','show actual findings when available',['This design playback stops here.','No execution-backed result exists in this preview.'],'This is a preview. No real result was created.']];
+for(const [title,call,chunks,message] of steps){if(run!==epoch)return;const step=createStep(title,call);say(message);for(const chunk of chunks){await delay(1100);if(run!==epoch)return;step.out.textContent+=(step.out.textContent?'\n':'')+chunk;scroll()}await delay(500);if(run!==epoch)return;step.row.classList.remove('active');step.row.classList.add('done');step.state.textContent='Done';step.line.remove();step.details.open=false;}
+if(run!==epoch)return;playing=false;ending=true;clearInterval(clock);document.body.classList.remove('busy');$('stop').hidden=true;$('back').hidden=false;$('submit').textContent='Preview';$('footer').textContent='Playback finished · no goal was actually verified';$('results').hidden=false;$('results').textContent='Sample playback finished. These examples are not saved proof or real verification.';say('Preview finished. No real check was run.');scroll()}
+$('composer').onsubmit=event=>{event.preventDefault();if(playing){$('ack').textContent='Preview guidance received — not sent to an agent.';$('intent').value='';return}if(ending){reset();return}start()};
+</script>
+</html>

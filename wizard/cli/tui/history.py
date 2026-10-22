@@ -22,10 +22,11 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # History file location — output/ in the project root (cwd at startup)
 # ---------------------------------------------------------------------------
-def _history_path() -> Path:
+def _history_path(repo_path=None, *, create=True) -> Path:
     """Return the path to the history file, creating output/ if needed."""
-    output_dir = Path(os.getcwd()) / "output"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(repo_path or os.getcwd()) / "output"
+    if create:
+        output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir / "wizard_history.json"
 
 
@@ -87,13 +88,13 @@ class HistoryEntry:
 # ---------------------------------------------------------------------------
 # Read / write
 # ---------------------------------------------------------------------------
-def load_recent(count: int = 3) -> list[HistoryEntry]:
+def load_recent(count: int = 3, *, repo_path=None) -> list[HistoryEntry]:
     """Load the most recent `count` history entries.
 
     Returns newest-first. If the file doesn't exist or is empty, returns [].
     Silently ignores malformed lines.
     """
-    path = _history_path()
+    path = _history_path(repo_path, create=False)
     if not path.exists():
         return []
 
@@ -109,7 +110,7 @@ def load_recent(count: int = 3) -> list[HistoryEntry]:
             try:
                 d = json.loads(line)
                 entries.append(HistoryEntry.from_dict(d))
-            except (json.JSONDecodeError, KeyError):
+            except (json.JSONDecodeError, KeyError, AttributeError, TypeError):
                 continue
     except OSError:
         return []
@@ -118,10 +119,10 @@ def load_recent(count: int = 3) -> list[HistoryEntry]:
     return list(reversed(entries[-count:]))
 
 
-def save_entry(entry: HistoryEntry) -> None:
+def save_entry(entry: HistoryEntry, *, repo_path=None) -> None:
     """Append one history entry to the log file."""
-    path = _history_path()
     try:
+        path = _history_path(repo_path)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry.to_dict()) + "\n")
     except OSError:
@@ -133,6 +134,7 @@ def record_run(
     target: str | None,
     intent: str = "",
     status: str = "completed",
+    *, repo_path=None,
 ) -> None:
     """Record a completed investigation run in the history file."""
     entry = HistoryEntry(
@@ -142,4 +144,4 @@ def record_run(
         timestamp=datetime.now(timezone.utc).isoformat(),
         status=status,
     )
-    save_entry(entry)
+    save_entry(entry, repo_path=repo_path)

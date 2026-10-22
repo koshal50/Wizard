@@ -112,6 +112,20 @@ def safe_parameters(parameters: Any) -> dict:
     return result
 
 
+def execution_preview(payload: dict) -> dict:
+    """Bounded output for live presentation, not full tool results or source files."""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    result = {}
+    for key in ("stdout", "stderr", "stdout_so_far", "stderr_so_far", "exit_code", "is_running",
+                "pid", "handle_id", "session_id", "readiness", "ready", "endpoint", "url", "status_code", "active"):
+        value = data.get(key, payload.get(key))
+        if value is not None:
+            result[key] = safe_text(value, key=key, limit=2000) if isinstance(value, str) else value if isinstance(value, (bool, int, float)) else type(value).__name__
+    if payload.get("error"):
+        result["error"] = safe_text(payload["error"], limit=1000)
+    return result
+
+
 def node_summary(node: Any) -> dict:
     action = getattr(node, "action", None) or {}
     params = action.get("params") or {}

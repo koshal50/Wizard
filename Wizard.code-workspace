@@ -9,5 +9,9 @@
       "path": "../Wizard-web"
     }
   ],
-  "settings": {}
+  "settings": {
+    "terminal.integrated.commandsToSkipShell": [
+      "-workbench.action.focusNextPart"
+    ]
+  }
 }

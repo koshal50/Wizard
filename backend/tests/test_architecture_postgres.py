@@ -73,3 +73,25 @@ def test_grouped_document_is_identical_after_postgres_and_authorized_api(client,
         persisted = conn.execute('SELECT graph FROM architecture_investigations WHERE id=%s', (public_id,)).fetchone()['graph']
     assert persisted == expected
     assert client.get('/api/investigations/' + public_id, headers=headers).json()['graph'] == persisted
+
+
+def test_nested_hierarchy_and_coverage_persist_without_new_tables(client,database):
+    from backend.architecture import ArchitectureGraph
+    from backend.tests.test_architecture_contract import hierarchy_graph
+    headers=credential(client)
+    data=hierarchy_graph()
+    data['coverage']={'candidate_files':3,'examined_files':['src/app.py'],'context_files':[],
+        'examined_areas':['src'],'uninspected_file_count':2,'uninspected_areas':['other'],
+        'unassigned_files':[],'partial_files':[],'discovery_note':'Bounded actual observations'}
+    data['relationships'][0]['label']='stores results'
+    expected=ArchitectureGraph.model_validate(data).model_dump()
+    broken={**expected,'nodes':[dict(n) for n in expected['nodes']]}
+    broken['nodes'][1]['parent_id']='unknown'
+    assert client.post('/api/investigations',headers=headers,json=broken).status_code==422
+    result=client.post('/api/investigations',headers=headers,json=expected)
+    assert result.status_code==201
+    saved=result.json()['investigation_id']
+    with database.connection() as conn:
+        actual=conn.execute('SELECT graph FROM architecture_investigations WHERE id=%s',(saved,)).fetchone()['graph']
+    assert actual==expected
+    assert client.get('/api/investigations/'+saved,headers=headers).json()['graph']==expected

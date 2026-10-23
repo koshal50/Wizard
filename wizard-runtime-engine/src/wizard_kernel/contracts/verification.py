@@ -127,6 +127,16 @@ class DiagramComponent(StrictModel):
     path: str
     description: str
     observation_ids: list[str]
+    subsystem_id: str | None = None
+
+
+class DiagramSubsystem(StrictModel):
+    id: str
+    label: str
+    type: Literal['application', 'entrypoint', 'service', 'database', 'package', 'module', 'external', 'configuration']
+    description: str  # What it does, not a directory listing.
+    file_paths: list[str] = Field(min_length=1, max_length=100)
+    observation_ids: list[str] = Field(min_length=1, max_length=100)
 
 
 class DiagramConnection(StrictModel):
@@ -136,6 +146,7 @@ class DiagramConnection(StrictModel):
     type: str
     description: str
     observation_ids: list[str]
+    label: str = Field(default='', max_length=120)
 
 
 class ArchitectureReport(StrictModel):
@@ -143,6 +154,7 @@ class ArchitectureReport(StrictModel):
     components: list[DiagramComponent] = Field(default_factory=list, max_length=80)
     connections: list[DiagramConnection] = Field(default_factory=list, max_length=200)
     evidence_requests: list[str] = Field(default_factory=list, max_length=4)
+    subsystems: list[DiagramSubsystem] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode='after')
     def complete_coverage(self):
@@ -151,7 +163,7 @@ class ArchitectureReport(StrictModel):
         return self
 
 
-def architecture_report_model(repository_evidence: list[dict]):
+def architecture_report_model(repository_evidence: list[dict], *, require_subsystems=False):
     """Constrain proof targets to the exact observations supplied to synthesis."""
     targets = list(dict.fromkeys(value for row in repository_evidence
         for value in (row.get('observation_id'), row.get('path'),
@@ -166,8 +178,10 @@ def architecture_report_model(repository_evidence: list[dict]):
     else:
         finding = create_model('GroundedArchitectureFinding', __base__=ArchitectureFinding,
             assertions=(list[RepositoryContentAssertion], Field(default_factory=list, max_length=0)))
-    return create_model('GroundedArchitectureReport', __base__=ArchitectureReport,
-                        findings=(list[finding], Field(min_length=6, max_length=6)))
+    fields = {'findings': (list[finding], Field(min_length=6, max_length=6))}
+    if require_subsystems:
+        fields['subsystems'] = (list[DiagramSubsystem], Field(min_length=1, max_length=40))
+    return create_model('GroundedArchitectureReport', __base__=ArchitectureReport, **fields)
 
 
 def planning_model(commands: list[str], *, read_only: bool = False, repository_targets: list[str] | None = None,

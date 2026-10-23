@@ -84,18 +84,20 @@ def test_missing_entry_point_gets_one_validated_followup_from_existing_reader(tm
                     'assertions': [predicate('README.md', 'workspace')]}]})
             assert context['architecture_synthesis']
             self.synthesis_calls += 1
+            subsystem = {'id':'entry','label':'Application entry','type':'entrypoint','description':'Defines the local main entry.',
+                         'file_paths':['app.py'],'observation_ids':[next(r['observation_id'] for r in context['repository_evidence'] if r['path']=='app.py')]}
             if self.synthesis_calls == 1:
                 assert 'app.py' in context['repository_paths']
                 return model.model_validate({'findings': [{'area': area, 'summary': area,
                     'assertions': [] if area == 'entry_points' else [predicate('README.md', 'workspace')],
                     'blocker': 'Read the application entry point' if area == 'entry_points' else ''}
-                    for area in ARCHITECTURE_AREAS], 'evidence_requests': ['app.py', '../outside.py']})
+                    for area in ARCHITECTURE_AREAS], 'evidence_requests': ['app.py', '../outside.py'], 'subsystems':[subsystem]})
             entry = next(row for row in context['repository_evidence'] if row['path'] == 'app.py')
             assert entry['content'] == 'def main(): pass'
             quote = 'def main' if correct_followup_quote or self.synthesis_calls == 3 else 'def missing'
             return model.model_validate({'findings': [{'area': area, 'summary': area,
                 'assertions': [predicate(entry['observation_id'], quote) if area == 'entry_points'
-                               else predicate('README.md', 'workspace')]} for area in ARCHITECTURE_AREAS]})
+                               else predicate('README.md', 'workspace')]} for area in ARCHITECTURE_AREAS], 'subsystems':[subsystem]})
 
     manager = InvestigationManager()
     inv = manager.create(InvestigationRequest(repository_path=str(tmp_path), intent='investigate', targets=['architecture']))
@@ -106,3 +108,18 @@ def test_missing_entry_point_gets_one_validated_followup_from_existing_reader(tm
     assert len(saved['architecture_evidence_followup']) == 1
     assert saved['architecture_evidence_followup'][0]['path'] == 'app.py'
     assert any(e['purpose'] == 'architecture_evidence_followup' for e in saved['executions'])
+
+
+def test_context_failure_after_passing_preparation_cannot_complete_architecture(tmp_path):
+    from wizard_kernel.ports.model import ModelFailure
+    (tmp_path/'README.md').write_text('workspace')
+    class Policy:
+        def request(self,role,context,model,**kwargs):
+            if role=='planner':
+                return model.model_validate({'checks':[{'id':'prepare','description':'Read architecture evidence','assertions':[{'source':'repository','field':'content','operator':'contains','target':'README.md','expected':'workspace'}]}]})
+            raise ModelFailure('context_budget','Architecture context limit')
+    manager=InvestigationManager()
+    inv=manager.create(InvestigationRequest(repository_path=str(tmp_path),intent='investigate',targets=['architecture']))
+    verification.run(inv,manager,Policy())
+    assert inv.state=='incomplete'
+    assert fs_store.read(inv.id,'verification.json')['failure_kind']=='context_budget'

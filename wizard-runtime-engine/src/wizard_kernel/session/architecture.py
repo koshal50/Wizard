@@ -9,6 +9,22 @@ from wizard_kernel.control.flow_trace import safe_text
 from wizard_kernel.storage import fs_store
 
 
+def action_label(kind, label):
+    """Express the supported relation kind as an action, never invent behavior."""
+    label = str(label or kind)
+    if re.match(r"(?i)^(imports?|requests?|sends?|loads?|reads?|writes?|stores?|queries|calls?|uses?|registers?|starts?|builds?|configures?|authenticates?|provides?|refreshes?|validates?|creates?|connects?)\b", label):
+        return label
+    verb = {"http": "requests", "http-request": "requests", "query": "queries", "calls": "calls",
+            "imports": "imports", "stores": "stores", "build": "builds"}.get(str(kind).casefold())
+    if not verb:
+        return label
+    if verb == "requests":
+        label = re.sub(r"(?i)\s+HTTP$", " API", label)
+    if verb == "queries":
+        label = re.sub(r"(?i)\s+(?:queries|query)$", "", label)
+    return verb + " " + label
+
+
 def export_architecture(inv):
     state = fs_store.read(inv.id, "verification.json") or {}
     observations = []
@@ -78,7 +94,7 @@ def export_architecture(inv):
         refs = list(dict.fromkeys(i for i in c["observation_ids"] if i in by_obs))
         if c["source"] in ids and c["target"] in ids and refs:
             edges.append({"id": c["id"], "source": c["source"], "target": c["target"], "type": text(c["type"]),
-                          "description": text(c["description"]), "evidence_ids": refs, "classification": "inferred"})
+                          "description": text(c["description"]), "label": text(action_label(c["type"], c.get("label")))[:120], "evidence_ids": refs, "classification": "inferred"})
     # Older investigations have no semantic synthesis. Show only measured files;
     # never manufacture service dependencies from the investigation execution DAG.
     if not nodes:
@@ -94,6 +110,17 @@ def export_architecture(inv):
         manifest = fs_store.read(inv.id, "manifest.json") or {}
         nodes, edges, groups, limitations = enrich_graph(nodes, edges, evidence, observations,
             state["architecture_coverage"], manifest.get("directory_tree", []))
+    coverage = None
+    if "architecture_coverage" in state:
+        from wizard_kernel.control.architecture_hierarchy import abstract_graph, measured_coverage
+        paths = manifest.get("directory_tree", [])
+        if diagram.get("subsystems"):
+            nodes, edges, coverage, warnings = abstract_graph(nodes, edges, evidence, diagram, observations, paths, text)
+            groups = []
+            limitations.extend(warnings)
+        else:
+            coverage = measured_coverage(paths, observations, evidence)
+            limitations.append("This result has no semantic subsystem synthesis; legacy boundaries are presentation groups only.")
     used = {i for row in nodes + edges + groups for i in row["evidence_ids"]}
     evidence = list({e["id"]: e for e in evidence if e["id"] in used}.values())
     return ArchitectureGraph.model_validate({
@@ -101,5 +128,5 @@ def export_architecture(inv):
         "repository_name": Path(inv.repository_path).name,
         "status": "completed" if inv.state == "completed" else "incomplete",
         "nodes": nodes, "relationships": edges, "evidence": evidence,
-        "groups": groups, "limitations": limitations,
+        "groups": groups, "limitations": limitations, "coverage": coverage,
     }).model_dump()

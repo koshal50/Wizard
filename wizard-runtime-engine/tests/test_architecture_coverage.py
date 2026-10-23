@@ -14,7 +14,7 @@ def test_bounded_selection_covers_layers_before_more_files_in_one_directory():
         'client/src/main.tsx', 'server/src/routes/auth.ts', 'server/src/services/login.ts',
         'server/src/repositories/pg.repository.js', 'server/src/db/index.js',
         'server/src/jobs/mail.ts', 'shared/types.ts']
-    first = candidates(files)[:8]
+    first = candidates(files)[:12]
     assert {boundary(p)[0] for p in first} == {boundary(p)[0] for p in files}
     for path in ['output/result.py', 'node_modules/lib/index.js', 'src/x.test.ts', 'src/x.d.ts',
                  'src/__tests__/x.ts', 'src/.cache/result.js', 'src/generated/client.ts', 'public/icon.svg']:
@@ -69,7 +69,11 @@ def test_existing_investigation_collects_source_and_exports_grouped_evidence(tmp
                     'assertions': [predicate]}]})
             assert set(files) <= {r['path'] for r in context['repository_evidence']}
             from wizard_kernel.contracts.verification import ARCHITECTURE_AREAS
-            return model.model_validate({'findings': [{'area': area, 'summary': 'Application',
+            refs = {r['path']:r['observation_id'] for r in context['repository_evidence']}
+            subsystems = [{'id':name, 'label':name.title()+' application', 'type':'application',
+                'description':'Observed application implementation', 'file_paths':[p for p in files if p.startswith(name+'/')],
+                'observation_ids':[refs[p] for p in files if p.startswith(name+'/')]} for name in ['client','server']]
+            return model.model_validate({'subsystems':subsystems, 'findings': [{'area': area, 'summary': 'Application',
                 'assertions': [predicate]} for area in ARCHITECTURE_AREAS]})
 
     manager = InvestigationManager()
@@ -79,11 +83,11 @@ def test_existing_investigation_collects_source_and_exports_grouped_evidence(tmp
     graph = export_architecture(inv)
     state = fs_store.read(inv.id, 'verification.json')
     assert state['architecture_coverage']['uninspected_files'] == []
-    assert len(graph['groups']) >= 4
+    assert sum(n['level']=='subsystem' for n in graph['nodes']) == 2
     assert len(graph['relationships']) == 5
     assert all(e['classification'] == 'observed' for e in graph['relationships'])
     node_by_id = {n['id']: n for n in graph['nodes']}
-    assert any(node_by_id[e['source']]['group_id'] != node_by_id[e['target']]['group_id'] for e in graph['relationships'])
+    assert all(n['parent_id'] is not None for n in graph['nodes'] if n['level']=='file')
     proofs = {e['id']: e for e in graph['evidence']}
     for edge in graph['relationships']:
         for ref in edge['evidence_ids']:
@@ -110,3 +114,35 @@ def test_module_identity_does_not_depend_on_generated_display_names():
                 'description': '', 'evidence_ids': ['obs_module']}
         return enrich_graph([node], [], [dict(proof)], observations, {}, ['src/app.js'])[0][0]['id']
     assert export('Application') == export('Entrypoint')
+
+
+def test_balanced_excerpts_retain_startup_after_long_headers():
+    from types import SimpleNamespace
+    from wizard_kernel.control.architecture_coverage import balanced_evidence
+    content = '// project header\n' * 200 + 'server.listen(config.port);\n'
+    rows = balanced_evidence([SimpleNamespace(id='obs', success=True, source_tool='read_file',
+         payload={'data': {'path': 'server.js', 'content': content}})])
+    assert 'server.listen(config.port)' in rows[0]['content']
+    assert rows[0]['excerpt_truncated']
+
+
+def test_discovery_prefers_manifests_and_package_entries_over_example_readmes():
+    from wizard_kernel.control.architecture_coverage import discovery_paths
+    paths = [f'examples/{i}/README.md' for i in range(50)] + ['pyproject.toml','engine/pyproject.toml','planner/package.json','package-lock.json','README_backup.md']
+    assert discovery_paths(paths)[:3] == ['pyproject.toml','engine/pyproject.toml','planner/package.json']
+    assert 'README_backup.md' not in discovery_paths(paths)
+    selected = candidates(['backend/__init__.py','backend/app.py'] + [f'example/src/part{i}/file.js' for i in range(100)])[:2]
+    assert selected == ['backend/app.py','example/src/part0/file.js']
+    assert imports('cli/main.py','from kernel.api import app',{'engine/src/kernel/api.py','engine/pyproject.toml'}) == [('engine/src/kernel/api.py',1,'kernel/api')]
+
+
+def test_context_packing_retains_file_identity_and_exposes_excerpt_limits():
+    import json
+    from wizard_kernel.control.architecture_coverage import bounded_architecture_context
+    original={'architecture_synthesis':True,'repository_evidence':[{'observation_id':str(i),'path':f'pkg{i}/app.py','content':'literal source line\n'*100} for i in range(40)],'repository_paths':[f'pkg{i}/app.py' for i in range(300)]}
+    packed=bounded_architecture_context(original,{},'architecture',35000)
+    assert len(packed['repository_evidence'])==40
+    assert [r['path'] for r in packed['repository_evidence']]==[r['path'] for r in original['repository_evidence']]
+    assert packed['context_limits']['shortened_excerpts']>0
+    assert len(json.dumps([{'role':'system','content':'architecture'},{'role':'user','content':json.dumps(packed,ensure_ascii=False)}]))+2 <= 35000
+    assert len(original['repository_evidence'][0]['content'])>len(packed['repository_evidence'][0]['content'])

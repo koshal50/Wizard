@@ -132,6 +132,24 @@ Represent the supplied pages, routing, authentication, API clients, routes, serv
 shared contracts and configuration where observed. Do not collapse their implementation into
 only package manifests. Literal module dependencies and file components are retained locally
 in addition to this semantic synthesis; prioritize supported cross-layer calls and integrations.
+Populate subsystems as the architecture overview, usually a handful of coherent applications,
+services, packages, persistent stores or integrations justified by the actual evidence.
+A subsystem must explain WHAT IT DOES in a concise description, not merely repeat a folder name.
+Its file_paths are exact inspected repository paths from repository_evidence; assign each file
+exclusively to its coherent subsystem. Do not create generic frontend/backend/database sections
+unless these systems actually exist. Never label a directory of SQL files as a live database
+unless configuration or implementation establishes the persistent store.
+Components are important internal modules, not a list of every inspected file. Set their
+subsystem_id to an existing subsystem id and explain their responsibility and source evidence.
+Related files stay as expandable source evidence. Prioritize entry points, request handling,
+business capabilities, state, data access, authentication and integrations over cosmetic helpers.
+Every connection needs a short action label STARTING WITH A VERB describing supported behavior, such as "stores tasks",
+"loads settings", "refreshes data", "registers routes", or "validates credentials", only when
+the cited source establishes that behavior. These examples are not a template. Use "imports"
+when only a static dependency is established; an import alone does not prove calls or data flow.
+Connection descriptions keep the supporting rationale for evidence inspection, not canvas paragraphs.
+Do not connect systems based on similar names or shared folders. Missing architecture coverage
+must remain explicit; do not invent connectivity or claim the bounded sample is the entire repo.
 These are application components, never investigation checks, tools, or agents.
 Each component needs a unique simple id, label, type, repository-relative path,
 description, and supporting observation_ids taken from repository_evidence.

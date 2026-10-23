@@ -93,6 +93,9 @@ class ModelPolicy:
                 instruction = ARCHITECTURE_SYNTHESIZE
             elif context.get('available_tools') and set(context['available_tools']) <= {'read_file', 'search_files', 'list_tree', 'path_exists'}:
                 instruction = REPOSITORY_DECIDE
+        if context.get('architecture_synthesis'):
+            from wizard_kernel.control.architecture_coverage import bounded_architecture_context
+            context = bounded_architecture_context(context, schema, instruction, max_input_chars)
         messages = [{"role": "system", "content": instruction},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
         size = len(json.dumps(messages)) + len(json.dumps(schema))

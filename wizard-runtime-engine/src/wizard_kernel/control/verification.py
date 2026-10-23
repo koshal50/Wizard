@@ -747,6 +747,9 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             reader = ToolExecutor(sandbox, inv.repository_path)
             documents = []
             candidates = sorted(manifest.key_files, key=lambda p: (not Path(p).name.lower().startswith("readme"), len(Path(p).parts)))
+            if inv.intent == 'investigate' and 'architecture' in inv.targets:
+                from wizard_kernel.control.architecture_coverage import discovery_paths
+                candidates = discovery_paths(manifest.key_files)
             for path in candidates[:8]:
                 if Path(path).suffix.lower() in {".blend", ".sln"}:
                     continue
@@ -838,7 +841,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 validator._browser_enabled = True
             tools = ToolExecutor(sandbox, inv.repository_path, browser=browser)
             if inv.intent == 'investigate' and 'architecture' in inv.targets:
-                from wizard_kernel.control.architecture_coverage import candidates, imports, balanced_evidence, boundary
+                from wizard_kernel.control.architecture_coverage import candidates, imports, balanced_evidence, boundary, source_path
                 def architecture_evidence():
                     return balanced_evidence(store.all())
 
@@ -1204,12 +1207,13 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     'command_family': inv.intent, 'targets': inv.targets,
                     'architecture_synthesis': True, 'repository_evidence': repository_evidence,
                     'repository_paths': repository_paths,
-                    'diagram_instruction': 'Also populate components and connections for a compact application architecture diagram. Components are real application subsystems, entry points, services, models, or databases, never investigation tasks. Use repository-relative paths, concise labels and types, and observation_ids from supplied repository_evidence for each component and connection. Connections must explain a supported application dependency or call, never mere shared directory membership. Omit unsupported components and connections. Use unique simple IDs and valid component endpoints. Do not include secrets or absolute local paths in any descriptions.',
+                    'diagram_instruction': 'Populate evidence-backed subsystems with functional responsibilities and exact inspected file_paths. Assign components to these subsystems. Do not use an empty subsystem list when source files were inspected. Put short supported behavioral action labels on connections. Also populate components and connections for a compact application architecture diagram. Components are real application subsystems, entry points, services, models, or databases, never investigation tasks. Use repository-relative paths, concise labels and types, and observation_ids from supplied repository_evidence for each component and connection. Connections must explain a supported application dependency or call, never mere shared directory membership. Omit unsupported components and connections. Use unique simple IDs and valid component endpoints. Do not include secrets or absolute local paths in any descriptions.',
                     'instruction': 'Synthesize all six architecture areas from supplied evidence. Explain actual entry files and startup flow, client/server component boundaries (not account isolation), workspace packages, directories and configuration relationships. Each statement must follow from cited content. Use short exact verbatim substrings as targeted content predicates, preserving JSON whitespace and escapes; use separate predicates for separate terms. Do not reformat JSON or treat a database healthcheck as application startup. File existence alone is insufficient. For missing evidence use empty assertions and an exact blocker; do not invent facts.'}
                 proof_correction_used = False
                 for attempt in range(3):
                     synthesis = request('explorer', synthesis_context,
-                                        architecture_report_model(synthesis_context['repository_evidence']))
+                                        architecture_report_model(synthesis_context['repository_evidence'],
+                                            require_subsystems=any(source_path(r['path']) for r in synthesis_context['repository_evidence'])))
                     if attempt == 0 and synthesis.evidence_requests:
                         followed_up = False
                         for path in dict.fromkeys(synthesis.evidence_requests):
@@ -1265,6 +1269,7 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 state['architecture_diagram'] = {
                     'components': synthesis.model_dump()['components'],
                     'connections': synthesis.model_dump()['connections'],
+                    'subsystems': synthesis.model_dump()['subsystems'],
                 }
                 state['architecture_coverage_ids'] = {f.area: c.id for f, (c, _) in zip(synthesis.findings, evaluated_findings)}
                 for coverage, evaluated in evaluated_findings:
@@ -1343,6 +1348,10 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                 result.update(status="unverified", reason=state["stop_reason"] or result.get("reason") or "Not evaluated")
         statuses = [r.get("status") for r in state["results"].values()]
         final = LifecycleState.completed if statuses and all(s == "passed" for s in statuses) else LifecycleState.incomplete
+        if inv.intent == 'investigate' and 'architecture' in inv.targets and not state.get('architecture_coverage_ids'):
+            # Passing preparation checks cannot substitute for the required
+            # architecture synthesis, including provider/context failures.
+            final = LifecycleState.incomplete
         if state.get("verifier_failure") or state.get("verifier", {}).get("assessment") == "needs_more_work":
             final = LifecycleState.incomplete
         if inv.intent == "report" and state.get("report_source"):

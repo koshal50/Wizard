@@ -796,9 +796,9 @@ class WizardTUI:
                 destination = account_origin()
                 message = (f"Upload architecture to {destination}?\n\n"
                            f"Graph status: {graph['status']}\n\n"
-                           f"Repository: {graph['repository_name']} | Groups: {len(graph.get('groups', []))} | Nodes: {len(graph['nodes'])} | "
+                           f"Repository: {graph['repository_name']} | Subsystems: {sum(n.get('level') == 'subsystem' for n in graph['nodes'])} | Nodes: {len(graph['nodes'])} | "
                            f"Relationships: {len(graph['relationships'])} | Evidence: {len(graph['evidence'])}\n\n"
-                           "Uploads labels, descriptions, relative file paths, and evidence references. "
+                           "Uploads labels, descriptions, relative file paths, evidence references, hierarchy, and measured coverage. "
                            "Includes short verified content predicates when available; literal module references are observed and reasoned relationships are marked inferred. "
                            "No full source files are uploaded.\n\n"
                            "Type yes to consent or no to keep results local.")

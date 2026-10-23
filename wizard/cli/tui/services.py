@@ -195,6 +195,7 @@ def build_account_specs(root: Path | None = None) -> list[ServiceSpec]:
         argv=(node, str(next_cli), "dev", "--hostname", "127.0.0.1", "--port", "3000")
         if node and next_cli.is_file() else None,
         env={**os.environ, "WIZARD_ACCOUNT_LOCAL_DEV": "1",
+             "WIZARD_NEXT_DIST_DIR": ".next-runtime-dev",
              "WIZARD_ACCOUNT_BACKEND_URL": "http://127.0.0.1:8090"},
         why_unstartable="Local account website or its installed dependencies are unavailable",
     )]

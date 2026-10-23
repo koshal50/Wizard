@@ -15,7 +15,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Resize, Paste
 from textual.message import Message
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Markdown, Static
+from textual.widgets import Button, Input, LoadingIndicator, Markdown, Static
 
 from wizard.cli.parser.command_parser import BTW_COMMANDS, COMMAND_TARGETS, SLASH_COMMANDS
 from wizard.cli.parser.intent_builder import build_intent
@@ -129,6 +129,11 @@ class WizardApp(App):
     #primary { width: 1fr; height: 1fr; min-height: 0; }
     #content { height: 1fr; min-height: 0; overflow-y: auto; scrollbar-size: 1 1; padding: 0; }
     .account-mode #content { align: center middle; }
+    .startup-mode #content { align: center middle; }
+    #startup-panel { height: auto; width: 100%; padding: 1 2; }
+    #startup-title { height: 2; text-align: center; color: #DDEEF3; }
+    #startup-animation { height: 2; color: #E7A168; }
+    #startup-detail { height: auto; text-align: center; color: #8CBFCF; }
     #heading { height: 2; color: #8CBFCF; }
     #families { height: auto; }
     #recent { height: auto; margin-top: 1; color: #7E7C88; }
@@ -149,13 +154,15 @@ class WizardApp(App):
     #utility { height: auto; }
     #utility-body { height: auto; background: transparent; }
     #utility-note { height: auto; color: #8CBFCF; }
-    #companion { width: 25; height: auto; align: right bottom; padding: 0 2 2 1; }
-    #bottom-row { dock: bottom; height: 14; max-height: 55%; align-vertical: bottom; }
+    #companion { width: 32; height: 100%; align: right bottom; padding: 0 2 1 1; }
+    #bottom-row { dock: bottom; height: 17; max-height: 60%; align-vertical: bottom; }
     .short #bottom-row { height: 10; }
-    #bottom-row #speech { max-height: 3; overflow-y: hidden; }
+    #bottom-row #speech { height: 1fr; min-height: 0; max-height: 7; overflow-y: auto; scrollbar-size: 1 1; }
     #bottom-row #render-note, #bottom-row #art-credit { display: none; }
-    #bottom-row ReaperGuide { width: 22; }
-    #bottom-row ReaperGuide #real-reaper { width: 14; max-height: 8; }
+    #bottom-row ReaperGuide { width: 100%; height: 100%; }
+    #bottom-row ReaperGuide #real-reaper { width: auto; height: 8; max-height: 8; }
+    .short #bottom-row ReaperGuide #real-reaper { height: 3; max-height: 3; }
+    .short #bottom-row #speech { max-height: 4; }
     #composer { width: 1fr; height: 100%; align-vertical: bottom; padding: 0; }
     #context-strip { height: 1; color: #8CBFCF; }
     #selection { height: 1; color: #A29CAB; }
@@ -173,7 +180,7 @@ class WizardApp(App):
     #stage { display: none; }
     .compact #companion { width: 22; }
     .compact ReaperGuide { width: 20; }
-    .compact ReaperGuide #speech { display: none; }
+    .compact ReaperGuide #speech { max-height: 5; }
     .compact ReaperGuide #art-credit { display: none; }
     .narrow #companion { width: 14; padding-left: 1; }
     .narrow ReaperGuide { width: 13; }
@@ -237,6 +244,10 @@ class WizardApp(App):
         with Horizontal(id="workspace"):
             with Vertical(id="primary"):
                 with VerticalScroll(id="content"):
+                    with Vertical(id="startup-panel"):
+                        yield Static("Getting your workspace ready", id="startup-title")
+                        yield LoadingIndicator(id="startup-animation")
+                        yield Static("Starting local services", id="startup-detail", markup=False)
                     yield Static("Choose a command", id="heading")
                     with Vertical(id="onboarding"):
                         yield Static("", id="welcome-copy", markup=False)
@@ -279,6 +290,7 @@ class WizardApp(App):
                         yield ReaperGuide(id="guide")
 
     def on_mount(self):
+        self.query_one("#startup-panel").display = False
         self.query_one("#onboarding").display = False
         self.query_one("#account-panel").display = False
         self.query_one("#utility").display = False
@@ -297,6 +309,39 @@ class WizardApp(App):
             self.query_one("#motion-action", Button).label = "Motion on"
         if not self._preferences.get("intro_seen"):
             self._show_intro()
+        from wizard.cli.tui.services import build_specs
+        if not self.is_headless and any(spec.key == "account" for spec in build_specs()):
+            self._show_startup("Starting local services")
+            self.query_one("#notice", Static).update("Starting local services...")
+            self.call_after_refresh(self._connect_services, self._startup_services_ready)
+
+    def _show_startup(self, detail):
+        self._startup_visibility = {selector: self.query_one(selector).display for selector in
+            ("#heading", "#onboarding", "#families", "#targets", "#help", "#review", "#live-run", "#utility")}
+        for selector in self._startup_visibility:
+            self.query_one(selector).display = False
+        self.query_one("#startup-panel").display = True
+        self.query_one("#startup-detail", Static).update(detail)
+        self.query_one("#startup-animation").display = self.motion_enabled
+        self.screen.add_class("startup-mode")
+        self.query_one("#guide", ReaperGuide).explain("Getting your workspace ready. I'm starting the local services. Your project hasn't been run.")
+
+    def _startup_services_ready(self, error):
+        if self._ui_closing:
+            return
+        self.query_one("#startup-panel").display = False
+        self.screen.remove_class("startup-mode")
+        for selector, visible in getattr(self, "_startup_visibility", {}).items():
+            self.query_one(selector).display = visible
+        report = self._supervisor.report if self._supervisor else None
+        failures = [state.spec.label + ": " + state.detail for state in report.states if not state.ok] if report else []
+        message = error or "\n".join(failures) or "Local services are ready. Wizard will stop the services it started when you exit."
+        self.query_one("#notice", Static).update(sanitize_terminal(message))
+        self.query_one("#guide", ReaperGuide).explain("Services are ready. Choose what you want to check." if not error and not failures else sanitize_terminal(message))
+
+    def _startup_progress(self, message):
+        if not self._ui_closing:
+            self.query_one("#startup-detail", Static).update(message)
 
     def on_resize(self, event: Resize):
         self._size_layout(event.size.width, event.size.height)
@@ -496,7 +541,7 @@ class WizardApp(App):
             field = self.query_one("#intent", Input)
             if self.query_one("#slash-options").display and field.has_focus:
                 return True
-            return bool(self._menu_buttons()) and (not field.has_focus or not field.value)
+            return (bool(self._menu_buttons()) and (not field.has_focus or not field.value)) or self.query_one("#live-run").display
         if action in {"slash_up", "slash_down", "slash_apply"}:
             if not self.is_mounted:
                 return False
@@ -523,22 +568,37 @@ class WizardApp(App):
             self.query_one("#content", VerticalScroll).scroll_relative(y=delta * 3, animate=False)
 
     def action_navigate_up(self):
+        self._follow_execution = False
         self._navigate(-1)
 
     def action_navigate_down(self):
         self._navigate(1)
 
     def action_page_up(self):
+        self._follow_execution = False
         self.query_one("#content", VerticalScroll).scroll_page_up(animate=False)
 
     def action_page_down(self):
         self.query_one("#content", VerticalScroll).scroll_page_down(animate=False)
 
     def action_content_home(self):
+        self._follow_execution = False
         self.query_one("#content", VerticalScroll).scroll_home(animate=False)
 
     def action_content_end(self):
+        self._follow_execution = True
         self.query_one("#content", VerticalScroll).scroll_end(animate=False)
+
+    def on_mouse_scroll_up(self, event):
+        self._follow_execution = False
+
+    def on_mouse_scroll_down(self, event):
+        self.call_after_refresh(self._resume_follow_at_bottom)
+
+    def _resume_follow_at_bottom(self):
+        content = self.query_one("#content", VerticalScroll)
+        if content.scroll_y >= content.max_scroll_y - 1:
+            self._follow_execution = True
 
     def _highlight_slash(self):
         for i, button in enumerate(self.query("#slash-options Button")):
@@ -663,7 +723,20 @@ class WizardApp(App):
         self.query_one("#notice", Static).update("")
         self.query_one("#family-" + next(iter(COMMAND_TARGETS)), Button).focus()
 
-    def _start_login(self):
+    def _start_login(self, *, services_ready=False):
+        if not services_ready:
+            from wizard.cli.tui.services import build_specs
+            if any(spec.key == "account" for spec in build_specs()):
+                self.query_one("#notice", Static).update("Starting account services before login...")
+                def connected(error):
+                    report = self._supervisor.report if self._supervisor else None
+                    failures = [s.spec.label + ": " + s.detail for s in report.states if s.spec.key in {"account", "website"} and not s.ok] if report else []
+                    if error or failures:
+                        self.query_one("#notice", Static).update(sanitize_terminal(error or "\n".join(failures)))
+                    else:
+                        self._start_login(services_ready=True)
+                self._connect_services(connected)
+                return
         if self._logout_pending:
             self.query_one("#notice", Static).update("Logout is still finishing. Please wait.")
             return
@@ -1013,15 +1086,20 @@ class WizardApp(App):
             continuation(None)
             return
         if self._startup_thread and self._startup_thread.is_alive():
-            continuation("The local service connection is still finishing. Please try again shortly.")
+            if not hasattr(self, "_service_waiters"):
+                self._service_waiters = []
+            self._service_waiters.append(continuation)
             return
         from wizard.cli.tui.services import ServiceSupervisor
-        self._supervisor = ServiceSupervisor(log_dir=self.project / ".wizard" / "logs")
+        self._supervisor = self._supervisor or ServiceSupervisor(log_dir=self.project / ".wizard" / "logs")
         self._service_stop.clear()
         self._services_stopped = False
         def connect():
             try:
-                report = self._supervisor.ensure_all(cancel_event=self._service_stop)
+                def progress(message):
+                    if not self._ui_closing:
+                        self.call_from_thread(self._startup_progress, message)
+                report = self._supervisor.ensure_all(cancel_event=self._service_stop, on_progress=progress)
                 error = None
                 if not report.investigation_stack_ok:
                     failures = [state for state in report.states if state.spec.key == "kernel" and not state.ok]
@@ -1047,8 +1125,12 @@ class WizardApp(App):
 
     def _services_connected(self, continuation, error):
         if not self._ui_closing:
-            self._services_ready = error is None
+            self._services_ready = error is None and bool(self._supervisor and self._supervisor.report and all(s.ok for s in self._supervisor.report.states))
+            waiting = getattr(self, "_service_waiters", [])
+            self._service_waiters = []
             continuation(error)
+            for callback in waiting:
+                callback(error)
 
     def _connected(self, request, error):
         if self._ui_closing or not self._starting:
@@ -1067,6 +1149,7 @@ class WizardApp(App):
         if self._ui_closing or not self._starting:
             return
         self._starting = False
+        self._follow_execution = True
         self._session_account_revision = self._account_revision
         self.session = TuiSession(family=request[0], target=request[1], intent_text=request[2],
                                   repo_path=str(self.project), on_change=lambda: self.post_message(self.RunChanged()))
@@ -1109,7 +1192,7 @@ class WizardApp(App):
             self.query_one("#notice", Static).update("Report saved: " + sanitize_terminal(report) if report else "No saved report path was returned. Open output details for the final status.")
         if narration and narration != self._last_narration and not self._utility_view:
             self._last_narration = narration
-            self.query_one("#guide", ReaperGuide).explain(sanitize_terminal(narration)[:220], immediate=bool(state.get("finished")))
+            self.query_one("#guide", ReaperGuide).explain(sanitize_terminal(narration), immediate=bool(state.get("finished")))
 
     def _refresh_recent(self):
         from wizard.cli.tui.history import load_recent

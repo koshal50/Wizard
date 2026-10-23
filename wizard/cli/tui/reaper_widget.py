@@ -134,9 +134,11 @@ class ReaperGuide(Vertical):
         if message == self._speech_text:
             return
         self._speech_text = message
+        self.query_one("#speech", Static).tooltip = message
         self._speech_since = time.monotonic()
         self._speech_count = len(message) if immediate or not self._motion_enabled else min(3, len(message))
         self.query_one("#speech", Static).update(message[:self._speech_count])
+        self.call_after_refresh(self.query_one("#speech").scroll_end, animate=False)
         if self._phase != "arrive":
             self._phase, self._since = "wave", time.monotonic()
         if self._motion_enabled:
@@ -157,6 +159,7 @@ class ReaperGuide(Vertical):
             if count != self._speech_count:
                 self._speech_count = count
                 self.query_one("#speech", Static).update(self._speech_text[:count])
+                self.call_after_refresh(self.query_one("#speech").scroll_end, animate=False)
         if not self._frames or self._image_view is None:
             if self._speech_text is None or self._speech_count == len(self._speech_text):
                 self._timer.pause()

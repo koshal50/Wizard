@@ -538,6 +538,11 @@ class TuiSession:
                     "observation_id": observation_id, "tool": str(payload.get("tool") or "tool"),
                     "ok": payload.get("ok"), "result": dict(result),
                 }]
+                if payload.get("tool") == "read_file" and "content" in result:
+                    self.activity.append(LogLine("Read " + sanitize_terminal(str(result.get("path") or "file")) + " (content excerpt)", "wiz.flow", "step"))
+                    self.activity.append(LogLine(sanitize_terminal(str(result["content"])), "wiz.dim", "output"))
+                    self.on_change()
+                    return
                 self.activity.append(LogLine("  " + str(payload.get("tool") or "tool") + " output", "wiz.dim", "output"))
                 for key, value in result.items():
                     if (payload.get("node_id") in self._streamed_executions or result.get("handle_id") in self._streamed_handles) and key in {"stdout", "stderr", "stdout_so_far", "stderr_so_far"}:
@@ -964,19 +969,20 @@ def _narrate(ev_type: str, payload: dict) -> tuple[str, str]:
 
     if ev_type == "provider.progress":
         who = str(payload.get("agent") or "agent")
+        task = {"planner": "Planning checks", "explorer": "Choosing the next action", "verifier": "Reviewing evidence"}.get(who, "Working")
         stage = payload.get("stage")
         if stage == "waiting":
-            return f"{who}: waiting {payload.get('wait_seconds')}s for shared provider capacity", "wiz.flow"
+            return f"{task} - waiting {payload.get('wait_seconds')}s for provider capacity", "wiz.flow"
         if stage == "request":
-            return f"{who}: provider request sent (timeout {payload.get('timeout_seconds')}s)", "wiz.flow"
+            return task, "wiz.flow"
         if stage == "response":
-            return f"{who}: provider HTTP {payload.get('status')} after {payload.get('elapsed_seconds')}s", "wiz.flow"
+            return (f"{task}: provider HTTP {payload.get('status')}", "wiz.warn") if int(payload.get("status") or 200) >= 400 else ("", "wiz.dim")
         if stage == "validated":
-            return f"{who}: structured response validated", "wiz.flow"
-        return f"{who}: provider {stage}", "wiz.flow"
+            return "", "wiz.dim"
+        return "", "wiz.dim"
 
     if ev_type == "agent.completed":
-        return f"{payload.get('agent_type', 'agent')} decision completed", "wiz.flow"
+        return "", "wiz.dim"
 
     if ev_type == "agent.consulted":
         agent = str(payload.get("agent_type") or "agent").lower()

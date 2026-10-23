@@ -33,6 +33,8 @@ class LiveRun(Vertical):
         self._report = ""
         self.output_expanded = False
         self._session = None
+        self._transcript = Text()
+        self._active_range = None
 
     def compose(self):
         yield Static("", id="run-request", markup=False)
@@ -82,10 +84,22 @@ class LiveRun(Vertical):
             # A light sweep through the current action, never fake progress.
             position = self._frame % (len(self._now) + 10)
             for index in range(max(0, position - 5), min(len(self._now), position + 1)):
-                text.stylize("bold #E7A168", index, index + 1)
+                text.stylize("bold #E7A168", index + 6, index + 7)
             self._frame += 1
         self.query_one("#run-now", Static).update(text)
+        if self._active_range is not None:
+            flow = self._transcript.copy()
+            if self._active:
+                start, _ = self._active_range
+                palette = ("#33434A", "#628A9B", "#B6DDE5", "#E7A168", "#754336")
+                for cell in range(4):
+                    flow.stylize("on " + palette[(cell + (self._frame if getattr(self.app, "motion_enabled", True) else 0)) % len(palette)], start + cell, start + cell + 1)
+            self.query_one("#run-flow", Static).update(flow)
         self.app.refresh_usage_footer()
+        if getattr(self.app, "_follow_execution", True) and self.display and not getattr(self.app, "_utility_view", None):
+            content = self.app.query_one("#content")
+            if content.scroll_y < content.max_scroll_y:
+                content.scroll_end(animate=False, immediate=True, x_axis=False)
 
     def toggle_output(self):
         self.output_expanded = not self.output_expanded
@@ -100,7 +114,7 @@ class LiveRun(Vertical):
         lines = tuple((sanitize_terminal(line.text), line.style, line.kind) for line in session.snapshot_activity())
         if lines != self._lines:
             content = self.app.query_one("#content")
-            follow = content.scroll_y >= content.max_scroll_y - 1
+            follow = getattr(self.app, "_follow_execution", True)
             transcript = Text()
             colors = {"wiz.err": "#DE8D86", "wiz.warn": "#E7A168", "wiz.ok": "#B6DDE5", "wiz.dim": "#7E7C88"}
             visible = []
@@ -108,9 +122,9 @@ class LiveRun(Vertical):
             def flush_output():
                 if not output:
                     return
-                if not self.output_expanded and len(output) > 4:
-                    visible.append(("  Earlier output hidden. Ctrl+T expands it.", "wiz.dim", "output"))
-                visible.extend(output if self.output_expanded else output[-4:])
+                visible.extend(output if self.output_expanded else output[:5])
+                if not self.output_expanded and len(output) > 5:
+                    visible.append((f"  {len(output) - 5} more lines · Ctrl+T or click to expand", "wiz.dim", "expand"))
                 output.clear()
             for item in lines:
                 if item[2] == "output":
@@ -120,10 +134,19 @@ class LiveRun(Vertical):
                     flush_output()
                     visible.append(item)
             flush_output()
+            self._active_range = None
             for line, style, kind in visible:
                 if kind != "output":
                     line = line.lstrip("◈◆◇●◐✓✔✗✘✕✖→· ")
-                transcript.append(line + "\n", style=colors.get(style, "#F3F1EC"))
+                if kind not in {"output", "expand"}:
+                    self._active_range = (len(transcript), len(transcript) + 4)
+                    transcript.append("      ")
+                if kind == "expand":
+                    from rich.style import Style
+                    transcript.append(line + "\n", Style(color="#8CBFCF", meta={"@click": "app.toggle_process_output"}))
+                else:
+                    transcript.append(line + "\n", style=colors.get(style, "#F3F1EC"))
+            self._transcript = transcript
             self.query_one("#run-flow", Static).update(transcript)
             self._lines = lines
             if follow:

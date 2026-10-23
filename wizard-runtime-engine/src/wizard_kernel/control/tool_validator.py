@@ -68,6 +68,8 @@ class ValidationResult:
     valid: bool
     reason: str = ""
     sanitised_params: dict = field(default_factory=dict)
+    observation_id: str | None = None
+    details: dict = field(default_factory=dict)
 
 
 class ToolRequestValidator:
@@ -80,6 +82,9 @@ class ToolRequestValidator:
         self._browser_enabled = browser_enabled
         # Fingerprint set for exact duplicate detection: (tool, stable-json-params)
         self._seen_fingerprints: set[str] = set()
+        self._observed_reads = {}
+        self._retryable = set()
+        self._retried = set()
         self._recheck_permits: dict[str, frozenset[str]] = {}
         self._authorized_rechecks: set[str] = set()
         self._rejected_fingerprints: set[str] = set()
@@ -94,9 +99,23 @@ class ToolRequestValidator:
         self._enforce_discovered_routes = navigation_targets is not None
         self._discovered_urls = {self._navigation_key(url) for url in (navigation_targets or []) if url.startswith(("http://", "https://"))}
 
-    def record_execution(self, tool: str, params: dict, payload: dict) -> None:
+    def record_execution(self, tool: str, params: dict, payload: dict, observation_id: str | None = None) -> None:
         """Advance prerequisites only from successful executor results."""
         data = payload.get("data") or {}
+        fingerprint = self._fingerprint(tool, params)
+        if tool in {'execute_command', 'start_process'}:
+            # Execution can create/change repository files. Re-observe instead
+            # of serving a cached pre-execution repository snapshot.
+            self._seen_fingerprints.difference_update(self._observed_reads)
+            self._observed_reads.clear()
+        if tool in {'read_file', 'list_tree', 'search_files', 'path_exists'} and payload.get('ok') and observation_id and not (
+                payload.get('incomplete') or payload.get('truncated') or data.get('incomplete') or data.get('truncated')):
+            self._observed_reads[self._fingerprint(tool, params)] = observation_id
+        elif tool == 'list_tree' and (not payload.get('ok') or data.get('incomplete') or data.get('truncated')):
+            # Only explicitly recoverable failures/incomplete listings may retry.
+            if (payload.get('meta') or {}).get('retryable') or data.get('incomplete') or data.get('truncated'):
+                if fingerprint not in self._retried:
+                    self._retryable.add(fingerprint)
         if payload.get("ok") and tool in BROWSER_TOOLS:
             page = data.get("page_observation") or data
             for link in page.get("links", []):
@@ -192,6 +211,10 @@ class ToolRequestValidator:
 
         # 3. Path traversal guard for tools that accept paths
         params = dict(request.parameters)
+        if request.tool == 'list_tree':
+            params.setdefault('max_depth', 3)
+            if type(params['max_depth']) is not int or params['max_depth'] < 1:
+                return reject('list_tree max_depth must be a positive integer')
         if request.tool in {"read_process", "kill_process"} and params.get("handle_id") not in self._process_handles:
             return reject("Process handle does not belong to this investigation")
         if request.tool in _EXEC_TOOLS:
@@ -272,12 +295,24 @@ class ToolRequestValidator:
         if not repeatable_observation:
             fingerprint = self._fingerprint(request.tool, params)
             if fingerprint in self._seen_fingerprints and not recheck:
-                return reject(
+                if fingerprint in self._observed_reads:
+                    return ValidationResult(valid=True, sanitised_params=params,
+                                            observation_id=self._observed_reads[fingerprint],
+                                            reason='Duplicate repository request: reuse existing observation')
+                if fingerprint in self._retryable:
+                    self._retryable.remove(fingerprint)
+                    self._retried.add(fingerprint)
+                    return ValidationResult(valid=True, sanitised_params=params, reason='Retry recoverable repository request')
+                result = reject(
                     (
                         f"Duplicate request: {request.tool!r} with identical parameters has already "
                         "been executed in this investigation. Agent may be in a cycle."
                     )
                 )
+                result.details = {'tool': request.tool, 'parameters': params,
+                                  'reusable': False, 'retryable': False,
+                                  'next_action': 'Inspect repository_requests and choose different evidence or report the missing evidence'}
+                return result
             self._seen_fingerprints.add(fingerprint)
 
         return ValidationResult(valid=True, sanitised_params=params)
@@ -415,17 +450,23 @@ class ToolRequestValidator:
                 return ValidationResult(valid=False, reason="http_request body exceeds 8192 characters.")
         return ValidationResult(valid=True, sanitised_params=params)
 
+    def retry_eligible(self, tool: str, params: dict) -> bool:
+        return self._fingerprint(tool, params) in self._retryable
+
+
     @staticmethod
     def _fingerprint(tool: str, params: dict) -> str:
         """Stable fingerprint of (tool, params) for dedup. Order-independent on dict keys."""
         canonical = json.dumps({"tool": tool, "params": params}, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()
 
+
     @staticmethod
     def _is_loopback_url(url: str) -> bool:
         parsed = urlsplit(url)
         host = (parsed.hostname or "").lower()
         return host == "localhost" or host.endswith(".localhost") or host in {"127.0.0.1", "::1"}
+
 
     @staticmethod
     def _endpoint_host(host: str) -> str:

@@ -15,6 +15,7 @@ class TextPredicate(StrictModel):
     expected: str = Field(min_length=1)
     target: str = ""
     after_submission: bool = False
+    case_sensitive: bool = True
 
     @model_validator(mode="after")
     def no_redaction_expectation(self):
@@ -58,6 +59,8 @@ class Assertion(RootModel[Annotated[Union[tuple(_predicates)], Field(discriminat
     def operator(self): return self.root.operator
     @property
     def expected(self): return str(self.root.expected)
+    @property
+    def case_sensitive(self): return self.root.case_sensitive
     @property
     def target(self): return self.root.target
     @property
@@ -115,6 +118,29 @@ class RecoveryPlan(StrictModel):
     reason: str = Field(min_length=1, max_length=1000)
     observation_ids: list[str] = Field(max_length=8)
     tasks: list[RecoveryTask] = Field(max_length=3)
+
+
+ARCHITECTURE_AREAS = ('structure', 'entry_points', 'startup', 'boundaries', 'packages', 'configuration')
+_repository_content = next(p for p in _predicates if p.model_fields['field'].annotation == Literal['content'])
+_architecture_content = create_model('ArchitectureContentPredicate', __base__=_repository_content,
+    expected=(str, Field(min_length=1, max_length=160, pattern=r'^[^\x00-\x1f\x7f\\\[\]{}]+$')))
+RepositoryContentAssertion = create_model('RepositoryContentAssertion', __base__=Assertion,
+                                         root=(_architecture_content, ...))
+
+
+class ArchitectureFinding(StrictModel):
+    area: Literal['structure', 'entry_points', 'startup', 'boundaries', 'packages', 'configuration']
+    summary: str
+    assertions: list[RepositoryContentAssertion] = Field(default_factory=list)
+    blocker: str = ''
+
+    @model_validator(mode='after')
+    def repository_proof(self):
+        if any(a.source != 'repository' or a.field != 'content' or not a.target for a in self.assertions):
+            raise ValueError('Architecture findings require targeted repository content proof')
+        if not self.assertions and not self.blocker:
+            raise ValueError('Missing architecture proof requires a concrete blocker')
+        return self
 
 
 class DiagramComponent(StrictModel):
@@ -187,15 +213,22 @@ def planning_model(commands: list[str], *, read_only: bool = False, repository_t
     targets = Literal[tuple(dict.fromkeys(["", *commands]))]
     predicates = tuple(create_model(p.__name__ + "_declared", __base__=p, target=(targets, ""))
                        if p.model_fields["source"].annotation == Literal["process"] else p for p in _predicates)
-    if read_only:
-        predicates = tuple(p for p in predicates if p.model_fields['source'].annotation == Literal['repository'])
     predicate = RootModel[Annotated[Union[predicates], Field(discriminator="field")]]
-    check = create_model("PlannedCheck", __base__=CheckSpec, assertions=(list[predicate], Field(default_factory=list)))
     if read_only:
-        check = create_model('ReadOnlyCheck', __base__=check,
+        content = next(p for p in _predicates if p.model_fields['field'].annotation == Literal['content'])
+        if repository_targets:
+            content = create_model('ObservedExplanationContent', __base__=content,
+                target=(Literal[tuple(dict.fromkeys(repository_targets))], ...))
+        repository_assertion = create_model('ExplanationAssertion', __base__=Assertion, root=(content, ...))
+        check = create_model('ExplanationCheck', __base__=CheckSpec,
+            assertions=(list[repository_assertion], Field(default_factory=list,
+                **({'max_length': 0} if repository_targets == [] or discovery_only else {}))),
             capabilities=(list[Literal['repository']], Field(default_factory=list)))
+    else:
+        check = create_model("PlannedCheck", __base__=CheckSpec, assertions=(list[predicate], Field(default_factory=list)))
     return create_model("GroundedVerificationSpec", __base__=VerificationSpec,
                         checks=(list[check], Field(min_length=1, max_length=8)))
+
 
 
 class FormField(StrictModel):
@@ -258,7 +291,8 @@ class DecisionEnvelope(StrictModel):
 def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, value_refs: list[str] | None = None,
                    allow_refine: bool = True, browser_refinement: bool = False, allow_blocked: bool = True,
                    browser_targets: list[str] | None = None, require_submission: bool | None = None,
-                   process_targets: list[str] | None = None):
+                   process_targets: list[str] | None = None, repository_refinement: bool = False,
+                   observation_ids: list[str] | None = None, repository_targets: list[str] | None = None):
     """Only advertise allowed tools, with structurally exclusive decision kinds."""
     registered = dict(TOOL_ACTIONS)
     if value_refs:
@@ -275,7 +309,7 @@ def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, v
     action_type = actions[0] if len(actions) == 1 else Annotated[Union[actions], Field(discriminator="tool")]
     tool = create_model("ToolDecision", __base__=StrictModel,
         kind=(Literal["tool"], ...), action=(action_type, ...),
-        refinement=(None, None), reason=(str, ...))
+        refinement=(type(None), None), reason=(str, ...))
     refinement_type = CheckRefinement
     if browser_refinement:
         targets = Literal[tuple(dict.fromkeys(["", *(t for t in (browser_targets or []) if isinstance(t, str) and t)]))]
@@ -287,6 +321,17 @@ def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, v
         browser_assertion = RootModel[Annotated[Union[browser_predicates], Field(discriminator="field")]]
         refinement_type = create_model("BrowserRefinement", __base__=CheckRefinement,
                                       assertions=(list[browser_assertion], Field(min_length=1)))
+    elif repository_refinement:
+        predicates = tuple(p for p in _predicates if p.model_fields['source'].annotation == Literal['repository'])
+        if repository_targets is not None:
+            allow_refine = allow_refine and bool(repository_targets)
+            if repository_targets:
+                targets = Literal[tuple(dict.fromkeys(repository_targets))]
+                predicates = tuple(create_model(p.__name__ + '_observed_repository', __base__=p, target=(targets, ...))
+                                   for p in predicates)
+        predicate = RootModel[Annotated[Union[predicates], Field(discriminator='field')]]
+        refinement_type = create_model('RepositoryRefinement', __base__=CheckRefinement,
+                                      assertions=(list[predicate], Field(min_length=1)))
     elif process_targets is not None:
         targets = Literal[tuple(dict.fromkeys(process_targets or [""]))]
         predicates = tuple(create_model(p.__name__ + "_observed", __base__=p, target=(targets, ""))
@@ -294,17 +339,23 @@ def decision_model(available_tools: list[str], *, allow_evaluate: bool = True, v
         predicate = RootModel[Annotated[Union[predicates], Field(discriminator="field")]]
         refinement_type = create_model("ProcessRefinement", __base__=CheckRefinement,
                                       assertions=(list[predicate], Field(min_length=1)))
+    if observation_ids is not None:
+        allow_refine = allow_refine and bool(observation_ids)
+        if observation_ids:
+            reference = Literal[tuple(dict.fromkeys(observation_ids))]
+            refinement_type = create_model("ObservedRefinement", __base__=refinement_type,
+                observation_ids=(list[reference], Field(min_length=1)))
     refine = create_model("RefineDecision", __base__=StrictModel,
-        kind=(Literal["refine"], ...), action=(None, None),
+        kind=(Literal["refine"], ...), action=(type(None), None),
         refinement=(refinement_type, ...), reason=(str, ...))
     blocked = create_model("BlockedDecision", __base__=StrictModel,
-        kind=(Literal["blocked"], ...), action=(None, None),
-        refinement=(None, None), reason=(str, ...))
+        kind=(Literal["blocked"], ...), action=(type(None), None),
+        refinement=(type(None), None), reason=(str, ...))
     variants = (tool,) + ((blocked,) if allow_blocked else ()) + ((refine,) if allow_refine else ())
     if allow_evaluate:
         evaluate = create_model("EvaluateDecision", __base__=StrictModel,
-            kind=(Literal["evaluate"], ...), action=(None, None),
-            refinement=(None, None), reason=(str, ...))
+            kind=(Literal["evaluate"], ...), action=(type(None), None),
+            refinement=(type(None), None), reason=(str, ...))
         variants += (evaluate,)
     decision_type = variants[0] if len(variants) == 1 else Annotated[Union[variants], Field(discriminator="kind")]
     return create_model("TacticalDecision", __base__=DecisionEnvelope, decision=(decision_type, ...))

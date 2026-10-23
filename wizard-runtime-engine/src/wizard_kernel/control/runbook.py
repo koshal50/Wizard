@@ -22,6 +22,7 @@ def project(inv, state):
                            "observation_id": assertion.get("observation_id"), "verdict": assertion.get("verdict")})
         checks.append({"id": check["id"], "description": flow_trace.safe_text(check["description"]),
                        "purpose": "goal" if check["id"] in required else "recovery_helper",
+                       "finding": (state.get("repository_findings", {}).get(check["id"]) or {}).get("summary", ""),
                        "status": {"passed": "VERIFIED", "failed": "FAILED"}.get(result.get("status"), "UNVERIFIED"),
                        "requirements": flow_trace.safe_parameters({"assertions": check.get("assertions", [])})["assertions"], "evidence": proofs,
                        "missing_evidence": [{"reason": flow_trace.safe_text(str(a.get("reason") or "Predicate not satisfied")),
@@ -50,6 +51,8 @@ def markdown(data):
              f"{sum(c['status'] == 'VERIFIED' for c in goals)} verified / {sum(c['status'] == 'FAILED' for c in goals)} failed / {sum(c['status'] == 'UNVERIFIED' for c in goals)} unverified", ""]
     for check in checks:
         lines += ["### " + ("Recovery helper: " if check.get("purpose") == "recovery_helper" else "") + text(check["description"]), "", "**" + check["status"] + "**", ""]
+        if check.get("finding"):
+            lines += ["Repository finding (source-supported, not runtime verification):", "", text(check["finding"]), ""]
         for requirement in check["requirements"]:
             lines += ["- Required: " + text(requirement.get("source", "")) + " / " + text(requirement.get("field", "")) + " " + text(requirement.get("operator", "")) + " " + text(requirement.get("expected", ""))]
         for proof in check["evidence"]:
@@ -129,6 +132,8 @@ def html_report(data):
     cards = []
     for check in data["checks"]:
         proofs = "".join("<li>" + esc(p["observed"]) + "<br><code>" + esc(p["observation_id"] or "not recorded") + "</code></li>" for p in check["evidence"])
+        if check.get("finding"):
+            proofs = "<li>Repository finding (not runtime verification): " + esc(check["finding"]) + "</li>" + proofs
         cards.append('<article><h3>' + ('Recovery helper: ' if check.get('purpose') == 'recovery_helper' else '') + esc(check["description"]) + '</h3><strong>' + esc(check["status"]) + '</strong><ul>' + proofs + '</ul><p>' + esc(check["blocker"]) + '</p></article>')
     commands = []
     for step in data["steps"]:

@@ -116,7 +116,7 @@ def execution_preview(payload: dict) -> dict:
     """Bounded output for live presentation, not full tool results or source files."""
     data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
     result = {}
-    for key in ("stdout", "stderr", "stdout_so_far", "stderr_so_far", "exit_code", "is_running",
+    for key in ("path", "content", "bytes_read", "stdout", "stderr", "stdout_so_far", "stderr_so_far", "exit_code", "is_running",
                 "pid", "handle_id", "session_id", "readiness", "ready", "endpoint", "url", "status_code", "active"):
         value = data.get(key, payload.get(key))
         if value is not None:

@@ -174,12 +174,13 @@ def build_account_specs(root: Path | None = None) -> list[ServiceSpec]:
     if port not in {3000, 8090}:
         return []
     launcher = root / "backend" / "scripts" / "start-local-account-backend.ps1"
+    powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     backend = ServiceSpec(
         key="account", label="Account service", port=8090, health_path="/health",
         cwd=str(root),
-        argv=("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-              str(launcher), "-PublicOrigin", url.rstrip("/")) if os.name == "nt" and launcher.is_file() else None,
-        why_unstartable="Local account service launcher is unavailable",
+        argv=(str(powershell), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+              str(launcher), "-PublicOrigin", url.rstrip("/")) if os.name == "nt" and launcher.is_file() and (root / ".secrets/wizard-account-local.clixml").is_file() else None,
+        why_unstartable="Run backend/scripts/setup-local-account-backend.ps1 once to configure this Windows user's account database",
     )
     if port == 8090:
         return [backend]
@@ -579,18 +580,28 @@ class ServiceSupervisor:
         self.log_dir = log_dir or (Path(os.getcwd()) / ".wizard" / "logs")
         self.report: ServiceReport | None = None
 
-    def ensure_all(self, specs: list[ServiceSpec] | None = None, *, cancel_event=None) -> ServiceReport:
+    def ensure_all(self, specs: list[ServiceSpec] | None = None, *, cancel_event=None, on_progress=None) -> ServiceReport:
         """Bring up every service, and record what happened to each."""
         specs = specs if specs is not None else build_specs()
+        previously_owned = {state.spec.key: state for state in self.report.states if state.process is not None} if self.report else {}
         report = ServiceReport()
         self.report = report
         for spec in specs:
             if cancel_event is not None and cancel_event.is_set():
                 break
+            if on_progress:
+                on_progress("Starting " + spec.label)
+            if spec.key == "website" and any(state.spec.key == "account" and not state.ok for state in report.states):
+                report.states.append(ServiceState(spec, "unavailable", "Website needs the local account backend; finish account database setup first"))
+                continue
             if cancel_event is None:
                 report.states.append(ensure_service(spec, self.log_dir))
             else:
                 report.states.append(ensure_service(spec, self.log_dir, cancel_event=cancel_event))
+            current = report.states[-1]
+            previous = previously_owned.get(spec.key)
+            if current.status == "adopted" and previous and previous.process.poll() is None and previous.spec.port == spec.port:
+                current.process = previous.process
         self.report = report
         return report
 

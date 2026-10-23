@@ -198,6 +198,37 @@ def test_provider_failure_is_not_a_recovery_trigger(tmp_path):
     assert saved["provider_status"] == 429 and not saved.get("recovery_attempted")
 
 
+@pytest.mark.parametrize("intent", ["explain", "investigate"])
+def test_repository_analysis_completes_with_cited_source_without_execution(tmp_path, intent):
+    (tmp_path / "entry.py").write_text("from service import application\napplication.serve()\n")
+    class Policy:
+        requests = 0
+        def request(self, role, context, model, **kwargs):
+            if role == "planner":
+                return model.model_validate({"checks": [{"id": "source", "description": "Explain the entry point",
+                    "capabilities": ["repository"], "assertions": [], "unresolved_reason": "Inspect actual source"}]})
+            self.requests += 1
+            if self.requests == 1:
+                return model.model_validate({"decision": {"kind": "tool", "reason": "Read the entry point",
+                    "action": {"tool": "read_file", "parameters": {"path": "entry.py"}}}})
+            read = next(o for o in context["repository_read_history"] if o["path"] == "entry.py")
+            return model.model_validate({"decision": {"kind": "refine", "reason": "The entry point imports the service application and invokes serve.",
+                "refinement": {"observation_ids": [read["observation_id"]], "assertions": [{
+                    "source": "repository", "field": "content", "operator": "contains",
+                    "target": "entry.py", "expected": "application.serve()"}]}}})
+    policy = Policy()
+    manager = InvestigationManager()
+    inv = manager.create(InvestigationRequest(repository_path=str(tmp_path), intent=intent,
+        question="Explain the entry point", options={"budget": 5}))
+    verification.run(inv, manager, policy)
+    saved = fs_store.read(inv.id, "verification.json")
+    assert inv.state.value == "completed", saved
+    assert policy.requests == 2
+    assert [e["tool"] for e in saved["executions"]] == ["read_file"]
+    assert "invokes serve" in saved["repository_findings"]["source"]["summary"]
+    assert "Repository finding" in fs_store.report_path(inv.id).read_text()
+
+
 def test_observed_submission_contract_requires_result_assessment_not_missing_tools():
     from wizard_kernel.contracts.verification import decision_model
     model = decision_model(["read_file"], allow_evaluate=False, allow_blocked=False,

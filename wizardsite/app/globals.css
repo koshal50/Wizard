@@ -268,3 +268,65 @@
 *::-webkit-scrollbar {
   display: none;
 }
+
+/* App1 workspace: neutral shadcn surfaces, shared by dashboard and diagram. */
+.wizard-workspace {
+  color-scheme: dark;
+  --background: #101014; --foreground: #eeeaf4;
+  --card: #18181e; --card-foreground: #eeeaf4;
+  --popover: #202027; --popover-foreground: #eeeaf4;
+  --primary: #b9a0ea; --primary-foreground: #171020;
+  --secondary: #26242e; --secondary-foreground: #eeeaf4;
+  --muted: #222128; --muted-foreground: #a29baE;
+  --accent: #302a3c; --accent-foreground: #eeeaf4;
+  --border: #34303e; --input: #34303e; --ring: #ae8fdc;
+  --destructive: #ef8892; --destructive-foreground: #171014;
+  --sidebar: #141419; --sidebar-foreground: #d6cfdf;
+  --sidebar-primary: #b9a0ea; --sidebar-primary-foreground: #171020;
+  --sidebar-accent: #302a3c; --sidebar-accent-foreground: #eeeaf4;
+  --sidebar-border: #34303e; --sidebar-ring: #ae8fdc;
+  --chart-line-primary: #b9a0ea; --chart-line-secondary: #7eacaa; --chart-foreground-muted: #a29bae;
+  background: var(--background); color: var(--foreground); min-height: 100dvh;
+  font-family: var(--font-sans), sans-serif;
+}
+.wizard-workspace main { min-width: 0; }
+.workspace-content { flex: 1; min-width: 0; }
+.workspace-state { max-width: 660px; padding: 64px 32px; }
+.workspace-state h1, .workspace-page h1 { font-size: 28px; font-weight: 600; letter-spacing: -.035em; margin-bottom: 12px; }
+.workspace-state p { color: var(--muted-foreground); line-height: 1.8; margin-bottom: 24px; }
+.workspace-page { max-width: 900px; padding: 32px 24px; }
+.workspace-page-heading { margin-bottom: 32px; }
+.workspace-eyebrow { font-size: 12px; color: var(--muted-foreground); margin-bottom: 8px; }
+.workspace-page-heading p:not(.workspace-eyebrow) { font-size: 14px; color: var(--muted-foreground); }
+.profile-section { border-top: 1px solid var(--border); padding: 28px 0; }
+.profile-section h2 { font-size: 16px; font-weight: 600; margin-bottom: 20px; }
+.profile-section p { font-size: 14px; color: var(--muted-foreground); line-height: 1.8; margin-bottom: 16px; }
+.profile-section dl div { display: grid; grid-template-columns: 120px minmax(0,1fr); gap: 20px; padding: 12px 0; font-size: 14px; }
+.profile-section dt { color: var(--muted-foreground); }
+.profile-section dd { overflow-wrap: anywhere; }
+.profile-command { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); background: var(--muted); padding: 14px 18px; border-radius: 8px; margin: 20px 0; }
+.workspace-text-link { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--foreground); text-decoration: underline; text-underline-offset: 4px; }
+.workspace-error { color: var(--destructive) !important; font-size: 13px; }
+.landing-account { position: fixed; top: 24px; right: 28px; z-index: 40; display: inline-flex; align-items: center; gap: 10px; padding: 5px 12px 5px 5px; color: #f4f4f5; border: 1px solid #ffffff30; border-radius: 30px; background: #18181b99; backdrop-filter: blur(12px); font-size: 13px; }
+.landing-account:focus-visible { outline: 2px solid white; outline-offset: 4px; }
+.sankey-scroll { max-height: 70dvh; min-height: 360px; overflow: auto; overscroll-behavior: contain; border-radius: 10px; background: #fafafa; padding-block: 12px; }
+.sankey-component:focus-visible > rect, .sankey-component:focus-visible > path { stroke: #18181b; stroke-width: 2; }
+.architecture-page { max-width: 1600px; margin-inline: auto; }
+.architecture-page svg[role="button"]:focus-visible, .architecture-page path[role="button"]:focus-visible { outline: none; stroke: #18181b; opacity: 1; }
+@media(max-width: 700px) {
+  .landing-account { top: 16px; right: 16px; }
+  .landing-account > span { display: none; }
+  .landing-account { padding: 4px; }
+  .workspace-state { padding: 40px 20px; }
+  .profile-section dl div { grid-template-columns: 1fr; gap: 8px; }
+  .sankey-scroll { max-height: 65dvh; }
+}
+@media(prefers-reduced-motion: reduce) {
+  .wizard-workspace *, .wizard-workspace *::before, .wizard-workspace *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+.privacy-notice-neutral { background: #fff; color: #18181b; border-color: #e4e4e7; }
+.privacy-notice-neutral p, .privacy-notice-neutral a { color: #52525b; }
+.privacy-notice-neutral > p:first-child { color: #71717a; }
+.privacy-notice-neutral button { background: #18181b; color: #fff; }
+.privacy-notice-neutral div > a { border-color: #e4e4e7; color: #18181b; }

@@ -125,7 +125,7 @@
           showExistingSession(form, current);
           throw new Error('The signed-in account changed. Review the account before continuing.');
         }
-        window.location.assign(current.cli_pending ? '/cli/connect' : '/');
+        window.location.assign(current.cli_pending ? '/cli/connect' : '/dashboard');
       } catch (error) { alertMessage(error.message || 'Session unavailable. Retry.'); proceed.disabled = false; }
     });
     signOut.addEventListener('click', async function () {
@@ -200,7 +200,7 @@
               typeof verified.cli_pending !== 'boolean') {
             throw new Error('Authentication was not verified. Reload and try signing in.');
           }
-          window.location.assign(verified.cli_pending ? '/cli/connect' : '/');
+          window.location.assign(verified.cli_pending ? '/cli/connect' : '/dashboard');
           return;
         }
         var result = await accountJSON(response);

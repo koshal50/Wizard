@@ -169,33 +169,33 @@ export default function CliFlow({ page }: { page: "authorize" | "connect" | "com
   const seconds = end ? Math.max(0, Math.ceil((Date.parse(end) - now) / 1000)) : 0
   if (cancelled) return <><CliHeading title="CLI connection cancelled">The backend confirmed cancellation. Start a new /login when you are ready.</CliHeading><a href="/" className={cliPrimaryLink}>Return to website</a></>
   if (page === "complete" && state?.state === "exchanged") return <section aria-labelledby="completion-heading">
-    <CircleCheck aria-hidden="true" className="mt-6 h-12 w-12 text-[#7FC6E6]" />
+    <CircleCheck aria-hidden="true" className="mt-6 h-12 w-12 text-zinc-600" />
     <CliHeading title="Ready to return to Wizard CLI">The backend confirmed your code was exchanged. Check your original terminal for credential verification and secure-storage success.</CliHeading>
-    <a href="/" className={cliPrimaryLink + " mt-8"}>Return to website</a>
+    <a href="/dashboard" className={cliPrimaryLink + " mt-8"}>Open your workspace</a>
   </section>
   return <>
     <CliHeading title={page === "authorize" ? "Your Wizard account. Your terminal." : "Connect your Wizard CLI"}>
       {page === "authorize" ? "Connect your terminal using your existing Wizard account. Review and approve the connection before a code is issued." : "Confirm your account, then enter the one-time code in the terminal that started /login."}
     </CliHeading>
-    {error && <p role="alert" className="mt-6 border-l-2 border-[#7FC6E6] pl-4 text-[#EAF7FB]">{error}</p>}
-    {!view && !error && <p role="status" className="mt-8">Checking your sessionÃ¢â‚¬Â¦</p>}
-    {view?.context.account && <div className="mt-6 max-w-xl text-[#B7CEDD]">
-      <p>Account: <strong className="text-[#EAF7FB]">{view.context.account.full_name}</strong> ({view.context.account.email})</p>
+    {error && <p role="alert" className="mt-6 border-l-2 border-zinc-300 pl-4 text-zinc-900">{error}</p>}
+    {!view && !error && <p role="status" className="mt-8">Checking your session...</p>}
+    {view?.context.account && <div className="mt-6 max-w-xl text-zinc-500">
+      <p>Account: <strong className="text-zinc-900">{view.context.account.full_name}</strong> ({view.context.account.email})</p>
       {state && <p className="mt-2 break-all font-mono text-xs">CLI request: {state.request_id}</p>}
     </div>}
     {page === "authorize" && view && <a href={view.context.account ? "/cli/connect" : "/login.html?returnTo=%2Fcli%2Fconnect"} className={cliPrimaryLink + " mt-8"}>{view.context.account ? "Continue as " + view.context.account.full_name : "Continue to sign in"}</a>}
     {view?.context.account && state?.state !== "exchanged" && <button onClick={changeAccount} disabled={busy} className={cliSecondaryLink + " mt-4"}>Use a different account</button>}
     {page !== "authorize" && state?.state === "pending" && !expired && seconds > 0 &&
       <button onClick={approve} disabled={busy} className={cliPrimaryLink + " mt-8"}>Authorize this account for this terminal</button>}
-    {state?.state === "approved" && !expired && seconds > 0 && <section aria-labelledby="code-heading" className="mt-8 max-w-xl rounded-2xl border border-[#7FC6E6]/25 bg-[#123A6B]/40 p-6 sm:p-8">
-      <div className="flex items-center gap-3 text-[#7FC6E6]"><Terminal aria-hidden="true" className="h-5 w-5" /><h2 id="code-heading" className="font-mono text-xs uppercase tracking-[.15em]">Authorization code</h2></div>
-      <div data-testid="authorization-code" className="mt-5 rounded-xl border border-dashed border-[#7FC6E6]/40 bg-[#071F3A] px-4 py-6 text-center font-mono text-2xl tracking-widest">{state.code}</div>
+    {state?.state === "approved" && !expired && seconds > 0 && <section aria-labelledby="code-heading" className="mt-8 max-w-xl rounded-2xl border border-zinc-200 bg-white p-6 sm:p-8">
+      <div className="flex items-center gap-3 text-zinc-600"><Terminal aria-hidden="true" className="h-5 w-5" /><h2 id="code-heading" className="font-mono text-xs uppercase tracking-[.15em]">Authorization code</h2></div>
+      <div data-testid="authorization-code" className="mt-5 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 text-center font-mono text-2xl tracking-widest">{state.code}</div>
       <button className={cliSecondaryLink + " mt-4"} onClick={async () => {
         try { await navigator.clipboard.writeText(state.code!); setCopied(true) }
         catch { setError("Copy unavailable. Select the code and copy it manually.") }
       }}>{copied ? "Copied" : "Copy code"}</button>
-      <p className="mt-5 text-sm text-[#B7CEDD]">Paste this code into the original Wizard terminal. Keep this page open for confirmation.</p>
-      <p className="mt-4 border-t border-white/10 pt-4 text-sm text-[#B7CEDD]">Expires at {new Date(end!).toLocaleString()} Ã‚Â· {seconds}s remaining</p>
+      <p className="mt-5 text-sm text-zinc-500">Paste this code into the original Wizard terminal. Keep this page open for confirmation.</p>
+      <p className="mt-4 border-t border-zinc-200 pt-4 text-sm text-zinc-500">Expires at {new Date(end!).toLocaleString()}  /  {seconds}s remaining</p>
     </section>}
     {state?.state === "exchanged" && page !== "complete" && <a href="/cli/complete" className={cliPrimaryLink + " mt-8"}>View confirmed completion</a>}
     <div className="mt-8 flex flex-wrap gap-3">
@@ -203,6 +203,6 @@ export default function CliFlow({ page }: { page: "authorize" | "connect" | "com
       {error && <button className={cliSecondaryLink} onClick={() => { initialization.current = undefined; setRetry(n => n + 1) }}>Retry session check</button>}
       {!view && error && <a href="/" className={cliSecondaryLink}>Return to website</a>}
     </div>
-    {busy && <p role="status" className="mt-4">Waiting for account serviceÃ¢â‚¬Â¦</p>}
+    {busy && <p role="status" className="mt-4">Waiting for account service...</p>}
   </>
 }

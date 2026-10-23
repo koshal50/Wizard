@@ -154,3 +154,21 @@ a:focus-visible { outline: 3px solid var(--royal); outline-offset: 2px; border-r
 .auth-foot a { color: inherit; font-weight: 400; text-decoration: none; }
 .auth-foot a:hover { text-decoration: underline; }
 .auth-shell { min-height: calc(100dvh - 56px); }
+
+/* Neutral App1 account theme. */
+:root { --navy:#18181b; --navy-hover:#3f3f46; --royal:#52525b; --sky:#71717a; --ink:#18181b; --ink-soft:#71717a; --surface:#ffffff; --line:#e4e4e7; --danger:#b91c1c; --ok:#15803d; --font:"Inter Tight",system-ui,sans-serif; }
+body.scene { background:#f4f4f5; }
+.scene-veil { background:none; }
+.auth-panel { border:1px solid var(--line); border-radius:16px; box-shadow:0 12px 40px #18181b08; backdrop-filter:none; }
+.auth-aside { background:#fafafa; border-right:1px solid var(--line); }
+.aside-copy { color:var(--ink-soft); }
+.scan-card { background:#fff; color:var(--ink); border:1px solid var(--line); border-radius:8px; box-shadow:none; }
+.scan-card h2,.scan-file { color:var(--ink); }
+.scan-card p,.scan-tags { color:var(--ink-soft); }
+.auth-main { background:#fff; }
+input[type=text],input[type=email],input[type=password] { border-radius:6px; }
+input:focus-visible { box-shadow:0 0 0 3px #18181b12; }
+.toggle-pw { color:var(--ink-soft); }
+.toggle-pw:hover { background:#f4f4f5; }
+.auth-main a,.cli-navigation a { color:#3f3f46; }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }

@@ -35,13 +35,37 @@ export function project(graph: Graph, scope?: string, files = false, page = 0, o
   candidates.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id))
   const visible = candidates.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
   const ids = new Set(visible.map(n => n.id))
+  // Synthesized modules and observed file nodes may refer to the same source
+  // path without a parent/child link. Resolve that identity in source view;
+  // otherwise all module relationships disappear when switching to files.
+  const pathKey = (path: string) => path.replace(/\\/g, "/").replace(/^\.\//, "")
+  const visiblePaths = new Map<string, string[]>()
+  if (fileView) for (const n of visible) if (n.path) {
+    const key = pathKey(n.path)
+    visiblePaths.set(key, [...(visiblePaths.get(key) || []), n.id])
+  }
   const representative = new Map<string, string | undefined>()
   for (const n of all) {
     let current: Component | undefined = n, found: string | undefined
     for (let i = 0; current && i <= 8; i++, current = current.parent_id ? index.get(current.parent_id) : undefined) {
       if (ids.has(current.id)) { found = current.id; break }
     }
-    representative.set(n.id, found)
+    const sameFile = n.path ? visiblePaths.get(pathKey(n.path)) : undefined
+    representative.set(n.id, found || (sameFile?.length === 1 ? sameFile[0] : undefined))
+  }
+  // Saved module/file records can describe the same source without sharing a
+  // hierarchy edge. Aggregate through a unique, already saved owner only.
+  // Ambiguous ownership stays unresolved rather than inventing a boundary.
+  const ownersByPath = new Map<string, Set<string>>()
+  for (const n of all) {
+    const owner = representative.get(n.id)
+    if (!n.path || !owner) continue
+    const key = pathKey(n.path), owners = ownersByPath.get(key) || new Set<string>()
+    owners.add(owner); ownersByPath.set(key, owners)
+  }
+  for (const n of all) if (!representative.get(n.id) && n.path) {
+    const owners = ownersByPath.get(pathKey(n.path))
+    if (owners?.size === 1) representative.set(n.id, [...owners][0])
   }
   const bundles = new Map<string, Bundle>()
   let excluded = 0

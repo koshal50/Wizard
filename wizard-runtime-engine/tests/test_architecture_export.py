@@ -52,3 +52,11 @@ def test_older_results_show_only_observed_files_without_invented_connections(tmp
     assert graph["nodes"][0]["path"] == "src/api.py"
     assert graph["relationships"] == [] and graph["status"] == "incomplete"
     assert "private source" not in json.dumps(graph)
+
+
+def test_action_labels_do_not_claim_behavior_beyond_the_relation_kind():
+    from wizard_kernel.session.architecture import action_label
+    assert action_label('http','auth HTTP') == 'requests auth API'
+    assert action_label('query','auth DB queries') == 'queries auth DB'
+    assert action_label('imports','imports module') == 'imports module'
+    assert action_label('unknown','shared contract') == 'shared contract'

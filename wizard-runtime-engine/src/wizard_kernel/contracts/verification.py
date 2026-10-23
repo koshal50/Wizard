@@ -117,7 +117,72 @@ class RecoveryPlan(StrictModel):
     tasks: list[RecoveryTask] = Field(max_length=3)
 
 
-def planning_model(commands: list[str], *, read_only: bool = False):
+class DiagramComponent(StrictModel):
+    id: str
+    label: str
+    type: str
+    path: str
+    description: str
+    observation_ids: list[str]
+    subsystem_id: str | None = None
+
+
+class DiagramSubsystem(StrictModel):
+    id: str
+    label: str
+    type: Literal['application', 'entrypoint', 'service', 'database', 'package', 'module', 'external', 'configuration']
+    description: str  # What it does, not a directory listing.
+    file_paths: list[str] = Field(min_length=1, max_length=100)
+    observation_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class DiagramConnection(StrictModel):
+    id: str
+    source: str
+    target: str
+    type: str
+    description: str
+    observation_ids: list[str]
+    label: str = Field(default='', max_length=120)
+
+
+class ArchitectureReport(StrictModel):
+    findings: list[ArchitectureFinding] = Field(min_length=6, max_length=6)
+    components: list[DiagramComponent] = Field(default_factory=list, max_length=80)
+    connections: list[DiagramConnection] = Field(default_factory=list, max_length=200)
+    evidence_requests: list[str] = Field(default_factory=list, max_length=4)
+    subsystems: list[DiagramSubsystem] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode='after')
+    def complete_coverage(self):
+        if sorted(f.area for f in self.findings) != sorted(ARCHITECTURE_AREAS):
+            raise ValueError('Report each architecture area exactly once, including unresolved areas')
+        return self
+
+
+def architecture_report_model(repository_evidence: list[dict], *, require_subsystems=False):
+    """Constrain proof targets to the exact observations supplied to synthesis."""
+    targets = list(dict.fromkeys(value for row in repository_evidence
+        for value in (row.get('observation_id'), row.get('path'),
+                      str(row.get('path') or '').replace('\\', '/')) if value))
+    if targets:
+        content = create_model('ObservedArchitectureContent', __base__=_architecture_content,
+            target=(Literal[tuple(targets)], ...))
+        assertion = create_model('ObservedArchitectureAssertion', __base__=RepositoryContentAssertion,
+                                 root=(content, ...))
+        finding = create_model('GroundedArchitectureFinding', __base__=ArchitectureFinding,
+            assertions=(list[assertion], Field(default_factory=list)))
+    else:
+        finding = create_model('GroundedArchitectureFinding', __base__=ArchitectureFinding,
+            assertions=(list[RepositoryContentAssertion], Field(default_factory=list, max_length=0)))
+    fields = {'findings': (list[finding], Field(min_length=6, max_length=6))}
+    if require_subsystems:
+        fields['subsystems'] = (list[DiagramSubsystem], Field(min_length=1, max_length=40))
+    return create_model('GroundedArchitectureReport', __base__=ArchitectureReport, **fields)
+
+
+def planning_model(commands: list[str], *, read_only: bool = False, repository_targets: list[str] | None = None,
+                   discovery_only: bool = False):
     """Constrain executable identities using repository discovery, not labels."""
     targets = Literal[tuple(dict.fromkeys(["", *commands]))]
     predicates = tuple(create_model(p.__name__ + "_declared", __base__=p, target=(targets, ""))

@@ -12,7 +12,7 @@ from pathlib import PurePosixPath
 
 SOURCE = {'.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.cs', '.rb', '.php', '.sql'}
 SKIP = {'node_modules', 'vendor', 'dist', 'build', 'target', 'output', 'coverage', 'generated',
-        '__pycache__', '__tests__', 'tests', 'test', 'fixtures', 'migrations', 'assets', 'public'}
+        '__pycache__', '__tests__', 'tests', 'test', 'fixtures', 'assets', 'public'}
 
 
 def stable(prefix, value):
@@ -64,18 +64,36 @@ def candidates(paths, read_paths=()):
             buckets[bucket].append(path)
     def priority(path):
         name = PurePosixPath(path).stem.lower()
-        return (3 if name in {'migrate', 'migration', 'memory.repository'} else 0 if name in {'main', 'index', 'app', 'server', '__init__', 'mod'} else 1,
+        return (3 if name in {'migrate', 'migration', 'memory.repository'} else 2 if name == '__init__' else 0 if name in {'main', 'index', 'app', 'server', 'mod'} else 1,
                 len(PurePosixPath(path).parts), path)
     for rows in buckets.values():
         rows.sort(key=priority)
-    # Round-robin layers, so one large component directory cannot exhaust coverage.
+    # Fairness across packages first, then their modules. A nested example or
+    # a large UI folder must not consume all source reads before another app.
+    packages = defaultdict(list)
+    for key in sorted(buckets):
+        packages[key.split('/')[0]].append(key)
     result = []
-    while buckets:
-        for key in sorted(list(buckets)):
+    while packages:
+        for package in sorted(list(packages)):
+            key = packages[package].pop(0)
             result.append(buckets[key].pop(0))
-            if not buckets[key]:
-                del buckets[key]
+            if buckets[key]:
+                packages[package].append(key)
+            if not packages[package]:
+                del packages[package]
     return result
+
+
+def discovery_paths(paths, limit=8):
+    metadata = {'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'pom.xml',
+                'setup.py', 'composer.json', 'Gemfile'}
+    useful = [p for p in paths if not re.search(r'(?:lock|backup|\.env)', p, re.I)]
+    manifests = [p for p in useful if PurePosixPath(p.replace('\\', '/')).name in metadata]
+    manifests.sort(key=lambda p: (len(PurePosixPath(p.replace('\\', '/')).parts), p))
+    others = sorted((p for p in useful if p not in manifests),
+                    key=lambda p: (len(PurePosixPath(p.replace('\\', '/')).parts), p))
+    return (manifests + others)[:limit]
 
 
 def imports(path, content, known_paths):
@@ -122,8 +140,13 @@ def imports(path, content, known_paths):
                 modules = [base] + [base + '/' + a.name for a in node.names]
             for module in modules:
                 base = module.replace('.', '/') if isinstance(node, ast.Import) else module
-                target = next((p for p in (base + '.py', base + '/__init__.py', 'src/' + base + '.py',
-                                          'src/' + base + '/__init__.py') if p in known), None)
+                roots = {'', 'src'}
+                roots.update(p.rsplit('/src/', 1)[0] + '/src' for p in known if '/src/' in p)
+                roots.update(posixpath.dirname(p) for p in known if PurePosixPath(p).name in {'pyproject.toml', 'setup.py'})
+                matches = {posixpath.join(root, item) for root in roots
+                           for item in (base + '.py', base + '/__init__.py')
+                           if posixpath.join(root, item) in known}
+                target = next(iter(matches)) if len(matches) == 1 else None
                 if target and target != path:
                     refs.append((target, node.lineno, module))
     return sorted(set(refs))
@@ -148,7 +171,8 @@ def balanced_evidence(observations):
             # omit route registrations and calls that occur after long headers.
             lines = content.splitlines()
             selected = list(range(min(5, len(lines))))
-            important = re.compile(r"(?:import |require\(|from |fetch\(|axios|/api/|\.(?:use|get|post|put|delete|query|connect)\(|export |module\.exports|DATABASE|postgres|Router\()")
+            important = re.compile(r'(?:import |require\(|from |fetch\(|axios|/api/|\.(?:use|get|post|put|delete|patch|query|connect|listen|start|serve|register)\(|export |module\.exports|baseURL|BASE_URL|API_URL|DATABASE|postgres|Router\(|"(?:scripts|start|build|workspaces|main)")')
+            selected += [i for i, line in enumerate(lines) if re.search(r'\.(?:listen|start|serve|use|get|post|put|patch|delete|query|connect)\(|["\'](?:scripts|start|build|workspaces)["\']', line)]
             selected += [i for i, line in enumerate(lines) if important.search(line)]
             selected += list(range(max(0, len(lines) - 3), len(lines)))
             chunks, used = [], 0
@@ -253,3 +277,38 @@ def enrich_graph(nodes, edges, evidence, observations, coverage, manifest_paths)
     for label in coverage.get('unrepresented_boundaries', []):
         limitations.append('No source file inspected in discovered boundary: ' + label + '.')
     return nodes, edges, list(groups.values()), limitations
+
+def bounded_architecture_context(context, schema, instruction, limit):
+    """Fit excerpts to the existing transport limit without dropping file identities."""
+    import copy
+    import json
+    packet = copy.deepcopy(context)
+    limits = {'shortened_excerpts': 0, 'unlisted_discovery_paths': 0}
+    def size():
+        return len(json.dumps([{'role':'system','content':instruction},
+                               {'role':'user','content':json.dumps(packet,ensure_ascii=False)}])) + len(json.dumps(schema))
+    shortened = set()
+    while size() > limit - 500:
+        changed = False
+        for row in packet.get('repository_evidence', []):
+            content = row.get('content', '')
+            if len(content) <= 300:
+                continue
+            cut = max(300, int(len(content) * .8))
+            excerpt = content[:cut]
+            if '\n' in excerpt:
+                excerpt = excerpt.rsplit('\n', 1)[0] or excerpt
+            row['content'], row['excerpt_truncated'] = excerpt, True
+            shortened.add(row['observation_id'])
+            changed = True
+        if not changed and len(packet.get('repository_paths', [])) > 8:
+            paths = packet['repository_paths']
+            cut = max(8, len(paths) // 2)
+            limits['unlisted_discovery_paths'] += len(paths) - cut
+            packet['repository_paths'] = paths[:cut]
+            changed = True
+        limits['shortened_excerpts'] = len(shortened)
+        packet['context_limits'] = limits
+        if not changed:
+            break  # The established transport rejects any still-oversized request.
+    return packet

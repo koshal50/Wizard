@@ -21,10 +21,16 @@ class ModelFailure(RuntimeError):
 
 def prepare_context(role, context, response_model, max_input_chars):
     from wizard_kernel.context.selection import select
-    from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY, RECOVER
+    from wizard_kernel.ports.prompts import PLAN, DECIDE, VERIFY, RECOVER, REPOSITORY_DECIDE, ARCHITECTURE_SYNTHESIZE
     system = {"planner": RECOVER if context.get("recovery_request") else PLAN,
               "explorer": DECIDE, "verifier": VERIFY,
               "btw": "You are Wizard's side-conversation assistant. Answer the user using only the supplied conversation. You have no execution tools and must not claim to inspect files or run investigations. Put the complete answer in the text field."}[role]
+    if role == "explorer" and context.get("architecture_synthesis"):
+        from wizard_kernel.control.architecture_coverage import bounded_architecture_context
+        system = ARCHITECTURE_SYNTHESIZE
+        context = bounded_architecture_context(context, strict_schema(response_model), system, max_input_chars)
+    elif role == "explorer" and context.get("available_tools") and set(context["available_tools"]) <= {"read_file", "search_files", "list_tree", "path_exists"}:
+        system = REPOSITORY_DECIDE
     selected, audit = select(context, system, strict_schema(response_model), max_input_chars)
     if audit["after_chars"] > max_input_chars:
         raise ModelFailure("context_budget", f"Protected request size {audit['after_chars']} exceeds {max_input_chars} characters")

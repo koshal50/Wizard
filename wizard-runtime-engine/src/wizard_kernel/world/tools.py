@@ -76,7 +76,9 @@ class ToolExecutor:
                 "meta": {}}
 
     def _tool_read_file(self, path: str, max_bytes: int = 65536) -> dict:
-        raw = self._sandbox.read_file(path, max_bytes)
+        raw = self._sandbox.read_file(path, max_bytes + 1)
+        truncated = len(raw) > max_bytes
+        raw = raw[:max_bytes]
         content = raw.decode("utf-8", errors="replace")
         parsed = None
         if path.endswith(".json"):
@@ -86,8 +88,7 @@ class ToolExecutor:
                 pass
         return {
             "ok": True,
-            "data": {"content": content, "parsed": parsed, "path": path, "bytes_read": len(raw),
-                     "truncated": len(raw) >= max_bytes},
+            "data": {"content": content, "parsed": parsed, "path": path, "bytes_read": len(raw), "truncated": truncated},
             "error": None,
             "meta": {"path": path},
         }

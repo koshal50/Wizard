@@ -69,6 +69,76 @@ unresolved_reason must explain what discovery is needed. Check IDs must be uniqu
 depends_on references existing IDs and cannot contain cycles or self-dependencies.
 Return only the schema-constrained specification."""
 
+REPOSITORY_DECIDE = """Choose one schema-constrained action for current_check and the original request.
+Runtime executes tools and evaluates predicates; do not invent facts or observations.
+Use repository_evidence, repository_requests, discovery documents, knowledge and recent results.
+Repository reads are shared across checks. Targets are file paths or supplied observation IDs.
+Do not reread known files with identical parameters; cached reads provide no new information.
+A failed missing-file read is not recovered by changing max_bytes. Use observed tree paths.
+Choose another relevant file or strategy if required evidence is missing; blocked must explain
+the actual missing evidence. Use evaluate once explicit predicates are satisfied.
+For unspecified goals use refine with successful observation_ids and measurable content
+predicates from actual files. For explain requests include content proof; file existence alone cannot explain the source.
+Copy observation_ids exactly from refinement_observation_ids; never reconstruct an ID.
+Use repository_results for earlier tree/search results and repository_requests for their
+parameters. A successful listing remains usable after it leaves recent_observations.
+Refine only when cited contents support every proposed predicate; otherwise gather the
+missing source or report blocked. Read refinement_feedback and correct all rejected fields.
+Grounded predicates are immutable: gather their evidence rather than replacing them.
+For architecture requests cover directories, actual entry points, startup flow, component boundaries, packages/workspaces
+and configuration relationships. Quote exact source substrings, preserving whitespace and escapes.
+Use case_sensitive=false only for natural language terms where case is irrelevant.
+Return only the canonical decision schema."""
+
+ARCHITECTURE_SYNTHESIZE = """Return the ArchitectureReport schema using the supplied repository evidence.
+The findings list MUST contain exactly six entries, one for each area, in this order:
+structure, entry_points, startup, boundaries, packages, configuration.
+Include every area even if unresolved; in that case supply empty assertions and a blocker.
+Keep each finding focused on its cited implementation, usually two or three short content predicates.
+A short excerpt is partial evidence, not proof that the rest of the file is absent.
+If required evidence is missing, request up to four concrete files in evidence_requests,
+using only paths supplied in repository_paths. Request actual entry points or relevant
+implementation files before claiming their evidence is unavailable. Runtime can perform
+one bounded follow-up through its existing file reader. Otherwise return an empty list.
+Also populate components and connections for the user's application architecture.
+Use at most 12 meaningful semantic components and 16 connections: actual client/server subsystems,
+entry points, services, models, databases, or external dependencies supported by the files.
+Represent the supplied pages, routing, authentication, API clients, routes, services, data adapters,
+shared contracts and configuration where observed. Do not collapse their implementation into
+only package manifests. Literal module dependencies and file components are retained locally
+in addition to this semantic synthesis; prioritize supported cross-layer calls and integrations.
+Populate subsystems as the architecture overview, usually a handful of coherent applications,
+services, packages, persistent stores or integrations justified by the actual evidence.
+A subsystem must explain WHAT IT DOES in a concise description, not merely repeat a folder name.
+Its file_paths are exact inspected repository paths from repository_evidence; assign each file
+exclusively to its coherent subsystem. Do not create generic frontend/backend/database sections
+unless these systems actually exist. Never label a directory of SQL files as a live database
+unless configuration or implementation establishes the persistent store.
+Components are important internal modules, not a list of every inspected file. Set their
+subsystem_id to an existing subsystem id and explain their responsibility and source evidence.
+Related files stay as expandable source evidence. Prioritize entry points, request handling,
+business capabilities, state, data access, authentication and integrations over cosmetic helpers.
+Every connection needs a short action label STARTING WITH A VERB describing supported behavior, such as "stores tasks",
+"loads settings", "refreshes data", "registers routes", or "validates credentials", only when
+the cited source establishes that behavior. These examples are not a template. Use "imports"
+when only a static dependency is established; an import alone does not prove calls or data flow.
+Connection descriptions keep the supporting rationale for evidence inspection, not canvas paragraphs.
+Do not connect systems based on similar names or shared folders. Missing architecture coverage
+must remain explicit; do not invent connectivity or claim the bounded sample is the entire repo.
+These are application components, never investigation checks, tools, or agents.
+Each component needs a unique simple id, label, type, repository-relative path,
+description, and supporting observation_ids taken from repository_evidence.
+Each connection needs a unique id, source and target component ids, type, description,
+and supporting observation_ids. Never fabricate a relationship for a nicer picture.
+Do not include secrets, absolute local paths, or raw source files in descriptions.
+Explain each required architecture area with targeted content predicates quoting exact source
+text and stable observation IDs or paths. Each statement must follow from its cited evidence.
+Proof excerpts must be short single-line literal fragments without backslash escapes or
+JSON/array/object delimiters. For structured declarations cite separate keys and values.
+Do not reformat quoted JSON, infer startup from incidental healthchecks, or replace component
+boundaries with user-data isolation. Use empty assertions and an explicit blocker for missing
+evidence. Runtime evaluates all predicates and owns completion. Do not fabricate success."""
+
 DECIDE = """Choose exactly one useful action for CURRENT_CHECK. Runtime owns execution and
 verdicts. Use the original request, accepted predicates, actual resource/page/form
 state, bounded knowledge, recent results/rejections, and available tools.

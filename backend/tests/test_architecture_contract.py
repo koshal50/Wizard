@@ -70,3 +70,32 @@ def test_invalid_grouped_documents_are_rejected(mutation):
     mutation(data)
     with pytest.raises(ValidationError):
         ArchitectureGraph.model_validate(data)
+
+
+def hierarchy_graph():
+    data=graph()
+    data['nodes'][0].update(level='subsystem')
+    data['nodes'][1].update(level='module',parent_id='api')
+    return data
+
+
+def test_hierarchy_roundtrip_preserves_action_labels_and_old_documents():
+    data=hierarchy_graph()
+    data['relationships'][0]['label']='stores results'
+    parsed=ArchitectureGraph.model_validate(data)
+    assert parsed.nodes[1].parent_id=='api'
+    assert parsed.relationships[0].label=='stores results'
+    assert ArchitectureGraph.model_validate(graph()).nodes[0].parent_id is None
+
+
+@pytest.mark.parametrize('mutation',[
+    lambda g:g['nodes'][1].update(parent_id='unknown'),
+    lambda g:g['nodes'][1].update(parent_id='db'),
+    lambda g:g['nodes'][0].update(parent_id='db'),
+    lambda g:g['nodes'][0].update(level='file'),
+    lambda g:g.update(coverage={'candidate_files':1,'examined_files':['../secret'],'uninspected_file_count':0,'discovery_note':'Bounded'}),
+    lambda g:g.update(coverage={'candidate_files':0,'examined_files':['src/app.js'],'uninspected_file_count':0,'discovery_note':'Bounded'}),
+])
+def test_invalid_hierarchy_and_coverage_rejected(mutation):
+    data=hierarchy_graph();mutation(data)
+    with pytest.raises(ValidationError):ArchitectureGraph.model_validate(data)

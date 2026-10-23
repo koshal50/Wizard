@@ -19,9 +19,9 @@ def offer_upload(session, console, *, confirm=None):
         destination = account_origin()
         console.print(sanitize_terminal(
             f"Architecture graph: {graph['status']}\nRepository: {graph['repository_name']}\n"
-            f"Groups: {len(graph.get('groups', []))} | Nodes: {len(graph['nodes'])} | Relationships: {len(graph['relationships'])} | Evidence: {len(graph['evidence'])}\n"
+            f"Subsystems: {sum(n.get('level') == 'subsystem' for n in graph['nodes'])} | Nodes: {len(graph['nodes'])} | Relationships: {len(graph['relationships'])} | Evidence: {len(graph['evidence'])}\n"
             f"Upload destination: {destination}\n"
-            "Uploads labels, descriptions, relative paths, evidence references, and short verified predicates. "
+            "Uploads labels, descriptions, relative paths, evidence references, hierarchy, measured coverage, and short verified predicates. "
             "No full source files are uploaded. Solid connections are observed module references; reasoned connections are marked inferred."
         ), markup=False)
         if confirm is None:

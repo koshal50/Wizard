@@ -99,6 +99,11 @@ class ToolRequestValidator:
         self._enforce_discovered_routes = navigation_targets is not None
         self._discovered_urls = {self._navigation_key(url) for url in (navigation_targets or []) if url.startswith(("http://", "https://"))}
 
+    @property
+    def allowed_command_executables(self):
+        """Expose exactly the executable policy used at the execution boundary."""
+        return sorted(_COMMAND_LEADERS | set(os.environ.get("WIZARD_ALLOWED_COMMANDS", "").split(",")) - {""})
+
     def record_execution(self, tool: str, params: dict, payload: dict, observation_id: str | None = None) -> None:
         """Advance prerequisites only from successful executor results."""
         data = payload.get("data") or {}
@@ -229,9 +234,10 @@ class ToolRequestValidator:
             except (ValueError, StopIteration):
                 return reject("Command has invalid quoting or no executable")
             base = PureWindowsPath(leader).name.lower().removesuffix(".exe")
-            allowed = _COMMAND_LEADERS | set(os.environ.get("WIZARD_ALLOWED_COMMANDS", "").split(","))
-            if base not in allowed:
-                return reject("Command executable is not authorized; configure WIZARD_ALLOWED_COMMANDS for an additional declared entry point")
+            if base not in self.allowed_command_executables:
+                return reject(f"Command executable {base[:80]!r} is not authorized. This rejects only this executable, "
+                              "not the start_process or execute_command tool. Choose a documented alternative using "
+                              "execution_policy.allowed_executables, or configure WIZARD_ALLOWED_COMMANDS explicitly.")
             try:
                 cwd = (self._root / params.get("cwd", ".")).resolve()
                 params["cwd"] = str(cwd.relative_to(self._root))

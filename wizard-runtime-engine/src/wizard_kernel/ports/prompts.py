@@ -51,6 +51,10 @@ routes or document titles. If login/registration behavior is requested, page-dis
 and results), not merely the presence of a login/signup page. Discover the actual
 UI/application contract before refining expectations.
 Use dependencies only when necessary. Keep at most a few checks.
+For a generic runtime request, verify the application, not a particular launch method.
+Do not require Docker or any other tool merely because its configuration exists.
+Read documented local startup alternatives before declaring a launch failure terminal.
+An explicitly requested container check must still use the requested container runtime.
 For a declared long_running command, startup checks require source=process,
 is_running expected="true" AND active expected="true"; never exit_code=0 from a server that must stay alive.
 Use the declared command as target for these checks. A completed build/test command

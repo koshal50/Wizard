@@ -218,8 +218,13 @@ def _context(inv, check, results, observations, available, discovery, authorized
             before_page = _resources(before).get("browser") or {}
             last_mutation = max(i for i, o in enumerate(scoped) if o is submission or
                                 o.source_tool in {"browser_navigate", "browser_back", "browser_click", "browser_type", "browser_fill_form"})
-            result_observations = [o.id for o in scoped[last_mutation + 1:]
-                                   if o.success and o.source_tool in {"browser_snapshot", "browser_extract"}
+            # Browser mutations already return the fresh post-action page.
+            # Count that observed state, not only a redundant later snapshot.
+            # Starting at the last mutation also excludes stale pre-submit pages.
+            result_observations = [o.id for o in scoped[last_mutation:]
+                                   if o.success and o.source_tool in {
+                                       "browser_click", "browser_type", "browser_fill_form", "browser_navigate", "browser_back",
+                                       "browser_snapshot", "browser_extract"}
                                    and ((o.payload.get("data") or {}).get("snapshot")
                                         or ((o.payload.get("data") or {}).get("page_observation") or {}).get("snapshot"))]
             auth_progress.update(
@@ -385,7 +390,8 @@ def _admit_plan(spec, discovery, *, runtime_scope=False, default_runtime=False, 
         if execution is not None:
             # Discovery is already supplied as evidence. A bare command asks
             # for one runtime smoke check, not extra migrations or static gates.
-            spec.checks = [execution.model_copy(update={"depends_on": []})]
+            spec.checks = [execution.model_copy(update={"depends_on": [],
+                "description": "Verify application runtime execution"})]
         else:
             service = bool(services)
             spec.checks = [CheckSpec(id="runtime_smoke", description="Verify application runtime execution",
@@ -1018,6 +1024,43 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     return
                 rejected = state.setdefault("rejected_actions", {}).setdefault(check.id, {})
                 stalled_page = None
+                def discover_startup(reason):
+                    if not can_execute or not ("process" in check.capabilities or any(
+                            a.source == "process" for a in check.assertions)):
+                        return False
+                    discovery_rounds = state.setdefault("startup_discovery", {})
+                    if check.id not in discovery_rounds and inv.budget_remaining > 0:
+                        startup_paths = sorted(manifest.key_files, key=lambda path: (
+                            not Path(path).name.lower().startswith(("readme", "getting_started")),
+                            Path(path).name.lower().startswith((".", "docker", "compose")),
+                            len(Path(path).parts), path))[:4]
+                        observed = []
+                        for path in reversed(startup_paths):
+                            if inv.budget_remaining <= 0:
+                                break
+                            params = {"path": path, "max_bytes": 16000}
+                            validated = validator.validate(ToolRequest(tool="read_file", parameters=params), inv.budget_remaining)
+                            if not validated.valid:
+                                continue
+                            if validated.observation_id:
+                                observed.append(validated.observation_id)
+                                continue
+                            obs = execute("read_file", params, validated.sanitised_params, check.id,
+                                          purpose="startup_contract_discovery")
+                            if obs.success:
+                                observed.append(obs.id)
+                        discovery_rounds[check.id] = {
+                            "blocked_reason": flow_trace.safe_text(reason),
+                            "observation_ids": observed,
+                            "instruction": "One launch method failed, not necessarily the application. Inspect the newly read startup documentation and manifests for a supported alternative. Choose a materially different validated tool action when possible. Do not retry the failed command, invent commands, install dependencies, change host services, or weaken an explicitly requested container check. If no supported route is usable, report the exact missing prerequisite. This discovery round will not repeat."}
+                        save(last_event="Read startup contracts after unavailable launch method")
+                        return bool(observed)
+                    return False
+
+                def launch_identity(params):
+                    cwd = (Path(inv.repository_path) / params.get("cwd", ".")).resolve()
+                    return hashlib.sha256(json.dumps([str(cwd), params.get("command", "").strip()]).encode()).hexdigest()
+
                 def resource_identity():
                     current = _resources(store.all())
                     current["dependency_results"] = {dep: state["results"].get(dep, {}).get("status")
@@ -1054,10 +1097,23 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     auth_check = check.workflow in {"registration", "login", "form_submission"}
                     browser_grounded = any(o.goal_id == check.id and o.success and o.source_tool.startswith("browser_")
                                            for o in store.all())
-                    context = _context(inv, check, results, store.all(), available, discovery, authorized, public_refs)
+                    context = _context(inv, check, results, store.all(), available, discovery, authorized, public_refs,
+                                       preferred_ids=(state.get("startup_discovery", {}).get(check.id) or {}).get("observation_ids", []))
+                    context["failed_launch_methods"] = list(
+                        state.get("failed_launch_methods", {}).get(check.id, {}).values())[-4:]
+                    context["execution_policy"] = {
+                        "allowed_executables": validator.allowed_command_executables,
+                        "instruction": "Executable authorization is separate from tool availability. A rejected command does not disable start_process. Use only a repository-documented command whose executable is authorized; python and python3 are supported. Do not invent an equivalent command or claim all startup commands are forbidden because one executable was rejected."}
+                    if check.id in state.get("startup_discovery", {}):
+                        context["startup_discovery"] = state["startup_discovery"][check.id]
                     if state.get("recovery_round"):
                         context["recovery"] = {"round": 1, "reason": state["recovery_round"]["reason"],
                                                "new_dependencies": state["recovery_round"]["dependencies"].get(check.id, [])}
+                    context["recent_action_rejections"] = [
+                        {"tool": o.payload.get("tool"), "reason": o.payload.get("reason") or o.payload.get("error"),
+                         "observation_id": o.id}
+                        for o in store.all() if o.goal_id == check.id and o.obs_type == "agent_failure"
+                        and o.payload.get("tool")][-2:]
                     if browser_read_stalled:
                         context['browser_state_feedback'] = 'Repeated browser reads returned the same page. The requested URL is not proof the requested form is displayed. Use the actual observed controls or clarify an expected state with browser_assertion; another identical snapshot provides no new evidence.'
                     relevant_ids = {o.id for o in store.all() if o.goal_id == check.id or o.source_tool == "read_file"}
@@ -1194,6 +1250,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         continue
                     if decision.refinement is not None:
                         raise ValueError("Only a refine decision can contain new expectations")
+                    if decision.kind == "blocked" and discover_startup(decision.reason):
+                        continue
                     if decision.kind != "tool":
                         if decision.action is not None:
                             raise ValueError("Non-tool decision cannot contain an action")
@@ -1240,7 +1298,22 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     if tool == "http_request" and params.get("method") != "POST":
                         params.pop("body", None)
                     action_id = hashlib.sha256(json.dumps([tool, proposed], sort_keys=True).encode()).hexdigest()
+                    failed_launches = state.setdefault("failed_launch_methods", {}).setdefault(check.id, {})
+                    if tool in {"start_process", "execute_command"} and launch_identity(params) in failed_launches:
+                        reason = "This launch command already failed; switching execution tools does not change the launch method"
+                        store.append(node_id=check.id, goal_id=check.id, source_tool="explorer", obs_type="agent_failure",
+                                     payload={"ok": False, "tool": tool, "reason": reason})
+                        bus.emit(events.ToolRejected, {"tool": tool, "node_id": check.id, "reason": reason})
+                        if discover_startup(reason):
+                            continue
+                        state["results"][check.id] = {"status": "unverified", "assertions": results,
+                            "reason": reason + "; bounded startup discovery was exhausted without a different valid action"}
+                        save()
+                        return
                     if rejected.get(action_id) == resource_identity() and not validator.retry_eligible(tool, params):
+                        if tool in {"start_process", "execute_command"} and discover_startup(
+                                "Identical startup action was rejected or failed; inspect a different documented launch method"):
+                            continue
                         raise InterruptedError("No progress: identical rejected or failed action repeated")
                     if tool in {"browser_click", "browser_type", "browser_fill_form"}:
                         page = _resources(store.all()).get("browser") or {}
@@ -1295,6 +1368,22 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                     obs = execute(tool, proposed, validation.sanitised_params, check.id)
                     if not obs.success:
                         rejected[action_id] = resource_identity()
+                    # A successfully spawned launcher can already have exited with
+                    # an error by the time Runtime's readiness probe finishes.
+                    exited_failure = None
+                    if tool == "start_process":
+                        handle = (obs.payload.get("data") or {}).get("handle_id")
+                        exited_failure = next((process for process in _resources(store.all())["processes"]
+                            if handle and process.get("handle_id") == handle and process.get("is_running") is False
+                            and process.get("exit_code") not in {None, 0}), None)
+                    if tool in {"start_process", "execute_command"} and (not obs.success or exited_failure):
+                        failed_launches[launch_identity(params)] = {
+                            "tool": tool, "parameters": flow_trace.safe_parameters(proposed),
+                            "observation_id": (exited_failure or {}).get("observation_id", obs.id),
+                            "reason": flow_trace.safe_text((exited_failure or {}).get("output") or
+                                obs.payload.get("error") or "Launch operation failed", limit=1200)}
+                        if discover_startup(failed_launches[launch_identity(params)]["reason"]):
+                            continue
                     latest = checks.evaluate(check, store.all())
                     state["results"][check.id] = {"status": "pending", "assertions": latest}
                     if checks.verdict(latest) == "passed":

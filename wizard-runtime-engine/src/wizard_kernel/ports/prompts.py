@@ -95,6 +95,11 @@ The findings list MUST contain exactly six entries, one for each area, in this o
 structure, entry_points, startup, boundaries, packages, configuration.
 Include every area even if unresolved; in that case supply empty assertions and a blocker.
 Keep each finding focused on its cited implementation, usually two or three short content predicates.
+Every content predicate is an exact quote from the cited file BODY, not its path or filename.
+A configuration file's name need not appear inside it. Cite actual configuration or
+implementation expressions, not the filename, to support behavior. Check each expected
+quote against the supplied content before returning it. During correction, preserve
+passing predicates and replace rejected predicates with supported quotes or a blocker.
 A short excerpt is partial evidence, not proof that the rest of the file is absent.
 If required evidence is missing, request up to four concrete files in evidence_requests,
 using only paths supplied in repository_paths. Request actual entry points or relevant

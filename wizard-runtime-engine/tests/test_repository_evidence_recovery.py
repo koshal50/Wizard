@@ -366,3 +366,43 @@ def test_repository_model_request_uses_only_relevant_instructions(monkeypatch):
             'message': {'content': answer.model_dump_json()}}]})
     monkeypatch.setattr(httpx, 'post', reply)
     assert ModelPolicy().request('explorer', {'available_tools': ['read_file']}, model).kind == 'evaluate'
+
+
+@pytest.mark.parametrize("corrected", [True, False])
+def test_architecture_filename_is_not_content_and_correction_has_source(corrected, tmp_path):
+    (tmp_path / 'README.md').write_text('workspace')
+    content = '// ' + 'intro ' * 40 + '\nexport default defineConfig({ enabled: true });'
+    (tmp_path / 'settings.js').write_text(content)
+    class Policy:
+        corrections = 0
+        def request(self, role, context, model, **kwargs):
+            if role == 'planner':
+                return response(model, {'checks': [check('README.md').model_dump()]})
+            correction = bool(context.get('evaluation_feedback'))
+            if correction:
+                self.corrections += 1
+                rows = next(f['results'] for f in context['evaluation_feedback'] if f['area'] == 'architecture_startup')
+                assert rows[0]['source_path'] == 'settings.js'
+                assert 'FILE_IDENTITY_IS_NOT_CONTENT' in rows[0]['correction']
+                assert 'defineConfig' in rows[0]['actual']  # Not a 160-character prefix.
+            findings = []
+            for area in ARCHITECTURE_AREAS:
+                predicate = check('README.md').assertions[0].model_dump()
+                if area == 'startup':
+                    predicate = check('settings.js', 'defineConfig' if corrected and correction else 'settings.js').assertions[0].model_dump()
+                findings.append({'area': area, 'summary': 'Observed ' + area, 'assertions': [predicate]})
+            refs = {r['path']: r['observation_id'] for r in context['repository_evidence']}
+            return response(model, {'findings': findings, 'subsystems': [{
+                'id': 'settings', 'label': 'Settings', 'type': 'configuration',
+                'description': 'Observed configuration module', 'file_paths': ['settings.js'],
+                'observation_ids': [refs['settings.js']]}]})
+    policy = Policy()
+    manager = InvestigationManager()
+    inv = manager.create(InvestigationRequest(repository_path=str(tmp_path), intent='investigate', targets=['architecture']))
+    verification.run(inv, manager, policy)
+    assert policy.corrections == 1
+    assert inv.state.value == ('completed' if corrected else 'failed')
+    saved = fs_store.read(inv.id, 'verification.json')
+    if not corrected:
+        assert 'architecture_startup' in saved['stop_reason']
+        assert 'settings.js' in saved['stop_reason']

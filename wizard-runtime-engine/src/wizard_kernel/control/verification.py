@@ -298,6 +298,19 @@ def _context(inv, check, results, observations, available, discovery, authorized
     packet['repository_read_history'] = [{'observation_id': o.id, 'goal_id': o.goal_id,
         'path': (o.payload.get('data') or {}).get('path'), 'success': o.success}
         for o in observations if o.source_tool == 'read_file'][-24:]
+    if page and not (set(check.capabilities) == {'repository'}):
+        # Match the working browser path: the current page drives tactics.
+        # Repository contents remain available via read_file, not retransmitted
+        # as a second discovery transcript on every browser decision.
+        for key in ('repository_evidence', 'repository_results', 'repository_requests', 'repository_read_history'):
+            packet.pop(key, None)
+        # Keep current controls/body evidence; do not repeat the whole startup
+        # log and the same controls a second time in a long ARIA excerpt.
+        for process in resource_state['processes']:
+            process['output'] = str(process.get('output') or '')[-300:]
+        if page.get('controls_complete') and len(page.get('snapshot', '')) > 1500:
+            page['snapshot'] = page['snapshot'][:1500]
+            page['snapshot_excerpt'] = True
     return packet
 
 
@@ -1378,6 +1391,8 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                         proof_correction_used = True
                         fs_store.write(inv.id, 'architecture_proposed_report.json', synthesis.model_dump())
                         feedback = []
+                        evidence_by_id = {r['observation_id']: r for r in synthesis_context['repository_evidence']}
+                        evidence_by_path = {r['path'].replace('\\', '/'): r for r in synthesis_context['repository_evidence']}
                         for c, rows in evaluated_findings:
                             details = []
                             for a in rows:
@@ -1386,8 +1401,21 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                                 sensitive = a['assertion'].get('case_sensitive', True)
                                 present = [t for t in tokens if (t if sensitive else t.casefold()) in
                                            (actual if sensitive else actual.casefold())]
-                                details.append({**a, 'actual': actual[:160] if a.get('actual') is not None else None,
-                                                'present_literal_tokens': present})
+                                target = a['assertion'].get('target', '')
+                                source = evidence_by_id.get(target) or evidence_by_path.get(target.replace('\\', '/')) or {}
+                                expected = str(a['assertion'].get('expected', ''))
+                                path = source.get('path', '').replace('\\', '/')
+                                path_mistaken_for_content = (a['verdict'] == 'failed' and expected
+                                    and expected in {path, path.rsplit('/', 1)[-1]})
+                                details.append({**a, 'actual': actual[:1200] if a['verdict'] != 'passed' and a.get('actual') is not None else None,
+                                    'actual_excerpt_truncated': a['verdict'] != 'passed' and len(actual) > 1200,
+                                    'source_path': path, 'present_literal_tokens': present,
+                                    'correction': ('FILE_IDENTITY_IS_NOT_CONTENT: the expected value names this file, '
+                                        'but is absent from its content. Select a verbatim implementation excerpt that '
+                                        'supports the finding, or report a blocker. Do not repeat this predicate.'
+                                        if path_mistaken_for_content else
+                                        'Use the cited observed content to correct this predicate; do not weaken the finding.'
+                                        if a['verdict'] != 'passed' else 'Keep this passing predicate unchanged.')})
                             feedback.append({'area': c.id, 'results': details})
                         synthesis_context['evaluation_feedback'] = feedback
                         synthesis_context['recovery_instruction'] = 'One bounded correction is allowed for your synthesized predicates. A formatting mismatch does not mean the file or JSON fields are absent. Present literal tokens are diagnostics, not proof. Consult the supplied actual contents; for JSON use separate short exact predicates for keys and values instead of reformatted arrays. Preserve the architectural relation in the explanation and proof; do not weaken user requirements. If evidence does not support the finding, report its blocker.'
@@ -1558,6 +1586,16 @@ def run(inv, manager, policy=None, *, browser_factory=None):
             final = LifecycleState.failed
         if inv.cancel_requested or inv.state == LifecycleState.cancelled:
             final = LifecycleState.cancelled
+        if final not in {LifecycleState.completed, LifecycleState.cancelled} and not state["stop_reason"]:
+            unresolved = [(key, state["results"].get(key, {})) for key in sorted(required_ids)
+                          if state["results"].get(key, {}).get("status") != "passed"]
+            if unresolved:
+                key, result = next(((k, r) for k, r in unresolved
+                    if r.get("status") in {"failed", "evaluation_error"}), unresolved[0])
+                reason = next((row.get("reason") for row in result.get("assertions", [])
+                               if row.get("verdict") != "passed" and row.get("reason")), None)
+                state["stop_reason"] = flow_trace.safe_text(
+                    f"{key}: {reason or result.get('reason') or 'Required evidence remains missing'}")
         try:
             final = save(state=final, last_event=state["stop_reason"] or "Verification checks evaluated")
         except OSError as exc:

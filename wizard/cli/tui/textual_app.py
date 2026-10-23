@@ -476,6 +476,8 @@ class WizardApp(App):
             self.query_one("#help", Static).update("Add details below, or leave the intent empty.")
             self._selection()
             self.query_one("#intent", Input).focus()
+        elif identity == "clear-action" and self._diagram_available():
+            self._show_diagram()
         elif identity == "clear-action":
             self.prepared_intent = None
             self.query_one("#intent", Input).value = ""
@@ -565,6 +567,8 @@ class WizardApp(App):
             button.focus()
             button.scroll_visible(animate=False)
         else:
+            if delta < 0:
+                self._follow_execution = False
             self.query_one("#content", VerticalScroll).scroll_relative(y=delta * 3, animate=False)
 
     def action_navigate_up(self):
@@ -1159,6 +1163,7 @@ class WizardApp(App):
         self.call_later(self._mount_session_view)
 
     async def _mount_session_view(self):
+        self.query_one("#clear-action", Button).label = "Clear"
         await self.query_one("#live-run", LiveRun).remove()
         await self.query_one("#content", VerticalScroll).mount(LiveRun(id="live-run"))
         if self._ui_closing:
@@ -1177,6 +1182,8 @@ class WizardApp(App):
         if not views or not self.query("#heading"):
             return  # A new run is replacing the previous view asynchronously.
         state = views[0].display_session(self.session)
+        self.query_one("#clear-action", Button).label = (
+            "View diagram" if self._diagram_available() else "Clear")
         if state.get("finished") and self._recorded_session is not self.session:
             self._recorded_session = session = self.session
             from wizard.cli.tui.history import record_run
@@ -1275,6 +1282,13 @@ class WizardApp(App):
         except ValueError:
             self.query_one("#notice", Static).update("This link is not valid.")
 
+    def _diagram_available(self):
+        if not self.session:
+            return False
+        state = self.session.snapshot()
+        return bool(state.get("finished") and state.get("investigation_id")
+                    and self.session.family == "investigate" and self.session.target == "architecture")
+
     def _show_diagram(self):
         if not self.session:
             return
@@ -1297,13 +1311,19 @@ class WizardApp(App):
             self._diagram = (graph, destination)
             nodes = graph.get("nodes") or []
             edges = graph.get("relationships") or []
-            labels = {node["id"]: node["label"] for node in nodes}
-            lines = ["## " + str(graph.get("title") or "Project connections"), "Status: " + str(graph.get("status")),
-                     f"{len(nodes)} parts · {len(edges)} connections · {len(graph.get('evidence') or [])} evidence records", "### Parts"]
-            lines.extend("- " + str(node["label"]) + " · " + str(node.get("type", "")) for node in nodes[:50])
-            lines.append("### Connections")
-            lines.extend("- " + str(labels.get(edge["source"], edge["source"])) + " → " + str(labels.get(edge["target"], edge["target"]))
-                         + " · " + str(edge.get("label") or edge.get("type")) + " (" + str(edge.get("classification")) + ")" for edge in edges[:80])
+            subsystems = [node for node in nodes if node.get("level") == "subsystem"]
+            lines = ["## " + str(graph.get("title") or "Project architecture"),
+                     "Status: " + str(graph.get("status")),
+                     f"{len(subsystems)} subsystems ? {len(nodes)} parts ? {len(edges)} connections", "### Overview"]
+            lines.extend("- **" + str(node["label"]) + "** ? " + str(node.get("description") or node.get("type", ""))
+                         for node in subsystems)
+            coverage = graph.get("coverage") or {}
+            if coverage:
+                lines.append("### Source coverage")
+                lines.append(f"{len(coverage.get('examined_files') or [])} files examined ? "
+                             f"{coverage.get('uninspected_file_count', 0)} files not examined")
+            lines.append("The interactive diagram opens on the website: expand subsystems, inspect source evidence, "
+                         "and pan or zoom. Choose Upload below to save this graph to your account.")
             self.query_one("#utility-body", Markdown).update(sanitize_terminal("\n\n".join(lines)))
             note = ("Upload to " + destination + "? Includes labels, descriptions, relative paths and evidence references; no full source files. Choose Upload only to consent."
                     if destination else "Connections are local. Configure an account website and /login to upload them.")
@@ -1331,7 +1351,9 @@ class WizardApp(App):
             return upload(graph, consent=True)
         def completed(result, error):
             if self._utility_view == "diagram" and self._diagram_request is token:
-                self.query_one("#utility-note", Static).update(error or sanitize_terminal(result))
+                self.query_one("#utility-note", Static).update(error or "Diagram saved. Open it using the link above.")
+                if not error:
+                    self.query_one("#utility-body", Markdown).update(sanitize_terminal(result))
         self._background(send, completed)
 
     def _cancel_run(self):

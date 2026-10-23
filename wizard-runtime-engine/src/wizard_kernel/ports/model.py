@@ -98,13 +98,18 @@ class ModelPolicy:
 
     def request(self, role, context, response_model, *, max_input_chars=60000, cancel_check=None, deadline=None, on_progress=None):
         schema = strict_schema(response_model)
+        # A six-area architecture report plus its diagram is not a one-tool
+        # tactical response. The saved truncation consumed the entire 1024 cap.
+        completion_limit = 3072 if context.get("architecture_synthesis") else 1024
+        # Context limits are characters, not provider token quotas. Keep the
+        # existing bounded request contract independent of the request gate.
         context, selection, system = prepare_context(role, context, response_model, max_input_chars)
         messages = [{"role": "system", "content": system},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
         size = len(json.dumps(messages)) + len(json.dumps(schema))
         if size > max_input_chars:
             raise ModelFailure("context_budget", f"Final request size {size} exceeds {max_input_chars} characters")
-        payload = {"model": self.model, "temperature": 0, "max_completion_tokens": 1024,
+        payload = {"model": self.model, "temperature": 0, "max_completion_tokens": completion_limit,
                    "stream": False, "messages": messages,
                    "response_format": {"type": "json_schema", "json_schema": {
                        "name": response_model.__name__, "strict": True, "schema": schema}}}
@@ -139,6 +144,7 @@ class ModelPolicy:
         observe("provider_response", response, role, self.model)
         self.last_metadata = {"provider_status": response.status_code, "request_id": request_id,
                               "model": self.model, "input_chars": size, "schema": response_model.__name__,
+                              "max_completion_tokens": completion_limit,
                               "context_selection": selection}
         progress("response", status=response.status_code, elapsed_seconds=round(time.monotonic()-started, 1), request_id=request_id)
         if response.status_code == 429 and self.gate:
@@ -156,7 +162,7 @@ class ModelPolicy:
         self.last_metadata.update(finish_reason=finish, usage={k: usage.get(k) for k in ("prompt_tokens", "completion_tokens", "total_tokens")})
         if finish != "stop":
             usage = data.get("usage") or {}
-            raise ModelFailure("incomplete", f"finish_reason={finish}; completion_tokens={usage.get('completion_tokens')}", request_id=request_id)
+            raise ModelFailure("incomplete", f"finish_reason={finish}; output used {usage.get('completion_tokens')} of {completion_limit} allowed", request_id=request_id)
         try:
             result = response_model.model_validate_json(content)
         except (ValidationError, TypeError) as exc:

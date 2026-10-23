@@ -283,7 +283,22 @@ def bounded_architecture_context(context, schema, instruction, limit):
     import copy
     import json
     packet = copy.deepcopy(context)
-    limits = {'shortened_excerpts': 0, 'unlisted_discovery_paths': 0}
+    limits = {'shortened_excerpts': 0, 'unlisted_discovery_paths': 0,
+              'omitted_passing_feedback_excerpts': 0, 'shortened_feedback_excerpts': 0}
+    # Correction feedback repeats evaluated source text already available in
+    # repository_evidence. Passing proofs need their verdict and identity, not
+    # another copy of each file. Bound failed excerpts before cutting evidence.
+    for finding in packet.get('evaluation_feedback', []):
+        for result in finding.get('results', []):
+            actual = result.get('actual')
+            if result.get('verdict') == 'passed' and actual is not None:
+                result['actual'] = None
+                limits['omitted_passing_feedback_excerpts'] += 1
+            elif isinstance(actual, str) and len(actual) > 1200:
+                result['actual'] = actual[:1200]
+                result['actual_excerpt_truncated'] = True
+                limits['shortened_feedback_excerpts'] += 1
+    packet['context_limits'] = limits
     def size():
         return len(json.dumps([{'role':'system','content':instruction},
                                {'role':'user','content':json.dumps(packet,ensure_ascii=False)}])) + len(json.dumps(schema))

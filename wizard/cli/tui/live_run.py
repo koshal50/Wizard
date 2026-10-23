@@ -44,7 +44,7 @@ class LiveRun(Vertical):
             yield Button("Open saved report", id="result-open")
             yield Button("Copy start commands", id="result-copy")
             yield Button("Run again", id="result-rerun")
-            yield Button("View connections", id="result-diagram")
+            yield Button("View architecture diagram", id="result-diagram")
 
     def on_mount(self):
         self.query_one("#result-actions").display = False
@@ -87,6 +87,7 @@ class LiveRun(Vertical):
                 text.stylize("bold #E7A168", index + 6, index + 7)
             self._frame += 1
         self.query_one("#run-now", Static).update(text)
+        self.query_one("#run-now").display = not bool(self._active_range is not None and self._active)
         if self._active_range is not None:
             flow = self._transcript.copy()
             if self._active:
@@ -96,10 +97,6 @@ class LiveRun(Vertical):
                     flow.stylize("on " + palette[(cell + (self._frame if getattr(self.app, "motion_enabled", True) else 0)) % len(palette)], start + cell, start + cell + 1)
             self.query_one("#run-flow", Static).update(flow)
         self.app.refresh_usage_footer()
-        if getattr(self.app, "_follow_execution", True) and self.display and not getattr(self.app, "_utility_view", None):
-            content = self.app.query_one("#content")
-            if content.scroll_y < content.max_scroll_y:
-                content.scroll_end(animate=False, immediate=True, x_axis=False)
 
     def toggle_output(self):
         self.output_expanded = not self.output_expanded
@@ -135,17 +132,23 @@ class LiveRun(Vertical):
                     visible.append(item)
             flush_output()
             self._active_range = None
+            previous_kind = None
             for line, style, kind in visible:
                 if kind != "output":
                     line = line.lstrip("◈◆◇●◐✓✔✗✘✕✖→· ")
                 if kind not in {"output", "expand"}:
+                    if previous_kind is not None:
+                        transcript.append("\n")
                     self._active_range = (len(transcript), len(transcript) + 4)
                     transcript.append("      ")
+                elif kind == "output":
+                    line = "    " + line
                 if kind == "expand":
                     from rich.style import Style
                     transcript.append(line + "\n", Style(color="#8CBFCF", meta={"@click": "app.toggle_process_output"}))
                 else:
                     transcript.append(line + "\n", style=colors.get(style, "#F3F1EC"))
+                previous_kind = kind
             self._transcript = transcript
             self.query_one("#run-flow", Static).update(transcript)
             self._lines = lines

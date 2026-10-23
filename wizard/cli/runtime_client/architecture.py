@@ -39,4 +39,4 @@ def upload(graph, *, consent=False):
         public_id = str(UUID(response.json()["investigation_id"]))
     return ("Architecture investigation saved successfully.\n\n"
             f"Nodes: {len(graph.nodes)}\nRelationships: {len(graph.relationships)}\n\n"
-            f"Open your architecture diagram:\n{origin}/investigations/{public_id}")
+            f"[Open interactive architecture diagram]({origin}/investigations/{public_id})")

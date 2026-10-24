@@ -87,6 +87,33 @@ class CerebrasRateGate:
                 (max(row[0] if row else 0.0, time.time() + seconds),),
             )
 
+    def observe_response(self, headers, *, limited=False) -> dict:
+        """Keep the shared gate behind provider feedback, without retrying."""
+        names = ("retry-after", "x-ratelimit-limit-requests", "x-ratelimit-remaining-requests",
+                 "x-ratelimit-reset-requests", "x-ratelimit-limit-requests-minute",
+                 "x-ratelimit-remaining-requests-minute", "x-ratelimit-reset-requests-minute",
+                 "x-ratelimit-limit-tokens-minute", "x-ratelimit-remaining-tokens-minute",
+                 "x-ratelimit-reset-tokens-minute", "x-ratelimit-remaining-requests-day",
+                 "x-ratelimit-reset-requests-day")
+        snapshot = {name: str(headers[name])[:100] for name in names if name in headers}
+        # Reservation spaces send times; response spacing also protects against
+        # variable transport latency bunching arrivals at the provider.
+        delay = self._interval
+        for name in ("x-ratelimit-limit-requests-minute", "x-ratelimit-limit-requests"):
+            try:
+                limit = float(headers.get(name, "0"))
+                if limit > 0:
+                    delay = max(delay, 60 / limit)
+            except ValueError:
+                pass
+        exhausted = any(headers.get(name) == "0" for name in (
+            "x-ratelimit-remaining-requests", "x-ratelimit-remaining-requests-minute",
+            "x-ratelimit-remaining-tokens-minute", "x-ratelimit-remaining-requests-day"))
+        if limited or exhausted:
+            delay = max(delay, retry_after_seconds(headers))
+        self.defer(delay)
+        return {"headers": snapshot, "cooldown_seconds": delay}
+
 
 def retry_after_seconds(headers) -> float:
     value = headers.get("retry-after")
@@ -99,17 +126,20 @@ def retry_after_seconds(headers) -> float:
                 return max(0.0, (when.replace(tzinfo=when.tzinfo or timezone.utc) - datetime.now(timezone.utc)).total_seconds())
             except (TypeError, ValueError, OverflowError):
                 pass
-    for name in ("x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"):
+    delays = []
+    for name in ("x-ratelimit-reset-requests", "x-ratelimit-reset-tokens",
+                 "x-ratelimit-reset-requests-minute", "x-ratelimit-reset-tokens-minute",
+                 "x-ratelimit-reset-requests-day"):
         value = headers.get(name)
         if not value:
             continue
         try:
             number = float(value)
-            return max(0.0, number - time.time() if number > 10_000_000 else number)
+            delays.append(max(0.0, number - time.time() if number > 10_000_000 else number))
         except ValueError:
             match = re.fullmatch(r"([0-9.]+)\s*(ms|s|m)?", value.strip(), re.I)
             if match:
                 amount = float(match.group(1))
                 unit = (match.group(2) or "s").lower()
-                return amount / 1000 if unit == "ms" else amount * (60 if unit == "m" else 1)
-    return 60.0
+                delays.append(amount / 1000 if unit == "ms" else amount * (60 if unit == "m" else 1))
+    return max(delays) if delays else 60.0

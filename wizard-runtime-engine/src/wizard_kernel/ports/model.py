@@ -147,8 +147,15 @@ class ModelPolicy:
                               "max_completion_tokens": completion_limit,
                               "context_selection": selection}
         progress("response", status=response.status_code, elapsed_seconds=round(time.monotonic()-started, 1), request_id=request_id)
-        if response.status_code == 429 and self.gate:
-            self.gate.defer(retry_after_seconds(response.headers))
+        if self.gate:
+            self.last_metadata["rate_limit"] = self.gate.observe_response(
+                response.headers, limited=response.status_code == 429)
+        if response.status_code == 429:
+            cooldown = (self.last_metadata.get("rate_limit") or {}).get("cooldown_seconds", retry_after_seconds(response.headers))
+            detail = response.text.replace(self.key, "[REDACTED]")
+            raise ModelFailure("rate_limit", f"Provider rate limit reached; shared cooldown {cooldown:.0f}s. "
+                               "Evidence is preserved; no automatic retry was sent. " + detail,
+                               response.status_code, request_id)
         if response.is_error:
             raise ModelFailure("http", response.text.replace(self.key, "[REDACTED]"), response.status_code, request_id)
         try:

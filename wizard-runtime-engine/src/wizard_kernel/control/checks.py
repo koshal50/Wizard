@@ -11,6 +11,32 @@ _SOURCES = {
 }
 
 
+def auth_form_signature(page):
+    """Observed field/submit identity, independent of transient browser refs."""
+    controls = page.get("controls", [])
+    fields = sorted((c.get("role", ""), c.get("name", "")) for c in controls
+                    if c.get("role") in {"textbox", "searchbox", "combobox"})
+    submits = sorted(c.get("name", "") for c in controls if c.get("submits_form"))
+    return (tuple(fields), tuple(submits)) if fields and submits else None
+
+
+def submitted_form_signatures(observations, goal_id=None):
+    page = {}
+    signatures = []
+    for obs in observations:
+        if not obs.success or not obs.source_tool.startswith("browser_"):
+            continue
+        data = obs.payload.get("data") or {}
+        if data.get("submitted_form") and (goal_id is None or obs.goal_id == goal_id):
+            signature = auth_form_signature(page)
+            if signature:
+                signatures.append(signature)
+        current = data.get("page_observation") or data
+        if "controls" in current:
+            page = current
+    return signatures
+
+
 def _structured_value(data, assertion):
     if assertion.field == "json_value":
         if not data.get("body_complete") or not data.get("json_valid") or "json_body" not in data:
@@ -27,7 +53,7 @@ def _structured_value(data, assertion):
                     value = value[key]
         except (KeyError, IndexError, TypeError, ValueError):
             return False, None
-        if isinstance(value, (dict, list)) or isinstance(value, str) and any(marker in value for marker in ("[REDACTED]", "[EMAIL]", "…")):
+        if isinstance(value, (dict, list)) or isinstance(value, str) and any(marker in value for marker in ("[REDACTED]", "[EMAIL]", "â€¦")):
             return False, None
         return True, value
     if assertion.field in {"visible", "enabled", "count"}:
@@ -247,9 +273,17 @@ def evaluate(check: CheckSpec, observations: list) -> list[dict]:
         # statuses are actual responses and can prove an explicitly negative check.
         if assertion.source == "browser" and not obs.success and obs.source_tool != "browser_assertion":
             passed = False
+        reason = ""
+        if passed and assertion.source == "browser" and check.workflow in {"registration", "login"}:
+            # A changed error message on the same authentication form is not
+            # successful authentication, even if the model proposes that text.
+            signature = auth_form_signature(data)
+            if signature and signature in submitted_form_signatures(observations, check.id):
+                passed = False
+                reason = "The submitted authentication form remains present; its error/result text cannot establish successful authentication"
         offset = max(0, text.find(expected) - 100) if passed and assertion.operator == "contains" else 0
         results.append({"assertion": expectation, "verdict": "passed" if passed else "failed",
-                        "actual": text[offset:offset + 2000], "observation_id": obs.id, "reason": ""})
+                        "actual": text[offset:offset + 2000], "observation_id": obs.id, "reason": reason})
     return results
 
 

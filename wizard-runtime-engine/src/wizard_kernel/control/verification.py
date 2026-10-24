@@ -213,6 +213,12 @@ def _context(inv, check, results, observations, available, discovery, authorized
         auth_progress = {"workflow": check.workflow, "submitted": bool(submission),
                          "submission_observation_id": submission.id if submission else None,
                          "next_objective": "Discover and submit the requested form using observed controls"}
+        if check.workflow == "login":
+            auth_progress["next_objective"] = (
+                "Verify a separate login submission, not registration. An existing authenticated "
+                "registration session is not login proof. Use observed account/sign-out controls "
+                "if needed, discover the actual sign-in form, and reuse authorized account values. "
+                "Do not guess routes or create the same account again.")
         if submission:
             before = scoped[:scoped.index(submission)]
             before_page = _resources(before).get("browser") or {}
@@ -1326,6 +1332,19 @@ def run(inv, manager, policy=None, *, browser_factory=None):
                             save()
                             continue
                         reason = _form_submission_rejection(check, page, params["selector"]) if tool == "browser_click" else None
+                        registration_ids = {c["id"] for c in state["checks"]
+                                            if c.get("workflow") == "registration"
+                                            and state["results"].get(c["id"], {}).get("status") == "passed"}
+                        if check.workflow == "login" and registration_ids:
+                            registration_forms = [signature for goal_id in registration_ids
+                                for signature in checks.submitted_form_signatures(store.all(), goal_id)]
+                            if checks.auth_form_signature(page) in registration_forms and (
+                                    tool in {"browser_type", "browser_fill_form"} or any(
+                                        c.get("selector") == params.get("selector") and c.get("submits_form")
+                                        for c in page.get("controls", []))):
+                                reason = ("WORKFLOW_MISMATCH: registration already passed. This is the same "
+                                          "observed registration form, not a separate login form. Use its "
+                                          "observed sign-in link or account navigation; do not register again.")
                         if reason:
                             rejected[action_id] = resource_identity()
                             store.append(node_id=check.id, goal_id=check.id, source_tool="explorer", obs_type="agent_failure",

@@ -295,7 +295,7 @@ def _spawn(spec: ServiceSpec, log_dir: Path) -> "subprocess.Popen | None":
         handle = subprocess.DEVNULL  # type: ignore[assignment]
 
     try:
-        return subprocess.Popen(  # noqa: S603 — argv is built here, not user input
+        process = subprocess.Popen(  # noqa: S603 — argv is built here, not user input
             list(spec.argv),
             cwd=spec.cwd,
             stdout=handle,
@@ -307,6 +307,9 @@ def _spawn(spec: ServiceSpec, log_dir: Path) -> "subprocess.Popen | None":
             start_new_session=os.name != "nt",
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
+        if handle is not subprocess.DEVNULL:
+            handle.close()  # The child owns its duplicated log descriptor.
+        return process
     except (OSError, ValueError) as exc:
         if handle is not subprocess.DEVNULL:
             handle.close()
@@ -471,14 +474,17 @@ def _terminate(process: "subprocess.Popen", timeout: float = 4.0, *, additional=
         # A Windows venv executable redirects to a child Python process.
         # Terminating only the launcher leaves uvicorn/LLM workers orphaned.
         try:
-            args = ["taskkill", "/T", "/F"]
+            taskkill = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+            args = [str(taskkill), "/T", "/F"]
             for proc in processes:
                 args.extend(["/PID", str(proc.pid)])
-            subprocess.run(
+            result = subprocess.run(
                 args,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=timeout, check=False,
             )
+            if result.returncode and any(proc.poll() is None for proc in processes):
+                raise OSError(f"Service process-tree cleanup failed (taskkill exit {result.returncode})")
         except subprocess.TimeoutExpired:
             # WMI can finish killing the tree before taskkill itself exits.
             # Reap the launcher instead of leaking a traceback on clean exit.
@@ -593,7 +599,8 @@ class ServiceSupervisor:
             if on_progress:
                 on_progress("Starting " + spec.label)
             if spec.key == "website" and any(state.spec.key == "account" and not state.ok for state in report.states):
-                report.states.append(ServiceState(spec, "unavailable", "Website needs the local account backend; finish account database setup first"))
+                backend = next(state for state in report.states if state.spec.key == "account" and not state.ok)
+                report.states.append(ServiceState(spec, "unavailable", "Website startup deferred because the account backend is unavailable: " + backend.detail))
                 continue
             if cancel_event is None:
                 report.states.append(ensure_service(spec, self.log_dir))
@@ -601,7 +608,9 @@ class ServiceSupervisor:
                 report.states.append(ensure_service(spec, self.log_dir, cancel_event=cancel_event))
             current = report.states[-1]
             previous = previously_owned.get(spec.key)
-            if current.status == "adopted" and previous and previous.process.poll() is None and previous.spec.port == spec.port:
+            # A temporarily unhealthy owned service is still ours to clean up.
+            # A refresh must not discard its process handle on the failure path.
+            if current.process is None and previous and previous.process.poll() is None and previous.spec.port == spec.port:
                 current.process = previous.process
         self.report = report
         return report
